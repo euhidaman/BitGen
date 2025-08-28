@@ -1,0 +1,108 @@
+# BitGen - Unlimited Vision-Language Episodic Memory Transformer
+# Requirements for unlimited multimodal training with Facebook DINOv2-base
+# Enhanced BitNet quantization, episodic memory, and cross-modal learning
+
+# Core PyTorch and ML frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Transformers and HuggingFace ecosystem
+transformers>=4.30.0
+datasets>=2.12.0
+tokenizers>=0.13.0
+accelerate>=0.20.0
+safetensors>=0.3.0
+
+# Vision models and image processing
+timm>=0.9.0
+Pillow>=9.5.0
+opencv-python>=4.7.0
+
+# Scientific computing and utilities
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+
+# Data handling and serialization
+pandas>=2.0.0
+pyarrow>=12.0.0
+h5py>=3.8.0
+
+# Visualization and logging
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+wandb>=0.15.0
+tensorboard>=2.13.0
+
+# Configuration and argument parsing
+pyyaml>=6.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+
+# Progress bars and CLI utilities
+tqdm>=4.65.0
+rich>=13.0.0
+click>=8.1.0
+
+# Model optimization and quantization
+bitsandbytes>=0.40.0
+optimum>=1.8.0
+
+# Carbon tracking (optional but recommended)
+codecarbon>=2.2.0
+
+# Jupyter and development
+jupyter>=1.0.0
+ipywidgets>=8.0.0
+notebook>=6.5.0
+
+# Testing and code quality
+pytest>=7.3.0
+pytest-cov>=4.1.0
+black>=23.3.0
+flake8>=6.0.0
+
+# HTTP requests and API interactions
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Memory profiling and performance monitoring
+psutil>=5.9.0
+py3nvml>=0.2.7
+
+# Additional utilities
+pathlib2>=2.3.0
+importlib-metadata>=6.6.0
+packaging>=23.1.0
+
+# Optional: Attention Sinks support (if using unlimited sequences)
+# attention-sinks>=0.1.0  # Uncomment if using attention sinks
+
+# Optional: Flash Attention for faster training (if compatible GPU)
+# flash-attn>=2.0.0  # Uncomment if you have compatible GPU (A100, H100, etc.)
+
+# Optional: DeepSpeed for distributed training
+# deepspeed>=0.9.0  # Uncomment if using distributed training
+
+# Version compatibility notes:
+# - torch>=2.0.0 required for improved performance and memory efficiency
+# - transformers>=4.30.0 required for DINOv2 model support
+# - timm>=0.9.0 required for latest vision model implementations
+# - wandb>=0.15.0 recommended for comprehensive training logging
+# - bitsandbytes>=0.40.0 for BitNet quantization support
+
+# Installation notes:
+# 1. Install PyTorch first with CUDA support if using GPU:
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# 2. Then install remaining requirements:
+#    pip install -r requirements.txt
+# 3. For development, also install:
+#    pip install pre-commit
+
+# GPU Memory Requirements:
+# - Minimum: 6GB VRAM for DINOv2-base training
+# - Recommended: 8GB+ VRAM for optimal performance
+# - With batch_size=64: ~6-8GB VRAM usage
+# - With batch_size=32: ~4-6GB VRAM usage

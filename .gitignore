@@ -1,4 +1,7 @@
-# Python
+# BitGen - Unlimited Vision-Language Episodic Memory Transformer
+# .gitignore file for clean repository management
+
+# Python bytecode and cache
 __pycache__/
 *.py[cod]
 *$py.class
@@ -45,60 +48,7 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# poetry
-poetry.lock
-
-# pdm
-.pdm.toml
-
-# PEP 582
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# Virtual environments
 .env
 .venv
 env/
@@ -107,81 +57,57 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyTorch
-*.pth
-*.pt
-*.ckpt
-checkpoints/
-lightning_logs/
-wandb/
-
-# Machine Learning
-*.pkl
-*.pickle
-*.joblib
-*.model
-*.weights
-*.h5
-*.hdf5
-
-# Data files
-data/
-datasets/
-*.csv
-*.json
-*.jsonl
-*.txt
-*.tsv
-*.parquet
-*.arrow
-*.npy
-*.npz
-*.zip
-*.tar
-*.tar.gz
-*.rar
-*.7z
-
-# Model outputs
-outputs/
-results/
-logs/
-runs/
-experiments/
-saved_models/
-
-# IDE
+# IDEs and editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
 
-# OS
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model checkpoints and training outputs
+checkpoints*/
+logs*/
+results*/
+attention*/
+memory*/
+carbon_logs*/
+flops_logs*/
+model_exports*/
+hf_model*/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# WandB
+wandb/
+
+# TensorBoard logs
+runs/
+tensorboard_logs/
+
+# Dataset files (keep structure but ignore actual data)
+../babylm_dataset/*.npy
+../babylm_dataset/*.zip
+../babylm_dataset/train_50M/
+../babylm_dataset/*.json
+!../babylm_dataset/*.download_instructions.txt
+!../babylm_dataset/README.pdf
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -189,40 +115,116 @@ saved_models/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.backup
-*.orig
+# HuggingFace cache (optional - uncomment to ignore)
+# ~/.cache/huggingface/
 
-# WandB
-wandb/
+# CUDA cache
+*.cu.o
+*.ptx
 
-# TensorBoard
-tensorboard_logs/
-tb_logs/
+# Large files that shouldn't be tracked
+*.bin
+*.h5
+*.hdf5
+*.pickle
+*.pkl
 
-# Hugging Face
-.cache/
-transformers_cache/
+# Configuration backups
+*.yaml.backup
+*.yml.backup
 
-# Custom BitMar excludes
-attention_analysis/
-evaluation_results/
-training_checkpoints/
-memory_dumps/
-
-# Large dataset files (but keep download instructions)
-*.download_instructions.txt
-!*.download_instructions.txt
-
-# RunPod specific
-.runpod/
-runpod_logs/
-
-# Test outputs
+# Test outputs and debugging
+debug_outputs/
 test_outputs/
-cpu_test_results/
-compatibility_results/
+playground/
+
+# Documentation builds
+docs/_build/
+site/
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Spyder
+.spyderproject
+.spyproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Node.js (if using any JS tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Generated test files
+test_dinov2_*.py
+dinov2_*_info.json
+
+# Evaluation outputs
+evaluation_results/
+eval_outputs/
+
+# Memory profiling outputs
+*.prof
+*.profile
+
+# Core dumps
+core.*
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon?
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
