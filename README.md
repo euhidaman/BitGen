@@ -1,212 +1,340 @@
-# BitMar: Vision-Language Episodic Memory Transformer
+# BitMar: Unlimited Vision-Language Episodic Memory Transformer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
-BitMar is a **Vision-Language Episodic Memory Transformer** designed for the BabyLM Challenge. It combines BitNet-quantized text processing, DiNOv2 vision encoding, and episodic memory mechanisms to achieve efficient multimodal understanding with exactly 100M tokens.
+BitMar is a **Vision-Language Episodic Memory Transformer** designed for unlimited multimodal learning. It combines BitNet-quantized text processing, Facebook's DINOv2-large vision encoding, and episodic memory mechanisms to achieve efficient multimodal understanding without dataset constraints.
 
-## 🌟 Key Features
+## 🚀 **QUICK START - Step by Step Instructions**
 
-- **Token-Constrained Training**: Exactly 100M tokens with perfect alignment
-- **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
-- **Episodic Memory**: Cross-modal memory system for visual-text associations
-- **Comprehensive Logging**: Detailed WandB visualizations and metrics tracking
-- **Automatic Evaluation**: Built-in evaluation pipelines for both 2024 and 2025 tracks
-- **Hugging Face Integration**: Automatic model uploads after each epoch
-- **Carbon Tracking**: Environmental impact monitoring
-
-## 🛠️ Installation
+### **Step 1: Environment Setup**
 
 ```bash
-git clone <your-repo-url>
-cd BitMar
+# Navigate to BitGen directory
+cd D:\BabyLM\BitGen
+
+# Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# On Windows:
+venv\Scripts\activate
+
+# Install requirements
 pip install -r requirements.txt
+
+# Install additional dependencies for DINOv2-large
+pip install transformers torch torchvision timm
 ```
 
-## 🚀 Training Commands
-
-### Basic Training (100M Tokens)
+### **Step 2: Download Facebook DINOv2-large Model**
 
 ```bash
-# Standard training with all features enabled
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+# Download and setup DINOv2-large (1024-dim features)
+python download_dinov2_large.py
 
-# Training with specific GPU device
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:0
-
-# Training with cache rebuild (if dataset changes)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --rebuild_cache
+# Test the model (optional but recommended)
+python test_dinov2_large.py
 ```
 
-### Training with Custom Checkpoint Frequency
+### **Step 3: Start Unlimited Multimodal Training**
 
 ```bash
-# Save checkpoint every 1000 steps (in addition to epoch-based saves)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 1000
+# Train with unlimited datasets and Facebook DINOv2-large
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cuda:0
 
-# Save checkpoint every 500 steps for frequent monitoring
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
+# Alternative: Train on CPU (slower)
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cpu
+
+# Train with specific dataset sources only
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cuda:0
 ```
 
-### Training with Evaluation Control
+### **Step 4: Monitor Training**
 
 ```bash
-# Enable fast evaluation after each epoch (default: enabled)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_fast_eval
+# Check training logs
+tail -f training_unlimited.log
 
-# Disable fast evaluation to speed up training
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval
+# View checkpoints
+ls -la checkpoints_unlimited/
 
-# Enable full evaluation at the end (default: enabled)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_full_eval
-
-# Disable full evaluation to save time
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_full_eval
-
-# Custom evaluation setup
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval --enable_full_eval
+# Check carbon emissions (if enabled)
+ls -la carbon_logs_unlimited/
 ```
 
-### Environment Variable Control
+### **Step 5: Convert Model for HuggingFace**
 
 ```bash
-# Set evaluation flags via environment variables (useful for bash scripts)
-export BITMAR_ENABLE_FAST_EVAL=true
-export BITMAR_ENABLE_FULL_EVAL=false
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+# Convert trained checkpoint to HuggingFace format
+python bitmar_hf_adapter.py \
+  --checkpoint_path checkpoints_unlimited/best_checkpoint.pt \
+  --output_dir hf_model_unlimited \
+  --device cuda:0 \
+  --download_dinov2
 ```
 
-### Complete Training Command with All Options
+## 📋 **ALL IMPORTANT COMMANDS**
+
+### **Model Training Commands**
 
 ```bash
-python train_100M_tokens.py \
-    --config configs/bitmar_100M_tokens.yaml \
-    --device cuda:0 \
-    --save_every_n_steps 1000 \
-    --enable_fast_eval \
-    --enable_full_eval
+# Basic unlimited training
+python train_unlimited.py --config configs/bitmar_unlimited.yaml
+
+# Training with specific GPU
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cuda:0
+
+# Training with multiple GPUs (if supported)
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cuda:0
+
+# Resume from checkpoint
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --resume checkpoints_unlimited/latest_checkpoint.pt
 ```
 
-## 📊 WandB Logging & Visualizations
+### **DINOv2-large Setup Commands**
 
-BitMar includes comprehensive logging to Weights & Biases with detailed visualizations and metrics tracking. Here's what gets logged and how to interpret it:
+```bash
+# Download Facebook DINOv2-large
+python download_dinov2_large.py
 
-### 🎯 Training Metrics
+# Test DINOv2-large functionality
+python test_dinov2_large.py
 
-**train/loss**
-- **What**: Cross-entropy loss during training
-- **X-axis**: Training steps
-- **Y-axis**: Loss value
-- **Interpretation**: Should decrease over time; sudden spikes indicate potential issues
+# Pre-download DINOv2 before training
+python bitmar_hf_adapter.py --download_dinov2
+```
 
-**train/learning_rate**
-- **What**: Learning rate schedule (cosine annealing with warm restarts)
-- **X-axis**: Training steps
-- **Y-axis**: Learning rate value
-- **Interpretation**: Shows learning rate cycles; restarts help escape local minima
+### **Model Conversion Commands**
 
-**train/cross_modal_similarity**
-- **What**: Cosine similarity between text and vision features
-- **X-axis**: Training steps
-- **Y-axis**: Similarity score (-1 to 1)
-- **Interpretation**: Higher values = better cross-modal alignment; key metric for multimodal understanding
+```bash
+# Convert to HuggingFace format
+python bitmar_hf_adapter.py \
+  --checkpoint_path checkpoints_unlimited/best_checkpoint.pt \
+  --output_dir hf_model_unlimited
 
-### 📊 Token Tracking
+# Convert with DINOv2 pre-download
+python bitmar_hf_adapter.py \
+  --checkpoint_path checkpoints_unlimited/best_checkpoint.pt \
+  --output_dir hf_model_unlimited \
+  --download_dinov2
 
-**tokens/processed**
-- **What**: Total number of tokens processed so far
-- **X-axis**: Training steps
-- **Y-axis**: Token count
-- **Interpretation**: Should reach exactly 100M tokens; tracks progress toward target
+# Convert specific checkpoint
+python bitmar_hf_adapter.py \
+  --checkpoint_path checkpoints_unlimited/checkpoint_epoch_10.pt \
+  --output_dir hf_model_epoch_10
+```
 
-**tokens/batch_size**
-- **What**: Number of tokens in current batch
-- **X-axis**: Training steps
-- **Y-axis**: Token count per batch
-- **Interpretation**: Shows batch size variation; should be relatively consistent
+### **Evaluation Commands**
 
-**token_progress/processed** and **token_progress/target**
-- **What**: Progress tracking toward 100M token goal
-- **X-axis**: Training steps
-- **Y-axis**: Token counts
-- **Interpretation**: Tracks completion percentage
+```bash
+# Run 2024 evaluation
+python evaluate_bitmar_2024.py --model_path hf_model_unlimited
 
-### 📈 Epoch-Level Metrics
+# Run 2025 evaluation  
+python evaluate_bitmar_2025.py --model_path hf_model_unlimited
 
-**epoch/train_loss**
-- **What**: Average loss per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Loss value
-- **Interpretation**: Should show steady decrease across epochs
+# Download evaluation data first
+python download_evaluation_data.py
+```
 
-**epoch/cross_modal_similarity**
-- **What**: Average cross-modal similarity per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Similarity score
-- **Interpretation**: Should increase as model learns better alignment
+### **Data Management Commands**
 
-**epoch/tokens_processed** and **epoch/tokens_in_epoch**
-- **What**: Token consumption tracking per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Token counts
-- **Interpretation**: Shows token distribution across epochs
+```bash
+# Check dataset availability
+ls -la ../babylm_dataset/
 
-### 🤗 Hugging Face Integration Logs
+# Verify data files
+python -c "
+import numpy as np
+features1 = np.load('../babylm_dataset/cc_3M_dino_v2_states_1of2.npy', mmap_mode='r')
+features2 = np.load('../babylm_dataset/cc_3M_dino_v2_states_2of2.npy', mmap_mode='r')
+print(f'Features1 shape: {features1.shape}')
+print(f'Features2 shape: {features2.shape}')
+"
+```
 
-**huggingface/upload_success**
-- **What**: Whether model upload to HF Hub succeeded
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks upload reliability
+### **Monitoring Commands**
 
-**huggingface/repo_url**
-- **What**: Link to uploaded model repository
-- **Interpretation**: Direct link to view uploaded models
+```bash
+# Monitor GPU usage
+nvidia-smi -l 1
 
-### 🧪 Evaluation Results
+# Check training progress
+tail -f training_unlimited.log
 
-**epoch_X/eval_2025_success** and **epoch_X/eval_2024_success**
-- **What**: Success status of fast evaluation after each epoch
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks evaluation pipeline health
+# Monitor disk space
+df -h
 
-**final/eval_2025_success** and **final/eval_2024_success**
-- **What**: Success status of full evaluation at training end
-- **Interpretation**: Final model evaluation results
+# Check memory usage
+free -h  # Linux
+# Or on Windows: wmic OS get TotalVisibleMemorySize,FreePhysicalMemory
+```
 
-### 🔧 Optional Advanced Metrics
+### **Troubleshooting Commands**
 
-The following comprehensive metrics are **now actively logged** to WandB during training:
+```bash
+# Clear GPU memory
+python -c "import torch; torch.cuda.empty_cache()"
 
-**Memory Analysis**
-- **Memory/Usage_Mean, Memory/Usage_Max, Memory/Usage_Min**: Episodic memory slot utilization statistics
-- **Memory/Active_Slots_Percentage**: Percentage of memory slots being actively used  
-- **Memory/Analysis_Avg_Similarity**: Average similarity between active memory slots (lower = more diverse)
-- **Memory/Top_1_Slot_Access through Memory/Top_5_Slot_Access**: Access frequency for most-used memory slots
+# Test CUDA availability
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA devices: {torch.cuda.device_count()}')"
 
-**Attention Analysis**
-- **Attention/CrossModal_layer_X_Mean, Attention/CrossModal_layer_X_Max**: Cross-modal attention weights by layer
-- **Attention/CrossModal_layer_X_Entropy**: Attention distribution entropy (lower = more focused)
-- **Attention/Memory_Mean, Attention/Memory_Max, Attention/Memory_Entropy**: Memory attention patterns
+# Verify transformers installation
+python -c "from transformers import Dinov2Model; print('DINOv2 available')"
 
-**Quantization Metrics** ⚡
-- **Quantization/BitNet_Layer_Count**: Number of quantized layers in the model
-- **Quantization/Sparsity_Mean**: Average sparsity percentage across all BitNet layers (30-60% typical)
-- **Quantization/Distribution_Balance**: Balance between +1/-1 weights (closer to 1.0 = better balance)
-- **Quantization/Compression_Effectiveness**: Overall compression achieved through sparsity
-- **Quantization/WeightScale_Mean/Std**: BitNet weight scaling factor statistics
-- **Quantization/Zeros_Ratio_Mean/Std, Quantization/Ones_Ratio_Mean/Std, Quantization/NegOnes_Ratio_Mean/Std**: Aggregated ternary weight distribution statistics
+# Check model creation
+python -c "
+import sys
+sys.path.append('src')
+from src.model import create_bitmar_model
+import yaml
+with open('configs/bitmar_unlimited.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+model = create_bitmar_model(config['model'])
+print(f'Model created successfully with {sum(p.numel() for p in model.parameters())} parameters')
+"
+```
 
-**Gradient Analysis**
-- **Gradients/Total_Norm**: L2 norm of all gradients (monitor for explosion/vanishing)
-- **Gradients/Encoder_Norm, Gradients/Decoder_Norm, Gradients/Fusion_Norm, Gradients/Memory_Norm**: Component-wise gradient norms
+## 🔧 **Configuration Files**
 
-**Feature Statistics**
-- **Features/Text_Mean, Features/Text_Std, Features/Text_Norm**: Text feature representation statistics
-- **Features/Vision_Mean, Features/Vision_Std, Features/Vision_Norm**: Vision feature statistics  
-- **Features/Episode_Mean, Features/Episode_Std, Features/Episode_Norm**: Episodic memory feature statistics
+### **Main Config: `configs/bitmar_unlimited.yaml`**
+- Enhanced with Facebook DINOv2-large (1024-dim)
+- No BabyLM constraints or token limits
+- 64-slot episodic memory
+- 192-dim text encoder with 6 layers
+- Unlimited training epochs with early stopping
 
-> **Note**: These comprehensive metrics are logged every 100 training steps alongside the basic training metrics. This provides deep insights into model behavior, quantization efficiency, and memory utilization patterns.
+## 📊 **Key Features**
+
+### **✅ Unlimited Training**
+- **No Token Constraints**: Train on unlimited multimodal datasets
+- **No BabyLM Limitations**: Removed all 100M token restrictions
+- **No train_50M Dependencies**: Pure multimodal focus
+
+### **🔥 Facebook DINOv2-large**
+- **Superior Vision**: 1024-dimensional vision features
+- **Official Model**: `facebook/dinov2-large` from HuggingFace
+- **Enhanced Understanding**: Better image-text alignment
+
+### **🧠 Enhanced Architecture**
+- **BitNet Quantization**: 1.58-bit quantized weights for efficiency
+- **64 Memory Slots**: Increased from 32 for larger datasets
+- **192-dim Text Encoder**: Enhanced from 128-dim
+- **6-Layer Processing**: Deeper understanding capabilities
+
+### **📈 Multi-dataset Support**
+- **Conceptual Captions**: High-quality image-text pairs
+- **Visual Genome**: Rich scene descriptions
+- **COCO Captions**: Detailed image descriptions
+- **Custom Datasets**: Support for your own data
+
+## 🎯 **What to Do Next - Step by Step Guide**
+
+### **STEP 1: Initial Setup (5 minutes)**
+```bash
+cd D:\BabyLM\BitGen
+venv\Scripts\activate
+pip install -r requirements.txt
+pip install transformers torch torchvision timm
+```
+
+### **STEP 2: Download DINOv2-large (2-3 minutes)**
+```bash
+python download_dinov2_large.py
+# Wait for "✅ DINOv2-large setup completed successfully!"
+```
+
+### **STEP 3: Test Setup (1 minute)**
+```bash
+python test_dinov2_large.py
+# Should show "✅ Correct DINOv2-large feature dimension (1024)"
+```
+
+### **STEP 4: Start Training (Ongoing)**
+```bash
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --device cuda:0
+# Training will start automatically with unlimited datasets
+```
+
+### **STEP 5: Monitor Progress**
+- Watch the console output for loss and similarity metrics
+- Training logs are saved to `training_unlimited.log`
+- Checkpoints saved in `checkpoints_unlimited/`
+- WandB dashboard (if configured) shows detailed metrics
+
+### **STEP 6: Model Conversion (After training)**
+```bash
+python bitmar_hf_adapter.py \
+  --checkpoint_path checkpoints_unlimited/best_checkpoint.pt \
+  --output_dir hf_model_unlimited
+```
+
+### **STEP 7: Evaluation**
+```bash
+python evaluate_bitmar_2024.py --model_path hf_model_unlimited
+python evaluate_bitmar_2025.py --model_path hf_model_unlimited
+```
+
+## 🚨 **Important Notes**
+
+### **GPU Requirements**
+- **Minimum**: 8GB VRAM for training
+- **Recommended**: 16GB+ VRAM for optimal performance
+- **CPU Training**: Possible but much slower
+
+### **Storage Requirements**
+- **Model checkpoints**: ~120MB per checkpoint
+- **DINOv2-large cache**: ~1GB
+- **Training logs**: Variable based on training length
+
+### **Memory Management**
+- Training uses gradient checkpointing for memory efficiency
+- Mixed precision (FP16) enabled by default
+- Automatic GPU memory clearing between epochs
+
+## 🆘 **Troubleshooting**
+
+### **Common Issues & Solutions**
+
+#### **CUDA Out of Memory**
+```bash
+# Reduce batch size in config
+# Change batch_size from 48 to 24 or 16
+```
+
+#### **DINOv2 Not Found**
+```bash
+python download_dinov2_large.py
+# Re-download the model
+```
+
+#### **Import Errors**
+```bash
+pip install -r requirements.txt
+pip install transformers torch torchvision timm
+```
+
+#### **Checkpoint Loading Issues**
+```bash
+# Use strict=False loading (automatically handled)
+python train_unlimited.py --config configs/bitmar_unlimited.yaml --resume checkpoints_unlimited/latest_checkpoint.pt
+```
+
+## 📞 **Support & Next Steps**
+
+1. **Start with Step 1-4** above for immediate training
+2. **Monitor training** for first few epochs to ensure stability
+3. **Convert model** after training completes
+4. **Run evaluation** to test performance
+5. **Upload to HuggingFace Hub** if desired
+
+## 🎉 **Success Indicators**
+
+You'll know everything is working when you see:
+- ✅ "DINOv2-large setup completed successfully!"
+- ✅ "BitMar Unlimited Training" starting message
+- ✅ Loss decreasing and similarity increasing over epochs
+- ✅ Regular checkpoint saves without errors
+
+---
+
+**Ready to start unlimited multimodal training with Facebook DINOv2-large!** 🚀

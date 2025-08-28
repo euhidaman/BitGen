@@ -1,0 +1,408 @@
+# BitMar Unlimited Configuration
+# Removed BabyLM limitations - Can train on unlimited multimodal datasets
+# Upgraded to Facebook's DINOv2-large for superior image understanding
+# Optimized for high-quality cross-modal learning without token restrictions
+
+model:
+  # BitNet Text Encoder (Enhanced for unlimited training)
+  vocab_size: 50257 # GPT-2 vocabulary
+  text_encoder_dim: 192 # Increased from 128 for better capacity
+  text_encoder_layers: 6 # More layers for improved understanding
+  text_encoder_heads: 6 # More heads for better cross-modal alignment
+
+  # BitNet Text Decoder (Enhanced for generation)
+  text_decoder_dim: 192 # Match encoder dimension
+  text_decoder_layers: 6 # More layers for better text generation
+  text_decoder_heads: 6 # Balance between quality and efficiency
+
+  # Vision processing (Upgraded to DINOv2-large from Facebook)
+  vision_encoder_name: "facebook/dinov2-large" # Official Facebook DINOv2-large model
+  vision_encoder_dim: 1024 # DINOv2-large output dimension (higher quality)
+  vision_latent_size: 192 # Match text encoder dim for consistency
+  vision_hidden_size: 256 # Increased intermediate processing
+  vision_compression_method: "learned_compression" # Best for cross-modal alignment
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+  vision_patch_size: 14 # DINOv2-large patch size
+  vision_num_patches: 256 # 14x14 patches for 224x224 images
+
+  # Cross-modal fusion (Enhanced for unlimited data)
+  fusion_hidden_size: 192 # Match text encoder dim for consistency
+  fusion_num_heads: 6 # More heads for better alignment
+  fusion_num_layers: 3 # Deeper fusion for better understanding
+
+  # Episodic Memory (Optimized for larger datasets)
+  memory_size: 64 # Increased to 64 memory slots for more storage
+  episode_dim: 192 # Match fusion dimension for consistency
+  memory_alpha: 0.15 # Slightly lower adaptation rate for stability
+  direct_writing: true
+  memory_compression: true # Enable memory compression
+  enable_adaptive_training: true # Enable adaptive cross-modal training
+
+  # Model configuration
+  max_seq_len: 512 # Increased sequence length for better context
+  dropout: 0.12 # Slightly reduced dropout for better learning
+
+# Dataset configuration (No token constraints)
+data:
+  # Dataset configuration (Unlimited)
+  dataset_type: "multimodal_unlimited" # Support for unlimited datasets
+  vision_model_name: "facebook/dinov2-large" # Official Facebook DINOv2-large
+  text_encoder_name: "gpt2"
+  max_seq_length: 512 # Increased sequence length
+
+  # Dynamic data loading (no token limits)
+  dynamic_loading: true # Load data dynamically without constraints
+  use_custom_datasets: true # Allow custom multimodal datasets
+  dataset_streaming: true # Stream large datasets efficiently
+
+  # DataLoader settings (Optimized for larger datasets)
+  batch_size: 48 # Balanced for memory efficiency with larger model
+  num_workers: 8 # More workers for better data loading
+  pin_memory: true # Faster GPU transfers
+  persistent_workers: true # Keep workers alive
+  prefetch_factor: 4 # Prefetch more batches
+
+  # Data mixing strategy (Pure multimodal focus)
+  multimodal_only: true # Focus only on image-caption pairs
+  ensure_alignment: true # Ensure perfect image-caption alignment
+  validate_alignment: true # Validate alignment before training
+  alignment_verification: "strict" # Strict alignment verification
+  never_break_pairs: true # Never separate image-caption pairs
+  alignment_check_frequency: 500 # Check alignment every 500 samples
+
+  # Validation configuration
+  use_validation: true # Enable validation for better training
+  validation_split: 0.05 # 5% validation split
+  stratified_split: true # Ensure balanced validation
+
+# Vision feature configuration (Enhanced for DINOv2-large)
+vision_feature_reduction:
+  enabled: true
+  method: "learned_compression" # Best for cross-modal alignment
+  input_dim: 1024 # DINOv2-large output dimension
+  target_dim: 192 # Match text encoder dimension
+  spatial_pooling: true # Reduce spatial dimensions
+  pool_method: "attention" # Attention-based pooling for better features
+
+  # Enhanced compression parameters
+  hidden_dim: 384 # Larger intermediate compression layer
+  num_layers: 2 # Multiple compression layers
+  learnable: true # Enable learning during training
+  preserve_spatial_info: true # Keep spatial relationships
+  use_residual: true # Residual connections in compression
+
+# Attention analysis (Enhanced cross-modal understanding)
+attention_analysis:
+  track_top_k: 8 # Track top 8 attention heads
+  log_every_n_steps: 150 # Regular logging
+  viz_every_n_epochs: 2 # More frequent visualization
+  save_head_patterns: true # Save patterns for analysis
+  analyze_memory_attention: true # Monitor episodic memory
+  analyze_cross_modal: true # Critical for alignment
+  track_token_alignment: true # Track image-text token alignment
+  visualize_cross_modal_attention: true # Visualize cross-modal attention patterns
+
+# Adaptive training configuration (Enhanced)
+adaptive_training:
+  enabled: true # Enable adaptive training
+  similarity_window_size: 300 # Monitor similarity over 300 steps
+  drop_threshold: 0.10 # Lower threshold for earlier intervention
+  min_steps_between_interventions: 600 # Faster interventions
+  freeze_duration_steps: 1200 # Shorter freeze duration
+  loss_rebalance_factor: 2.5 # Higher rebalance factor
+  similarity_smoothing_alpha: 0.12 # More responsive smoothing
+
+training:
+  # Training configuration (Unlimited epochs and data)
+  max_epochs: 50 # Allow up to 50 epochs for convergence
+  early_stopping_patience: 5 # Stop if no improvement for 5 epochs
+  accumulate_grad_batches: 3 # Increased gradient accumulation
+  gradient_clip_val: 0.5 # Slightly higher gradient clipping
+  val_check_interval: 800 # More frequent validation
+  scheduler: "cosine_with_restarts" # Cosine with restarts for better convergence
+  min_lr: 0.00001 # Lower minimum learning rate
+  warmup_steps: 2000 # Longer warmup for stability
+  learning_rate: 0.0003 # Higher initial learning rate
+  weight_decay: 0.015 # Balanced regularization
+  optimizer: "adamw8bit" # Stable optimizer choice
+
+  # Enhanced scheduler configuration
+  scheduler_config:
+    T_0: 2000 # Longer initial cycle
+    T_mult: 2 # Multiply restart period
+    eta_min_ratio: 0.05 # Lower minimum LR ratio
+
+  # Enhanced training objectives
+  cross_modal_loss_weight: 2.0 # Higher weight for cross-modal alignment
+  text_generation_loss_weight: 1.0 # Standard weight for text generation
+  memory_regularization_weight: 0.08 # Light memory regularization
+  alignment_consistency_weight: 0.7 # Higher alignment consistency weight
+  contrastive_loss_weight: 0.3 # Add contrastive learning
+
+  # Advanced training features
+  use_mixed_precision: true # Enable mixed precision training
+  use_gradient_checkpointing: true # Save memory
+  monitor_gradient_norm: true # Monitor gradient health
+
+# Weights & Biases (Enhanced logging for unlimited training)
+wandb:
+  project: "bitmar-unlimited-multimodal"
+  entity: "bitmar-research"
+  api_key: null
+  log_every_n_steps: 75 # More frequent logging
+  log_attention: true # Monitor attention patterns
+  log_memory: true # Monitor episodic memory
+  log_gradients: true # Monitor gradient flow
+  log_cross_modal_similarity: true # Critical for alignment
+  log_alignment_quality: true # Track alignment quality metrics
+  log_caption_image_matching: true # Track caption-image matching accuracy
+  save_code: true
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: true
+  plot_alignment_metrics: true # Track alignment quality over time
+
+  # Enhanced Memory Visualization Settings
+  log_memory_evolution: true # Track memory slot evolution over time
+  plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
+  plot_memory_diversity: true # Track memory diversity and specialization
+  plot_memory_access_patterns: true # Visualize memory access patterns
+  memory_visualization_frequency: 3000 # More frequent memory visualizations
+  memory_snapshot_frequency: 6000 # More frequent memory snapshots
+
+  # Enhanced memory-specific metrics to track
+  track_memory_metrics:
+    - "memory_diversity_score"
+    - "memory_specialization_score"
+    - "memory_usage_entropy"
+    - "cross_modal_memory_ratio"
+    - "memory_slot_utilization"
+    - "memory_update_frequency"
+    - "memory_retrieval_accuracy"
+    - "memory_interference_score"
+    - "memory_consolidation_rate"
+
+# Evaluation (Comprehensive multimodal evaluation)
+evaluation:
+  metrics: ["bleu", "rouge", "cross_modal_similarity", "memory_efficiency", "retrieval_accuracy"]
+  generate_samples: true # Generate example outputs
+  num_samples: 50 # More samples for better evaluation
+  max_generation_length: 64 # Longer generation length
+  temperature: 0.7 # Balanced creativity
+  top_p: 0.9 # Nucleus sampling
+  top_k: 50 # Top-k sampling
+
+  # Enhanced cross-modal evaluation
+  evaluate_alignment: true # Test image-text alignment
+  alignment_metrics:
+    [
+      "cosine_similarity",
+      "retrieval_accuracy",
+      "caption_image_matching",
+      "cross_modal_retrieval",
+      "semantic_similarity",
+      "visual_grounding_accuracy",
+    ]
+  alignment_threshold: 0.85 # Higher alignment threshold
+  validate_pairs_during_eval: true # Validate image-caption pairs during evaluation
+
+  # Additional evaluation tasks
+  zero_shot_classification: true # Zero-shot image classification
+  image_text_retrieval: true # Bidirectional retrieval tasks
+  visual_question_answering: false # VQA capability (optional)
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_unlimited"
+  log_dir: "logs_unlimited"
+  attention_dir: "attention_unlimited"
+  memory_dir: "memory_unlimited"
+  results_dir: "results_unlimited"
+  model_exports_dir: "model_exports_unlimited"
+
+# Memory optimization (Enhanced for larger model)
+memory_optimization:
+  use_gradient_checkpointing: true # Trade compute for memory
+  use_fp16: true # Mixed precision training
+  use_int8_vision: false # Keep vision in fp16 for quality
+  empty_cache_frequency: 8 # More frequent cache cleaning
+  max_memory_slots_in_ram: 32 # More slots in RAM
+  compress_episodic_memory: true # Compress memory storage
+
+  # Enhanced vision processing optimization
+  vision_feature_caching: true # Cache vision features for efficiency
+  vision_batch_processing: true # Process vision features in batches
+  vision_gradient_checkpointing: true # Checkpoint vision encoder
+
+  # Model optimization
+  tie_word_embeddings: true # Share input/output embeddings
+  use_shared_attention: false # Don't share attention for quality
+  activation_checkpointing: true # Checkpoint activations
+
+# Performance targets (Enhanced for unlimited training)
+performance_targets:
+  max_model_size_mb: 120 # Larger model size limit (still small but more capable)
+  target_cross_modal_similarity: 0.85 # Higher target similarity score
+  target_text_generation_quality: 0.75 # Higher target BLEU score
+  memory_efficiency_threshold: 0.85 # Higher memory usage efficiency
+  convergence_patience: 8 # Epochs to wait for convergence
+
+# FLOPS tracking configuration (Enhanced)
+flops_tracking:
+  enabled: true # Enable FLOPS tracking
+  log_frequency: 75 # More frequent FLOPS logging
+  save_statistics: true # Save detailed FLOPS statistics
+  estimate_theoretical: true # Calculate theoretical FLOPS estimates
+  track_peak_performance: true # Track peak throughput
+  log_to_wandb: true # Log FLOPS metrics to Weights & Biases
+
+  # Advanced FLOPS tracking settings
+  detailed_breakdown: true # Track FLOPS by component
+  memory_bandwidth_tracking: true # Advanced memory bandwidth tracking
+  efficiency_analysis: true # Analyze computational efficiency
+
+  # Enhanced FLOPS logging categories
+  track_components:
+    - "attention"
+    - "feedforward"
+    - "layer_norm"
+    - "embeddings"
+    - "vision_encoder"
+    - "cross_modal_fusion"
+    - "memory_operations"
+    - "compression_layers"
+
+# Dataset configuration (Multiple high-quality sources)
+dataset_sources:
+  # Primary multimodal datasets (no BabyLM restrictions)
+  conceptual_captions:
+    enabled: true
+    min_caption_length: 10 # Minimum caption quality
+    max_samples: null # No sample limit
+
+  visual_genome:
+    enabled: true
+    use_region_descriptions: true
+    max_samples: null # No sample limit
+
+  coco_captions:
+    enabled: true
+    use_all_captions: true # Use all 5 captions per image
+    max_samples: null # No sample limit
+
+  flickr30k:
+    enabled: true
+    max_samples: null # No sample limit
+
+  # Custom dataset support
+  custom_datasets:
+    enabled: true
+    dataset_format: "image_caption_pairs"
+    validation_required: true
+
+# Advanced features
+advanced_features:
+  # Multi-scale vision processing
+  multi_scale_vision: true
+  scale_factors: [0.8, 1.0, 1.2] # Multiple image scales
+
+  # Curriculum learning
+  curriculum_learning: true
+  start_with_simple: true # Start with simpler image-text pairs
+  complexity_increase_rate: 0.1 # Gradual complexity increase
+
+  # Data augmentation
+  data_augmentation:
+    enabled: true
+    image_augmentation: true
+    text_augmentation: false # Keep text intact for alignment
+
+  # Model ensemble (optional)
+  ensemble_training: false # Train multiple models
+  ensemble_size: 3 # Number of models in ensemble
+
+# Hugging Face Hub integration (Updated)
+huggingface_hub:
+  enabled: true
+  repo_id: "euhidaman/bitmar-unlimited-multimodal"
+  private: true
+  upload_after_epoch: true
+  upload_final_model: true
+  commit_message_template: "BitMar Unlimited - Epoch {epoch} - Enhanced DINOv2-large training"
+  create_model_card: true
+  model_card_template: |
+    ---
+    language: en
+    license: mit
+    tags:
+    - bitmar
+    - multimodal
+    - dinov2-large
+    - unlimited
+    - cross-modal
+    datasets:
+    - conceptual_captions
+    - visual_genome
+    - coco_captions
+    - flickr30k
+    metrics:
+    - bleu
+    - cross_modal_similarity
+    - retrieval_accuracy
+    ---
+    
+    # BitMar Unlimited Multimodal Model
+    
+    This model uses Facebook's DINOv2-large for superior image understanding
+    and is trained without BabyLM limitations on high-quality multimodal datasets.
+    
+    ## Key Features
+    - **Vision**: Facebook DINOv2-large (1024-dim features)
+    - **Text**: Enhanced BitNet encoder/decoder (192-dim)
+    - **Memory**: 64-slot episodic memory system
+    - **Training**: Unlimited multimodal data, no token constraints
+    
+    ## Training Details
+    - Epochs completed: {epoch}
+    - Cross-modal similarity: {best_similarity:.4f}
+    - Model size: ~120MB (still compact but more capable)
+    
+    ## Model Architecture
+    - Text encoder: {text_encoder_layers} layers, {text_encoder_dim} hidden size
+    - Vision encoder: Facebook DINOv2-large with learned compression
+    - Episodic memory: {memory_size} slots, {episode_dim} dimensions
+    
+    ## Usage
+    ```python
+    from transformers import AutoModel, AutoTokenizer
+    
+    model = AutoModel.from_pretrained("{repo_id}")
+    tokenizer = AutoTokenizer.from_pretrained("{repo_id}")
+    
+    # Process image and text
+    outputs = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        vision_features=vision_features  # DINOv2-large features
+    )
+    ```
+
+# Attention Sinks configuration (Enhanced for unlimited sequences)
+attention_sinks:
+  enabled: true
+  attention_sink_size: 8 # More attention sinks for longer sequences
+  attention_sink_window_size: 2048 # Larger window for better context
+  inject_to_text_encoder: true
+  inject_to_text_decoder: true
+  position_shift_enabled: true
+
+  # Enhanced attention sinks settings
+  cache_compression: true
+  adaptive_window_size: true # Experimental: adaptive window sizing
+  memory_efficient_attention: true
+
+  # Integration with BitMar features
+  preserve_episodic_memory: true
+  preserve_quantization: true
+  preserve_cross_modal_fusion: true

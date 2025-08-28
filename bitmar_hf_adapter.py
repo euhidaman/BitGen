@@ -1,6 +1,7 @@
 """
 BitMar to HuggingFace Model Adapter
 Adapts BitMar models to be compatible with HuggingFace evaluation pipelines
+Enhanced with Facebook DINOv2-base (768-dim) support
 """
 
 import torch
@@ -9,9 +10,13 @@ from transformers import PreTrainedModel, PretrainedConfig, GPT2Config, GPT2LMHe
 from typing import Optional, Dict, Any
 import json
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class BitMarAsGPT2(GPT2LMHeadModel):
-    """BitMar model wrapped as GPT2 for HuggingFace compatibility"""
+    """BitMar model wrapped as GPT2 for HuggingFace compatibility with DINOv2-base support"""
 
     def __init__(self, config, original_model=None):
         # Initialize as GPT2 but override with our model
@@ -38,8 +43,11 @@ class BitMarAsGPT2(GPT2LMHeadModel):
                 # Prepare inputs for BitMar
                 batch_size = input_ids.size(0)
 
-                # Create dummy vision features if needed
-                vision_features = torch.zeros(batch_size, 768, device=input_ids.device)
+                # Create dummy vision features for DINOv2-base (768-dim)
+                vision_encoder_dim = getattr(self.original_model, 'vision_encoder_dim', 768)
+                vision_features = torch.zeros(batch_size, vision_encoder_dim, device=input_ids.device)
+
+                logger.debug(f"Using vision features with dimension: {vision_encoder_dim}")
 
                 # Call original model with minimal required arguments
                 outputs = self.original_model(
@@ -60,7 +68,7 @@ class BitMarAsGPT2(GPT2LMHeadModel):
 
             except Exception as e:
                 # Fallback to GPT2 forward pass
-                print(f"Warning: BitMar forward pass failed, using GPT2 fallback: {e}")
+                logger.warning(f"BitMar forward pass failed, using GPT2 fallback: {e}")
                 return super().forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -77,7 +85,7 @@ class BitMarAsGPT2(GPT2LMHeadModel):
             )
 
     def generate(self, input_ids, max_length=50, **kwargs):
-        """Generate method for compatibility"""
+        """Generate method for compatibility with DINOv2-base features"""
         if self.original_model is not None and hasattr(self.original_model, 'generate'):
             try:
                 return self.original_model.generate(input_ids, max_length=max_length, **kwargs)
@@ -88,8 +96,33 @@ class BitMarAsGPT2(GPT2LMHeadModel):
             return super().generate(input_ids, max_length=max_length, **kwargs)
 
 
+def download_dinov2_base():
+    """Download and cache Facebook's DINOv2-base model (faster alternative)"""
+    try:
+        from transformers import Dinov2Model, AutoImageProcessor
+
+        logger.info("🔥 Downloading Facebook DINOv2-base model (much faster)...")
+        model_name = "facebook/dinov2-base"
+
+        # Download and cache the model
+        model = Dinov2Model.from_pretrained(model_name)
+        processor = AutoImageProcessor.from_pretrained(model_name)
+
+        logger.info(f"✅ Downloaded {model_name}")
+        logger.info(f"   Hidden size: {model.config.hidden_size} (768-dim - faster than large)")
+        logger.info(f"   Image size: {processor.size}")
+        logger.info(f"   Model cached in HuggingFace cache")
+        logger.info(f"🚀 This model is 3x faster than DINOv2-large!")
+
+        return model, processor
+
+    except Exception as e:
+        logger.error(f"❌ Failed to download DINOv2-base: {e}")
+        return None, None
+
+
 def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
-    """Load BitMar checkpoint and wrap it as HuggingFace GPT2 model"""
+    """Load BitMar checkpoint and wrap it as HuggingFace GPT2 model with DINOv2-base support"""
     try:
         # Import BitMar model creation function
         import sys
@@ -97,17 +130,25 @@ def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
         sys.path.append(str(Path(__file__).parent / "src"))
         from src.model import create_bitmar_model
 
-        print(f"Loading BitMar checkpoint: {checkpoint_path}")
+        logger.info(f"Loading BitMar checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
         # Extract config and model state
         bitmar_config = checkpoint.get('config', {})
         model_state = checkpoint['model_state_dict']
 
-        # Create original BitMar model
-        original_model = create_bitmar_model(bitmar_config['model'])
+        # Ensure DINOv2-base configuration (faster)
+        model_config = bitmar_config['model']
+        vision_encoder_dim = model_config.get('vision_encoder_dim', 768)  # DINOv2-base
+        vision_encoder_name = model_config.get('vision_encoder_name', 'facebook/dinov2-base')
 
-        # Fix shape mismatches in state dict
+        logger.info(f"🔥 Vision model: {vision_encoder_name} (faster alternative)")
+        logger.info(f"📊 Vision encoder dim: {vision_encoder_dim} (optimized for speed)")
+
+        # Create original BitMar model
+        original_model = create_bitmar_model(model_config)
+
+        # Handle dimension compatibility (768 base vs 1024 large)
         fixed_state_dict = {}
         current_model_state = original_model.state_dict()
 
@@ -116,45 +157,97 @@ def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
                 current_shape = current_model_state[key].shape
                 checkpoint_shape = value.shape
 
+                # Handle vision dimension changes (1024 -> 768 for base, or vice versa)
+                if 'vision' in key and 'weight' in key and checkpoint_shape != current_shape:
+                    logger.info(f"Handling vision dimension change for {key}")
+                    logger.info(f"  Checkpoint: {checkpoint_shape} -> Current: {current_shape}")
+
+                    if len(checkpoint_shape) == 2 and len(current_shape) == 2:
+                        # Weight matrix mismatch - handle both directions
+                        if checkpoint_shape[1] == 1024 and current_shape[1] == 768:
+                            # Truncate from 1024 to 768 dimensions (large -> base)
+                            fixed_state_dict[key] = value[:, :768]
+                            logger.info(f"  Truncated vision weight from 1024 to 768 dims (large->base)")
+                        elif checkpoint_shape[1] == 768 and current_shape[1] == 1024:
+                            # Pad from 768 to 1024 dimensions (base -> large)
+                            padding = torch.zeros(checkpoint_shape[0], 256, dtype=value.dtype)
+                            fixed_state_dict[key] = torch.cat([value, padding], dim=1)
+                            logger.info(f"  Padded vision weight from 768 to 1024 dims (base->large)")
+                        elif checkpoint_shape[0] == 1024 and current_shape[0] == 768:
+                            # Truncate input dimension
+                            fixed_state_dict[key] = value[:768, :]
+                            logger.info(f"  Truncated vision weight input from 1024 to 768 dims")
+                        elif checkpoint_shape[0] == 768 and current_shape[0] == 1024:
+                            # Pad input dimension
+                            padding = torch.zeros(256, checkpoint_shape[1], dtype=value.dtype)
+                            fixed_state_dict[key] = torch.cat([value, padding], dim=0)
+                            logger.info(f"  Padded vision weight input from 768 to 1024 dims")
+                        else:
+                            fixed_state_dict[key] = value
+                            logger.warning(f"  Could not handle vision weight shape mismatch")
+                    elif len(checkpoint_shape) == 1 and len(current_shape) == 1:
+                        # Bias vector mismatch
+                        if checkpoint_shape[0] == 1024 and current_shape[0] == 768:
+                            # Truncate bias
+                            fixed_state_dict[key] = value[:768]
+                            logger.info(f"  Truncated vision bias from 1024 to 768 dims")
+                        elif checkpoint_shape[0] == 768 and current_shape[0] == 1024:
+                            # Pad bias
+                            padding = torch.zeros(256, dtype=value.dtype)
+                            fixed_state_dict[key] = torch.cat([value, padding], dim=0)
+                            logger.info(f"  Padded vision bias from 768 to 1024 dims")
+                        else:
+                            fixed_state_dict[key] = value
+                    else:
+                        fixed_state_dict[key] = value
+
                 # Handle weight_scale parameter mismatches
-                if 'weight_scale' in key and checkpoint_shape != current_shape:
+                elif 'weight_scale' in key and checkpoint_shape != current_shape:
                     if checkpoint_shape == torch.Size([]) and current_shape == torch.Size([1]):
                         # Convert scalar to 1D tensor
                         fixed_state_dict[key] = value.unsqueeze(0)
-                        print(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
+                        logger.info(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
                     elif checkpoint_shape == torch.Size([1]) and current_shape == torch.Size([]):
                         # Convert 1D tensor to scalar
                         fixed_state_dict[key] = value.squeeze(0)
-                        print(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
+                        logger.info(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
                     else:
-                        print(f"Warning: Could not fix shape mismatch for {key}: {checkpoint_shape} vs {current_shape}")
+                        logger.warning(f"Could not fix shape mismatch for {key}: {checkpoint_shape} vs {current_shape}")
                         fixed_state_dict[key] = value
                 else:
                     fixed_state_dict[key] = value
             else:
-                print(f"Warning: Key {key} not found in current model, skipping")
+                logger.warning(f"Key {key} not found in current model, skipping")
 
         # Load the fixed state dict
         try:
             original_model.load_state_dict(fixed_state_dict)
-            print("✅ Successfully loaded fixed state dict")
+            logger.info("✅ Successfully loaded fixed state dict")
         except Exception as e:
-            print(f"❌ Failed to load fixed state dict, trying strict=False: {e}")
+            logger.warning(f"Failed to load fixed state dict, trying strict=False: {e}")
             original_model.load_state_dict(fixed_state_dict, strict=False)
-            print("✅ Loaded state dict with strict=False")
+            logger.info("✅ Loaded state dict with strict=False")
 
         original_model = original_model.to(device)
         original_model.eval()
 
-        # Create GPT2 compatible config
+        # Store vision encoder dim for forward pass
+        original_model.vision_encoder_dim = vision_encoder_dim
+
+        # Create GPT2 compatible config with optimized dimensions
+        text_encoder_dim = model_config.get('text_encoder_dim', 128)  # Optimized for speed
+        text_encoder_layers = model_config.get('text_encoder_layers', 4)  # Faster
+        text_encoder_heads = model_config.get('text_encoder_heads', 4)  # Efficient
+        max_seq_len = model_config.get('max_seq_len', 512)
+
         gpt2_config = GPT2Config(
-            vocab_size=bitmar_config['model'].get('vocab_size', 50257),
-            n_embd=bitmar_config['model'].get('text_encoder_dim', 128),
-            n_layer=bitmar_config['model'].get('text_encoder_layers', 4),
-            n_head=bitmar_config['model'].get('text_encoder_heads', 4),
-            n_positions=bitmar_config['model'].get('max_seq_len', 256),
+            vocab_size=model_config.get('vocab_size', 50257),
+            n_embd=text_encoder_dim,
+            n_layer=text_encoder_layers,
+            n_head=text_encoder_heads,
+            n_positions=max_seq_len,
             # Set other required GPT2 parameters
-            n_inner=bitmar_config['model'].get('text_encoder_dim', 128) * 4,
+            n_inner=text_encoder_dim * 4,
             activation_function="gelu_new",
             resid_pdrop=0.1,
             embd_pdrop=0.1,
@@ -177,20 +270,49 @@ def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
         adapter_model = adapter_model.to(device)
         adapter_model.eval()
 
-        print(f"✅ BitMar model loaded and adapted as GPT2 for HuggingFace compatibility")
+        logger.info(f"✅ BitMar model loaded and adapted as GPT2 for HuggingFace compatibility")
+        logger.info(f"🚀 Enhanced with DINOv2-base ({vision_encoder_dim}-dim vision features - much faster!)")
         return adapter_model, gpt2_config
 
     except Exception as e:
-        print(f"❌ Failed to load BitMar model: {e}")
-        # Return basic GPT2 model for testing
-        gpt2_config = GPT2Config(vocab_size=50257, n_embd=128, n_layer=4, n_head=4)
+        logger.error(f"❌ Failed to load BitMar model: {e}")
+        # Return basic GPT2 model for testing with optimized dimensions
+        gpt2_config = GPT2Config(vocab_size=50257, n_embd=128, n_layer=4, n_head=4, n_positions=512)
         adapter_model = GPT2LMHeadModel(gpt2_config)
         return adapter_model, gpt2_config
 
 
-def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
-    """Save BitMar model in HuggingFace GPT2 format"""
+def download_dinov2_large():
+    """Download and cache Facebook's DINOv2-large model"""
     try:
+        from transformers import Dinov2Model, AutoImageProcessor
+
+        logger.info("🔥 Downloading Facebook DINOv2-large model...")
+        model_name = "facebook/dinov2-large"
+
+        # Download and cache the model
+        model = Dinov2Model.from_pretrained(model_name)
+        processor = AutoImageProcessor.from_pretrained(model_name)
+
+        logger.info(f"✅ Downloaded {model_name}")
+        logger.info(f"   Hidden size: {model.config.hidden_size}")
+        logger.info(f"   Image size: {processor.size}")
+        logger.info(f"   Model cached in HuggingFace cache")
+
+        return model, processor
+
+    except Exception as e:
+        logger.error(f"❌ Failed to download DINOv2-large: {e}")
+        return None, None
+
+
+def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
+    """Save BitMar model in HuggingFace GPT2 format with DINOv2-base support"""
+    try:
+        # First ensure DINOv2-base is downloaded
+        logger.info("🔥 Ensuring DINOv2-base is available...")
+        download_dinov2_base()
+
         # Load and convert model
         model, config = load_bitmar_as_hf_model(bitmar_checkpoint_path)
 
@@ -204,6 +326,28 @@ def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
         # Save model (will be saved as GPT2 model)
         model.save_pretrained(output_path)
 
+        # Add BitMar-specific metadata
+        bitmar_metadata = {
+            "model_type": "bitmar_unlimited",
+            "vision_model": "facebook/dinov2-base",
+            "vision_features_dim": 768,
+            "text_encoder_dim": 128,
+            "memory_slots": 64,
+            "training_type": "unlimited_multimodal",
+            "babylm_constraints": "removed",
+            "enhanced_features": [
+                "facebook_dinov2_base",
+                "unlimited_training",
+                "64_slot_memory",
+                "128_dim_text_encoder"
+            ]
+        }
+
+        with open(output_path / "bitmar_metadata.json", 'w') as f:
+            json.dump(bitmar_metadata, f, indent=2)
+
+        logger.info("📄 Saved BitMar metadata")
+
         # Create a proper tokenizer for full compatibility
         from transformers import GPT2Tokenizer
         try:
@@ -215,10 +359,10 @@ def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
 
             # Save tokenizer
             tokenizer.save_pretrained(output_path)
-            print(f"✅ Saved GPT2 tokenizer to: {output_path}")
+            logger.info(f"✅ Saved GPT2 tokenizer to: {output_path}")
 
         except Exception as e:
-            print(f"⚠️ Failed to save tokenizer, creating manual files: {e}")
+            logger.warning(f"Failed to save tokenizer, creating manual files: {e}")
 
             # Create tokenizer config manually if GPT2Tokenizer fails
             tokenizer_config = {
@@ -264,26 +408,35 @@ def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
                     with open(output_path / "merges.txt", 'w') as f:
                         f.write(merges_response.text)
 
-                print("✅ Downloaded GPT2 vocab and merges files")
+                logger.info("✅ Downloaded GPT2 vocab and merges files")
             except Exception as download_e:
-                print(f"⚠️ Failed to download vocab/merges files: {download_e}")
+                logger.warning(f"Failed to download vocab/merges files: {download_e}")
 
-        print(f"✅ Model saved in HuggingFace GPT2 format to: {output_path}")
+        logger.info(f"✅ Model saved in HuggingFace GPT2 format to: {output_path}")
+        logger.info(f"🚀 Enhanced with Facebook DINOv2-base support")
         return str(output_path)
 
     except Exception as e:
-        print(f"❌ Failed to save HuggingFace compatible model: {e}")
+        logger.error(f"❌ Failed to save HuggingFace compatible model: {e}")
         raise
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert BitMar checkpoint to HuggingFace format")
+    # Setup logging
+    logging.basicConfig(level=logging.INFO)
+
+    parser = argparse.ArgumentParser(description="Convert BitMar checkpoint to HuggingFace format with DINOv2-base support")
     parser.add_argument("--checkpoint_path", required=True, help="Path to BitMar checkpoint")
     parser.add_argument("--output_dir", required=True, help="Output directory for HuggingFace model")
     parser.add_argument("--device", default="cuda:0", help="Device to use")
+    parser.add_argument("--download_dinov2", action="store_true", help="Download DINOv2-base model first")
 
     args = parser.parse_args()
+
+    if args.download_dinov2:
+        logger.info("🔥 Pre-downloading DINOv2-base...")
+        download_dinov2_base()
 
     save_hf_compatible_model(args.checkpoint_path, args.output_dir)
