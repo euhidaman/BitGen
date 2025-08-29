@@ -1,6 +1,6 @@
 # BitMar Unlimited Configuration
 # Removed BabyLM limitations - Can train on unlimited multimodal datasets
-# Upgraded to Facebook's DINOv2-large for superior image understanding
+# Upgraded to Facebook's DINOv3-Large for SUPERIOR image understanding (better than DINOv2)
 # Optimized for high-quality cross-modal learning without token restrictions
 
 model:
@@ -15,16 +15,16 @@ model:
   text_decoder_layers: 6 # More layers for better text generation
   text_decoder_heads: 6 # Balance between quality and efficiency
 
-  # Vision processing (Upgraded to DINOv2-large from Facebook)
-  vision_encoder_name: "facebook/dinov2-large" # Official Facebook DINOv2-large model
-  vision_encoder_dim: 1024 # DINOv2-large output dimension (higher quality)
+  # Vision processing (Upgraded to DINOv3-Large - LATEST from Facebook)
+  vision_encoder_name: "facebook/dinov3-vitl16-pretrain-lvd1689m" # Latest DINOv3-Large model
+  vision_encoder_dim: 1024 # DINOv3-Large output dimension (same as DINOv2 but better quality)
   vision_latent_size: 192 # Match text encoder dim for consistency
   vision_hidden_size: 256 # Increased intermediate processing
   vision_compression_method: "learned_compression" # Best for cross-modal alignment
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
-  vision_patch_size: 14 # DINOv2-large patch size
-  vision_num_patches: 256 # 14x14 patches for 224x224 images
+  vision_patch_size: 16 # DINOv3 patch size (16x16 patches)
+  vision_num_patches: 196 # 14x14 patches for 224x224 images with 16x16 patches
 
   # Cross-modal fusion (Enhanced for unlimited data)
   fusion_hidden_size: 192 # Match text encoder dim for consistency
@@ -47,7 +47,7 @@ model:
 data:
   # Dataset configuration (Unlimited)
   dataset_type: "multimodal_unlimited" # Support for unlimited datasets
-  vision_model_name: "facebook/dinov2-large" # Official Facebook DINOv2-large
+  vision_model_name: "facebook/dinov3-vitl16-pretrain-lvd1689m" # Latest DINOv3-Large model
   text_encoder_name: "gpt2"
   max_seq_length: 512 # Increased sequence length
 
@@ -76,11 +76,11 @@ data:
   validation_split: 0.05 # 5% validation split
   stratified_split: true # Ensure balanced validation
 
-# Vision feature configuration (Enhanced for DINOv2-large)
+# Vision feature configuration (Enhanced for DINOv3-Large)
 vision_feature_reduction:
   enabled: true
   method: "learned_compression" # Best for cross-modal alignment
-  input_dim: 1024 # DINOv2-large output dimension
+  input_dim: 1024 # DINOv3-Large output dimension
   target_dim: 192 # Match text encoder dimension
   spatial_pooling: true # Reduce spatial dimensions
   pool_method: "attention" # Attention-based pooling for better features
@@ -329,7 +329,7 @@ huggingface_hub:
   private: true
   upload_after_epoch: true
   upload_final_model: true
-  commit_message_template: "BitMar Unlimited - Epoch {epoch} - Enhanced DINOv2-large training"
+  commit_message_template: "BitMar Unlimited - Epoch {epoch} - Enhanced DINOv3-Large training"
   create_model_card: true
   model_card_template: |
     ---
@@ -338,7 +338,7 @@ huggingface_hub:
     tags:
     - bitmar
     - multimodal
-    - dinov2-large
+    - dinov3-large
     - unlimited
     - cross-modal
     datasets:
@@ -354,11 +354,11 @@ huggingface_hub:
     
     # BitMar Unlimited Multimodal Model
     
-    This model uses Facebook's DINOv2-large for superior image understanding
+    This model uses Facebook's DINOv3-Large for superior image understanding
     and is trained without BabyLM limitations on high-quality multimodal datasets.
     
     ## Key Features
-    - **Vision**: Facebook DINOv2-large (1024-dim features)
+    - **Vision**: Facebook DINOv3-Large (1024-dim features)
     - **Text**: Enhanced BitNet encoder/decoder (192-dim)
     - **Memory**: 64-slot episodic memory system
     - **Training**: Unlimited multimodal data, no token constraints
@@ -370,7 +370,7 @@ huggingface_hub:
     
     ## Model Architecture
     - Text encoder: {text_encoder_layers} layers, {text_encoder_dim} hidden size
-    - Vision encoder: Facebook DINOv2-large with learned compression
+    - Vision encoder: Facebook DINOv3-Large with learned compression
     - Episodic memory: {memory_size} slots, {episode_dim} dimensions
     
     ## Usage
@@ -384,7 +384,7 @@ huggingface_hub:
     outputs = model(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        vision_features=vision_features  # DINOv2-large features
+        vision_features=vision_features  # DINOv3-Large features
     )
     ```
 

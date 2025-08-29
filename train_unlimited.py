@@ -1,7 +1,7 @@
 """
 BitMar Unlimited Training Script
 Removed BabyLM limitations - supports unlimited multimodal datasets
-Enhanced with Facebook's DINOv2-large for superior image understanding
+Enhanced with Facebook's DINOv3-Large for SUPERIOR image understanding
 No token constraints or dataset size limitations
 """
 
@@ -183,7 +183,7 @@ class UnlimitedTrainer:
 
         logger.info(f"🚀 Unlimited multimodal trainer initialized")
         logger.info(f"Device: {self.device}")
-        logger.info(f"Enhanced with Facebook DINOv2-large for superior image understanding")
+        logger.info(f"Enhanced with Facebook DINOv3-Large for SUPERIOR image understanding")
 
     def setup_directories(self):
         """Create output directories"""
@@ -351,7 +351,7 @@ class UnlimitedTrainer:
                 card_content += f"\n\n## Training Status\n- **Status**: In Progress (Epoch {epoch + 1})\n"
 
             card_content += f"- **Best Cross-modal Similarity**: {self.best_similarity:.4f}\n"
-            card_content += f"- **Vision Model**: Facebook DINOv2-large\n"
+            card_content += f"- **Vision Model**: Facebook DINOv3-Large\n"
             card_content += f"- **Training Type**: Unlimited multimodal datasets\n"
 
             return card_content
@@ -362,7 +362,7 @@ class UnlimitedTrainer:
     def setup_model_and_data(self):
         """Setup model and unlimited multimodal data"""
         logger.info("Setting up model and unlimited multimodal data...")
-        logger.info("🔥 Enhanced with Facebook DINOv2-large for superior image understanding")
+        logger.info("🔥 Enhanced with Facebook DINOv3-Large for SUPERIOR image understanding")
 
         # Use unlimited dataset if available
         if UNLIMITED_DATASET_AVAILABLE and self.config.get('data', {}).get('dataset_type') == 'multimodal_unlimited':
@@ -375,10 +375,10 @@ class UnlimitedTrainer:
         self.data_module.setup()
 
         # Create enhanced model
-        logger.info("Creating enhanced BitMar model with DINOv2-large...")
+        logger.info("Creating enhanced BitMar model with DINOv3-Large...")
         logger.info(f"Model config dimensions:")
         logger.info(f"  • text_encoder_dim: {self.config['model']['text_encoder_dim']}")
-        logger.info(f"  • vision_encoder_dim: {self.config['model']['vision_encoder_dim']} (DINOv2-large)")
+        logger.info(f"  • vision_encoder_dim: {self.config['model']['vision_encoder_dim']} (DINOv3-Large)")
         logger.info(f"  • vision_latent_size: {self.config['model']['vision_latent_size']}")
         logger.info(f"  • memory_size: {self.config['model']['memory_size']} slots")
 
@@ -799,7 +799,7 @@ class UnlimitedTrainer:
 
     def train(self):
         """Main unlimited training loop"""
-        logger.info("🚀 Starting unlimited multimodal training with Facebook DINOv2-large...")
+        logger.info("🚀 Starting unlimited multimodal training with Facebook DINOv3-Large...")
 
         # Start carbon tracking
         if self.carbon_tracker:
@@ -873,7 +873,7 @@ class UnlimitedTrainer:
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
             logger.info(f"  • Best validation loss: {self.best_validation_loss:.4f}")
             logger.info(f"  • Total epochs: {self.current_epoch + 1}")
-            logger.info(f"  • Enhanced with Facebook DINOv2-large")
+            logger.info(f"  • Enhanced with Facebook DINOv3-Large")
 
             if self.use_wandb:
                 try:
@@ -911,7 +911,7 @@ class UnlimitedTrainer:
                 "vocab_size": self.config['model']['vocab_size'],
                 "text_encoder_dim": self.config['model']['text_encoder_dim'],
                 "text_encoder_layers": self.config['model']['text_encoder_layers'],
-                "vision_encoder_name": self.config['model'].get('vision_encoder_name', 'facebook/dinov2-large'),
+                "vision_encoder_name": self.config['model'].get('vision_encoder_name', 'facebook/dinov3-large'),
                 "vision_encoder_dim": self.config['model']['vision_encoder_dim'],
                 "memory_size": self.config['model']['memory_size'],
                 "training_type": "unlimited_multimodal"
@@ -967,7 +967,7 @@ def main():
         logger.info("🚀 BitMar Unlimited Training")
         logger.info("=" * 50)
         logger.info("✅ Removed all BabyLM limitations")
-        logger.info("🔥 Enhanced with Facebook DINOv2-large")
+        logger.info("🔥 Enhanced with Facebook DINOv3-Large")
         logger.info("📈 No token constraints or dataset size limits")
         logger.info("🎯 Focus on high-quality multimodal learning")
 
