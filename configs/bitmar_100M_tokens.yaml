@@ -149,65 +149,6 @@ training:
   log_alignment_metrics: true # Log alignment quality metrics
   alignment_loss_scaling: "adaptive" # Adaptive scaling for alignment loss
 
-# Weights & Biases (Comprehensive logging for 100M token dataset training)
-wandb:
-  project: "bitmar-100M-attention-epochs"
-  entity: "babylm-ntust"
-  api_key: null
-  log_every_n_steps: 100 # Regular logging
-  log_attention: true # Monitor attention patterns
-  log_memory: true # Monitor episodic memory
-  log_gradients: true # Monitor gradient flow
-  log_token_usage: true # Track token consumption
-  log_cross_modal_similarity: true # Critical for alignment
-  log_alignment_quality: true # Track alignment quality metrics
-  log_caption_image_matching: true # Track caption-image matching accuracy
-  save_code: true
-  create_plots: true
-  plot_attention_heatmaps: true
-  plot_memory_usage: true
-  plot_token_distribution: true # Track token usage distribution
-  plot_alignment_metrics: true # Track alignment quality over time
-
-  # Enhanced Memory Visualization Settings
-  log_memory_evolution: true # Track memory slot evolution over time
-  plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
-  plot_memory_diversity: true # Track memory diversity and specialization
-  plot_memory_access_patterns: true # Visualize memory access patterns
-  memory_visualization_frequency: 5000 # Log memory visualizations every 500 steps
-  memory_snapshot_frequency: 10000 # Take memory snapshots every 100 steps
-
-  # Memory-specific metrics to track
-  track_memory_metrics:
-    - "memory_diversity_score" # How different memory slots are
-    - "memory_specialization_score" # How specialized each slot becomes
-    - "memory_usage_entropy" # Distribution of memory slot usage
-    - "cross_modal_memory_ratio" # Ratio of text-only vs multimodal specialization
-    - "memory_slot_utilization" # Percentage of actively used slots
-    - "memory_update_frequency" # How often memory slots are updated
-    - "memory_retrieval_accuracy" # Accuracy of memory retrievals
-
-# Evaluation (Comprehensive for balanced approach)
-evaluation:
-  metrics: ["bleu", "rouge", "cross_modal_similarity", "memory_efficiency"]
-  generate_samples: true # Generate example outputs
-  num_samples: 20 # More samples for evaluation
-  max_generation_length: 32 # Reasonable generation length
-  temperature: 0.8 # Balanced creativity
-  top_p: 0.9 # Nucleus sampling
-
-  # Cross-modal evaluation (Enhanced alignment validation)
-  evaluate_alignment: true # Test image-text alignment
-  alignment_metrics:
-    [
-      "cosine_similarity",
-      "retrieval_accuracy",
-      "caption_image_matching",
-      "cross_modal_retrieval",
-    ]
-  alignment_threshold: 0.8 # Minimum alignment score required
-  validate_pairs_during_eval: true # Validate image-caption pairs during evaluation
-
 # Output directories
 output:
   checkpoint_dir: "checkpoints_100M_dataset"
@@ -234,11 +175,47 @@ memory_optimization:
   tie_word_embeddings: true # Share input/output embeddings
   use_shared_attention: false # Don't share attention for quality
 
+# Weights & Biases (Simplified logging for 100M token dataset training)
+wandb:
+  project: "bitmar-100M-attention-epochs"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 100 # Regular logging
+  log_attention: true # Monitor attention patterns
+  log_memory: true # Monitor episodic memory
+  log_gradients: true # Monitor gradient flow
+  log_token_usage: true # Track token consumption
+  log_cross_modal_similarity: true # Critical for alignment
+  log_alignment_quality: true # Track alignment quality metrics
+  save_code: true
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: true
+  plot_token_distribution: true # Track token usage distribution
+  plot_alignment_metrics: true # Track alignment quality over time
+
+  # Enhanced Memory Visualization Settings
+  log_memory_evolution: true # Track memory slot evolution over time
+  plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
+  plot_memory_diversity: true # Track memory diversity and specialization
+  plot_memory_access_patterns: true # Visualize memory access patterns
+  memory_visualization_frequency: 5000 # Log memory visualizations every 500 steps
+  memory_snapshot_frequency: 10000 # Take memory snapshots every 100 steps
+
+  # Memory-specific metrics to track
+  track_memory_metrics:
+    - "memory_diversity_score" # How different memory slots are
+    - "memory_specialization_score" # How specialized each slot becomes
+    - "memory_usage_entropy" # Distribution of memory slot usage
+    - "cross_modal_memory_ratio" # Ratio of text-only vs multimodal specialization
+    - "memory_slot_utilization" # Percentage of actively used slots
+    - "memory_update_frequency" # How often memory slots are updated
+    - "memory_retrieval_accuracy" # Accuracy of memory retrievals
+
 # Performance targets for 100M tokens
 performance_targets:
   max_model_size_mb: 50 # 50MB model size
   target_cross_modal_similarity: 0.75 # Target similarity score
-  target_text_generation_quality: 0.6 # Target BLEU score
   memory_efficiency_threshold: 0.8 # Memory usage efficiency
 
 # FLOPS tracking configuration
