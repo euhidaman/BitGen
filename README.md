@@ -108,33 +108,33 @@ test_dataset(config)
 
 ```bash
 # Standard unlimited training
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+python train_100M_tokens.py --config configs/bitmar_config.yaml
 
 # With specific GPU
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:0
+python train_100M_tokens.py --config configs/bitmar_config.yaml --device cuda:0
 
 # With frequent checkpoints
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 1000
+python train_100M_tokens.py --config configs/bitmar_config.yaml --save_every_n_steps 1000
 ```
 
 ### Training Variations
 
 ```bash
 # Rebuild cache if dataset changes
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --rebuild_cache
+python train_100M_tokens.py --config configs/bitmar_config.yaml --rebuild_cache
 
 # Save every 500 steps for monitoring
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
+python train_100M_tokens.py --config configs/bitmar_config.yaml --save_every_n_steps 500
 
 # Use specific GPU (if multiple available)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:1
+python train_100M_tokens.py --config configs/bitmar_config.yaml --device cuda:1
 ```
 
 ### Background Training (Linux/Mac)
 
 ```bash
 # Run in background with logging
-nohup python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml > training_output.log 2>&1 &
+nohup python train_100M_tokens.py --config configs/bitmar_config.yaml > training_output.log 2>&1 &
 
 # Monitor progress
 tail -f training_output.log
@@ -155,7 +155,7 @@ tail -f training_output.log
 
 ## 🔧 Configuration Customization
 
-Edit `configs/bitmar_100M_tokens.yaml`:
+Edit `configs/bitmar_config.yaml`:
 
 ```yaml
 data:
@@ -257,7 +257,7 @@ python src/dataset.py
 
 ### 4. Start Training
 ```bash
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+python train_100M_tokens.py --config configs/bitmar_config.yaml
 # Trains on ALL 1.78M samples with NO limits
 ```
 
