@@ -15,8 +15,8 @@ from transformers import AutoTokenizer
 import math
 import logging
 
-# Import FIBER-style fusion
-from .authentic_fiber_fusion import create_authentic_fiber_fusion, AuthenticFIBERIntegration
+# Import FIBER fusion
+from .fiber_fusion import create_fiber_fusion, FIBERIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -1187,8 +1187,8 @@ class BitMarModel(nn.Module):
         #    num_heads=config['fusion_num_heads'],
         #    num_layers=config['fusion_num_layers']
         #)
-        logger.info("🔄 Implementing FIBER-style backbone fusion instead of basic cross-attention")
-        self.fusion = create_authentic_fiber_fusion(
+        logger.info("🔄 Implementing FIBER backbone fusion instead of basic cross-attention")
+        self.fusion = create_fiber_fusion(
             text_encoder_dim=config['text_encoder_dim'],
             vision_encoder_dim=config['vision_latent_size'],
             fusion_hidden_size=config['fusion_hidden_size'],
@@ -1513,7 +1513,7 @@ class BitMarModel(nn.Module):
         vision_latent = self.encode_vision(vision_features)
 
         # 3. FIBER-enhanced cross-modal fusion
-        logger.debug(f"🔥 Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
+        logger.debug(f"��� Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
         fused_features, fiber_attention_weights = self.fusion(
             text_features=text_features,
