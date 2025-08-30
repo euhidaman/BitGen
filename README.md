@@ -1,169 +1,269 @@
-# BitMar: Vision-Language Episodic Memory Transformer
+# BitMar: Multimodal Vision-Language Transformer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
-BitMar is a **Vision-Language Episodic Memory Transformer** designed for the BabyLM Challenge. It combines BitNet-quantized text processing, DiNOv2 vision encoding, and episodic memory mechanisms to achieve efficient multimodal understanding with exactly 100M tokens.
+BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet-quantized text processing, DiNOv2 vision encoding, and episodic memory mechanisms for efficient multimodal understanding.
 
 ## 🌟 Key Features
 
-- **Token-Constrained Training**: Exactly 100M tokens with perfect alignment
+- **Unlimited Training**: No token constraints - trains on entire dataset
 - **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
 - **Episodic Memory**: Cross-modal memory system for visual-text associations
+- **Generic Dataset Support**: Works with Localized Narratives, COCO, and any image-caption dataset
 - **Comprehensive Logging**: Detailed WandB visualizations and metrics tracking
 - **Hugging Face Integration**: Automatic model uploads after each epoch
 - **Carbon Tracking**: Environmental impact monitoring
 
+## 📊 Dataset Information
+
+**Localized Narratives + COCO Dataset Counts:**
+
+### Localized Narratives (~1,160,000 samples):
+- **Open Images Train**: ~870,000 narrative samples
+- **Open Images Validation**: ~42,000 narrative samples  
+- **Open Images Test**: ~125,000 narrative samples
+- **COCO Train**: ~118,000 narrative samples
+- **COCO Validation**: ~5,000 narrative samples
+- **Total Localized Narratives**: ~1,160,000 samples
+
+### COCO Captions (~615,000 samples):
+- **COCO Train 2017**: ~590,000 caption samples (118K images × 5 captions each)
+- **COCO Val 2017**: ~25,000 caption samples (5K images × 5 captions each)
+- **Total COCO Captions**: ~615,000 samples
+
+### **TOTAL DATASET: ~1,775,000 image-caption pairs**
+
 ## 🛠️ Installation
 
 ```bash
-git clone <your-repo-url>
-cd BitMar
+git clone https://github.com/euhidaman/BitGen.git
+cd BitGen
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+
+# On Windows:
+venv\Scripts\activate
+# On Linux/Mac:
+source venv/bin/activate
+
+# Install PyTorch with CUDA support
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Install core dependencies
+pip install transformers datasets wandb huggingface_hub
+pip install numpy scipy scikit-learn matplotlib seaborn
+pip install tqdm pyyaml requests pillow
+pip install codecarbon  # Optional: for carbon tracking
 ```
 
-## 🚀 Training Commands
+## 📥 Complete Dataset Setup Commands
 
-### Basic Training (100M Tokens)
+### Step 1: Download Datasets (NO BabyLM, NO DiNOv2 dependencies)
 
 ```bash
-# Standard training with all features enabled
+# Download Localized Narratives and COCO datasets
+python download_multimodal_data.py --data_dir ./data
+
+# This downloads:
+# - Localized Narratives (Open Images + COCO): ~1.16M narrative samples
+# - COCO 2017 Captions: ~615K caption samples  
+# - Total: ~1.78M image-caption pairs
+# - Size: ~2GB download (annotations only)
+```
+
+### Step 2: Verify Dataset Loading
+
+```bash
+# Test that datasets load correctly
+python src/dataset.py
+
+# Expected output:
+# ✅ Loaded 1,775,000 image-caption pairs from Localized Narratives + COCO
+# 📊 Dataset Information:
+#   • total_samples: 1,775,000
+#   • datasets: Localized Narratives + COCO
+```
+
+### Step 3: Quick Dataset Stats Check
+
+```bash
+# Get exact dataset counts
+python -c "
+from src.dataset import test_dataset
+config = {
+    'dataset_dir': './data',
+    'text_encoder_name': 'gpt2', 
+    'max_seq_length': 256,
+    'batch_size': 4,
+    'num_workers': 0,
+    'pin_memory': False
+}
+test_dataset(config)
+"
+```
+
+## 🚀 Training Commands (No Token Limits)
+
+### Basic Training (All 1.78M Samples)
+
+```bash
+# Standard unlimited training
 python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
 
-# Training with specific GPU device
+# With specific GPU
 python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:0
 
-# Training with cache rebuild (if dataset changes)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --rebuild_cache
-```
-
-### Training with Custom Checkpoint Frequency
-
-```bash
-# Save checkpoint every 1000 steps (in addition to epoch-based saves)
+# With frequent checkpoints
 python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 1000
-
-# Save checkpoint every 500 steps for frequent monitoring
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
 ```
 
-### Complete Training Command with All Options
+### Training Variations
 
 ```bash
-python train_100M_tokens.py \
-    --config configs/bitmar_100M_tokens.yaml \
-    --device cuda:0 \
-    --save_every_n_steps 1000
+# Rebuild cache if dataset changes
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --rebuild_cache
+
+# Save every 500 steps for monitoring
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
+
+# Use specific GPU (if multiple available)
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:1
 ```
 
-## 📊 WandB Logging & Visualizations
+### Background Training (Linux/Mac)
 
-BitMar includes comprehensive logging to Weights & Biases with detailed visualizations and metrics tracking. Here's what gets logged and how to interpret it:
+```bash
+# Run in background with logging
+nohup python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml > training_output.log 2>&1 &
 
-### 🎯 Training Metrics
+# Monitor progress
+tail -f training_output.log
+```
 
-**train/loss**
-- **What**: Cross-entropy loss during training
-- **X-axis**: Training steps
-- **Y-axis**: Loss value
-- **Interpretation**: Should decrease over time; sudden spikes indicate potential issues
+## 📈 Expected Training Statistics
 
-**train/learning_rate**
-- **What**: Learning rate schedule (cosine annealing with warm restarts)
-- **X-axis**: Training steps
-- **Y-axis**: Learning rate value
-- **Interpretation**: Shows learning rate cycles; restarts help escape local minima
+**With 1,775,000 image-caption pairs:**
+- **Estimated tokens**: ~450M+ tokens (far exceeding 100M constraints)
+- **Batch size**: 64 samples
+- **Steps per epoch**: ~27,734 steps  
+- **Total steps (20 epochs)**: ~554,680 steps
+- **Training time estimates**:
+  - RTX 3090: 15-20 hours
+  - RTX 4090: 10-15 hours  
+  - A100: 8-12 hours
+  - CPU: 200+ hours (not recommended)
 
-**train/cross_modal_similarity**
-- **What**: Cosine similarity between text and vision features
-- **X-axis**: Training steps
-- **Y-axis**: Similarity score (-1 to 1)
-- **Interpretation**: Higher values = better cross-modal alignment; key metric for multimodal understanding
+## 🔧 Configuration Customization
 
-### 📊 Token Tracking
+Edit `configs/bitmar_100M_tokens.yaml`:
 
-**tokens/processed**
-- **What**: Total number of tokens processed so far
-- **X-axis**: Training steps
-- **Y-axis**: Token count
-- **Interpretation**: Should reach exactly 100M tokens; tracks progress toward target
+```yaml
+data:
+  dataset_dir: "./data"     # Your dataset location
+  batch_size: 64           # Adjust for GPU memory (32/64/128)
+  num_workers: 6           # CPU cores for data loading
 
-**tokens/batch_size**
-- **What**: Number of tokens in current batch
-- **X-axis**: Training steps
-- **Y-axis**: Token count per batch
-- **Interpretation**: Shows batch size variation; should be relatively consistent
+training:
+  max_epochs: 20           # Number of full dataset passes
+  learning_rate: 0.0002    # Learning rate
+  
+# Confirmed: NO TOKEN LIMITS
+token_tracking:
+  enforce_token_limits: false      # Never stop at token limits
+  unlimited_training: true         # Use all available data
+  stop_at_token_limit: false      # Never stop training
+```
 
-**token_progress/processed** and **token_progress/target**
-- **What**: Progress tracking toward 100M token goal
-- **X-axis**: Training steps
-- **Y-axis**: Token counts
-- **Interpretation**: Tracks completion percentage
+## 📊 Monitoring Training Progress
 
-### 📈 Epoch-Level Metrics
+### Weights & Biases Dashboard
 
-**epoch/train_loss**
-- **What**: Average loss per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Loss value
-- **Interpretation**: Should show steady decrease across epochs
+Training automatically logs to WandB:
+- Real-time loss curves
+- Cross-modal similarity metrics
+- Token processing statistics
+- Memory usage patterns
+- Attention visualizations
+- Model quantization stats
 
-**epoch/cross_modal_similarity**
-- **What**: Average cross-modal similarity per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Similarity score
-- **Interpretation**: Should increase as model learns better alignment
+### Local Monitoring
 
-**epoch/tokens_processed** and **epoch/tokens_in_epoch**
-- **What**: Token consumption tracking per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Token counts
-- **Interpretation**: Shows token distribution across epochs
+```bash
+# View training logs in real-time
+tail -f training.log
 
-### 🤗 Hugging Face Integration Logs
+# Monitor GPU usage
+nvidia-smi -l 1
 
-**huggingface/upload_success**
-- **What**: Whether model upload to HF Hub succeeded
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks upload reliability
+# Check disk space (checkpoints can be large)
+df -h
 
-**huggingface/repo_url**
-- **What**: Link to uploaded model repository
-- **Interpretation**: Direct link to view uploaded models
+# Monitor process
+ps aux | grep python
+```
 
-### 🔧 Optional Advanced Metrics
+## 📁 Output Directory Structure
 
-The following comprehensive metrics are **now actively logged** to WandB during training:
+```
+BitGen/
+├── checkpoints_100M_dataset/         # Model checkpoints
+│   ├── latest_checkpoint.pt          # Most recent model
+│   ├── checkpoint_epoch_0_step_X.pt  # Epoch checkpoints
+│   └── ...
+├── logs_100M_dataset/               # Training logs
+├── attention_100M_dataset/          # Attention analysis
+├── memory_100M_dataset/             # Memory visualizations  
+├── results_100M_dataset/            # Final results
+├── carbon_logs/                     # CO2 emissions tracking
+└── training.log                     # Main training log
+```
 
-**Memory Analysis**
-- **Memory/Usage_Mean, Memory/Usage_Max, Memory/Usage_Min**: Episodic memory slot utilization statistics
-- **Memory/Active_Slots_Percentage**: Percentage of memory slots being actively used  
-- **Memory/Analysis_Avg_Similarity**: Average similarity between active memory slots (lower = more diverse)
-- **Memory/Top_1_Slot_Access through Memory/Top_5_Slot_Access**: Access frequency for most-used memory slots
+## 🚨 System Requirements
 
-**Attention Analysis**
-- **Attention/CrossModal_layer_X_Mean, Attention/CrossModal_layer_X_Max**: Cross-modal attention weights by layer
-- **Attention/CrossModal_layer_X_Entropy**: Attention distribution entropy (lower = more focused)
-- **Attention/Memory_Mean, Attention/Memory_Max, Attention/Memory_Entropy**: Memory attention patterns
+### Minimum Requirements:
+- **GPU**: 8GB VRAM (RTX 3070/4060 or better)
+- **RAM**: 16GB system RAM
+- **Storage**: 15GB free space
+- **Python**: 3.9+
 
-**Quantization Metrics** ⚡
-- **Quantization/BitNet_Layer_Count**: Number of quantized layers in the model
-- **Quantization/Sparsity_Mean**: Average sparsity percentage across all BitNet layers (30-60% typical)
-- **Quantization/Distribution_Balance**: Balance between +1/-1 weights (closer to 1.0 = better balance)
-- **Quantization/Compression_Effectiveness**: Overall compression achieved through sparsity
-- **Quantization/WeightScale_Mean/Std**: BitNet weight scaling factor statistics
-- **Quantization/Zeros_Ratio_Mean/Std, Quantization/Ones_Ratio_Mean/Std, Quantization/NegOnes_Ratio_Mean/Std**: Aggregated ternary weight distribution statistics
+### Recommended:
+- **GPU**: 16GB+ VRAM (RTX 4080/4090, A100)
+- **RAM**: 32GB+ system RAM
+- **Storage**: 50GB+ SSD space
+- **Internet**: Stable connection for dataset download
 
-**Gradient Analysis**
-- **Gradients/Total_Norm**: L2 norm of all gradients (monitor for explosion/vanishing)
-- **Gradients/Encoder_Norm, Gradients/Decoder_Norm, Gradients/Fusion_Norm, Gradients/Memory_Norm**: Component-wise gradient norms
+## 🎯 Complete Workflow
 
-**Feature Statistics**
-- **Features/Text_Mean, Features/Text_Std, Features/Text_Norm**: Text feature representation statistics
-- **Features/Vision_Mean, Features/Vision_Std, Features/Vision_Norm**: Vision feature statistics  
-- **Features/Episode_Mean, Features/Episode_Std, Features/Episode_Norm**: Episodic memory feature statistics
+### 1. Setup Environment
+```bash
+git clone https://github.com/euhidaman/BitGen.git
+cd BitGen
+python -m venv venv
+venv\Scripts\activate  # Windows
+pip install torch transformers wandb requests tqdm pyyaml numpy
+```
 
-> **Note**: These comprehensive metrics are logged every 100 training steps alongside the basic training metrics. This provides deep insights into model behavior, quantization efficiency, and memory utilization patterns.
+### 2. Download Datasets  
+```bash
+python download_multimodal_data.py --data_dir ./data
+# Downloads 1.78M image-caption pairs (~2GB)
+```
+
+### 3. Verify Setup
+```bash
+python src/dataset.py
+# Should show: "✅ Loaded 1,775,000 image-caption pairs"
+```
+
+### 4. Start Training
+```bash
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+# Trains on ALL 1.78M samples with NO limits
+```
+
+### 5. Monitor Progress
+- Check WandB dashboard
+- View `training.log`
+- Monitor GPU with `nvidia-smi`
+
+The system will train on the complete **1,775,000 image-caption pairs** without any token constraints, giving you maximum data utilization!
