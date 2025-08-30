@@ -85,6 +85,26 @@ data:
   max_samples: null # No sample limit
   train_only: true # Use all data for training
 
+# Attention analysis (Focused on cross-modal understanding)
+attention_analysis:
+  track_top_k: 5 # Track top 5 attention heads
+  log_every_n_steps: 200 # Regular logging
+  viz_every_n_epochs: 3 # Visualization every 3 epochs
+  save_head_patterns: true # Save patterns for analysis
+  analyze_memory_attention: true # Monitor episodic memory
+  analyze_cross_modal: true # Critical for alignment
+  track_token_alignment: true # Track image-text token alignment
+
+# Adaptive training configuration
+adaptive_training:
+  enabled: true # Enable adaptive training
+  similarity_window_size: 200 # Monitor similarity over 200 steps
+  drop_threshold: 0.12 # Intervention threshold for similarity drop
+  min_steps_between_interventions: 800 # Cooldown between interventions
+  freeze_duration_steps: 1500 # How long to freeze components
+  loss_rebalance_factor: 2.0 # Rebalance cross-modal loss
+  similarity_smoothing_alpha: 0.15 # EMA smoothing for similarity
+
 training:
   # Training configuration - Train on ALL available data for as many epochs as needed
   max_epochs: 20 # Increased epochs to utilize all data
@@ -117,7 +137,12 @@ training:
   enforce_token_limits: false # Do not enforce any token limits
   use_all_available_data: true # Use all data in the dataset
 
-# Output directories
+  # Alignment-specific training parameters
+  validate_alignment_every_n_steps: 500 # Validate alignment frequently
+  log_alignment_metrics: true # Log alignment quality metrics
+  alignment_loss_scaling: "adaptive" # Adaptive scaling for alignment loss
+
+# Output directories (separate for ablation study)
 output:
   checkpoint_dir: "checkpoints_with_memory"
   log_dir: "logs_with_memory"
@@ -126,32 +151,107 @@ output:
   results_dir: "results_with_memory"
   token_logs_dir: "token_logs_with_memory"
 
-# Weights & Biases
+# Memory optimization
+memory_optimization:
+  use_gradient_checkpointing: true # Trade compute for memory
+  use_fp16: true # Mixed precision training
+  use_int8_vision: false # Keep vision in fp16 for quality
+  empty_cache_frequency: 10 # Regular cache cleaning
+  max_memory_slots_in_ram: 16 # Keep 16 slots in RAM
+  compress_episodic_memory: true # Compress memory storage
+
+  # Vision processing optimization
+  vision_feature_caching: false # Don't cache for memory saving
+  vision_batch_processing: true # Process vision features in batches
+
+  # Model optimization
+  tie_word_embeddings: true # Share input/output embeddings
+  use_shared_attention: false # Don't share attention for quality
+
+# Weights & Biases - FULL METRICS FROM MAIN CONFIG
 wandb:
-  project: "bitmar-ablation-with-memory"
+  project: "bitgen-ablation-with-memory"
   entity: "babylm-ntust"
   api_key: null
-  log_every_n_steps: 100
-  log_attention: true
+  log_every_n_steps: 100 # Regular logging
+  log_attention: true # Monitor attention patterns
   log_memory: true # ENABLED - log memory patterns
-  log_gradients: true
-  log_token_usage: true
-  log_cross_modal_similarity: true
-  log_alignment_quality: true
+  log_gradients: true # Monitor gradient flow
+  log_token_usage: true # Track token consumption
+  log_cross_modal_similarity: true # Critical for alignment
+  log_alignment_quality: true # Track alignment quality metrics
   save_code: true
   create_plots: true
   plot_attention_heatmaps: true
   plot_memory_usage: true # ENABLED - plot memory visualizations
-  plot_token_distribution: true
-  plot_alignment_metrics: true
+  plot_token_distribution: true # Track token usage distribution
+  plot_alignment_metrics: true # Track alignment quality over time
 
   # Enhanced Memory Visualization Settings (ENABLED)
-  log_memory_evolution: true
-  plot_memory_evolution_heatmap: true
-  plot_memory_diversity: true
-  plot_memory_access_patterns: true
-  memory_visualization_frequency: 5000
-  memory_snapshot_frequency: 10000
+  log_memory_evolution: true # Track memory slot evolution over time
+  plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
+  plot_memory_diversity: true # Track memory diversity and specialization
+  plot_memory_access_patterns: true # Visualize memory access patterns
+  memory_visualization_frequency: 5000 # Log memory visualizations every 5000 steps
+  memory_snapshot_frequency: 10000 # Take memory snapshots every 10000 steps
+
+  # Memory-specific metrics to track
+  track_memory_metrics:
+    - "memory_diversity_score" # How different memory slots are
+    - "memory_specialization_score" # How specialized each slot becomes
+    - "memory_usage_entropy" # Distribution of memory slot usage
+    - "cross_modal_memory_ratio" # Ratio of text-only vs multimodal specialization
+    - "memory_slot_utilization" # Percentage of actively used slots
+    - "memory_update_frequency" # How often memory slots are updated
+    - "memory_retrieval_accuracy" # Accuracy of memory retrievals
+
+# Performance targets
+performance_targets:
+  max_model_size_mb: 50 # 50MB model size
+  target_cross_modal_similarity: 0.75 # Target similarity score
+  memory_efficiency_threshold: 0.8 # Memory usage efficiency
+
+# FLOPS tracking configuration
+flops_tracking:
+  enabled: true # Enable FLOPS tracking
+  log_frequency: 100 # Log FLOPS every 100 steps
+  save_statistics: true # Save detailed FLOPS statistics
+  estimate_theoretical: true # Calculate theoretical FLOPS estimates
+  track_peak_performance: true # Track peak throughput
+  log_to_wandb: true # Log FLOPS metrics to Weights & Biases
+
+  # Advanced FLOPS tracking settings
+  detailed_breakdown: true # Track FLOPS by component (attention, FFN, etc.)
+  memory_bandwidth_tracking: false # Advanced memory bandwidth tracking (experimental)
+  efficiency_analysis: true # Analyze computational efficiency
+
+  # FLOPS logging categories
+  track_components:
+    - "attention" # Self-attention mechanisms
+    - "feedforward" # Feed-forward networks
+    - "layer_norm" # Layer normalization
+    - "embeddings" # Input/output embeddings
+    - "vision_encoder" # Vision encoding operations
+    - "cross_modal_fusion" # Cross-modal fusion operations
+
+# Token tracking - FOR LOGGING ONLY, NO LIMITS
+token_tracking:
+  log_frequency: 1000 # Log token usage every 1000 steps
+  save_token_distribution: true # Save token distribution stats
+  enforce_token_limits: false # NEVER enforce any token limits
+  early_stopping_on_limit: false # NEVER stop training due to token limits
+  unlimited_training: true # Enable unlimited training mode
+
+  # Alignment-specific tracking
+  track_alignment_quality: true # Track image-caption alignment quality
+  log_misaligned_samples: true # Log samples with poor alignment
+  alignment_quality_threshold: 0.7 # Threshold for good alignment
+  save_alignment_statistics: true # Save alignment statistics
+
+  # FLOPS-token correlation tracking
+  correlate_flops_with_tokens: true # Track FLOPS per token processed
+  log_computational_efficiency: true # Log computational efficiency metrics
+  track_throughput_vs_quality: true # Monitor trade-offs between speed and quality
 
 # Hugging Face Hub integration
 huggingface_hub:
@@ -161,3 +261,94 @@ huggingface_hub:
   upload_after_epoch: true
   upload_final_model: true
   commit_message_template: "BitMar WITH Memory - Epoch {epoch} - {tokens_processed:,} tokens from ablation study"
+  create_model_card: true # Generate model card automatically
+  model_card_template: |
+    ---
+    language: en
+    license: mit
+    tags:
+    - bitmar
+    - multimodal
+    - localized-narratives
+    - coco
+    - cross-modal
+    - vision-language
+    - episodic-memory
+    - bitnet
+    - ablation-study
+    datasets:
+    - localized_narratives
+    - coco_captions
+    ---
+    
+    # BitMar WITH Episodic Memory (Ablation Study)
+    
+    This model was trained on **1.78M image-caption pairs** with **episodic memory enabled** for ablation study comparison.
+    
+    ## Training Details
+    - **Dataset**: Localized Narratives (~1.16M) + COCO Captions (~615K) = 1,775,000 pairs
+    - **Episodic Memory**: ENABLED (32 slots, 128 dimensions)
+    - **Training approach**: Unlimited - uses entire dataset without token constraints
+    - **Epochs completed**: {epoch}
+    - **Tokens processed**: {tokens_processed:,}
+    - **Cross-modal similarity**: {best_similarity:.4f}
+    - **No token limits**: Trains on all available data
+    
+    ## Model Architecture
+    - **Text encoder**: {text_encoder_layers} layers, {text_encoder_dim} hidden size
+    - **Vision processing**: Generic 768-dim features compressed to {vision_latent_size}
+    - **Episodic memory**: {memory_size} memory slots for cross-modal associations
+    - **BitNet quantization**: 1.58-bit quantized text processing
+    - **Attention sinks**: Enabled for long sequence generation
+    
+    ## Dataset Sources
+    - **Localized Narratives**: Dense paragraph descriptions from Open Images + COCO
+    - **COCO Captions**: High-quality human annotations (5 per image)
+    - **Total scale**: 1,775,000 image-caption pairs
+    
+    ## Ablation Study
+    This is the **WITH MEMORY** variant. Compare with the baseline model at:
+    `euhidaman/bitmar-without-memory-ablation`
+    
+    ## Key Features
+    - Cross-modal episodic memory for visual-text associations
+    - BitNet quantization for efficient inference
+    - Attention sinks for endless fluent generation
+    - No training constraints - uses full dataset
+    
+    ## Usage
+    ```python
+    from transformers import AutoModel, AutoTokenizer
+    
+    model = AutoModel.from_pretrained("{repo_id}")
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    
+    # The model processes both text and vision features
+    # Vision features should be 768-dimensional
+    ```
+    
+    ## Training Configuration
+    - **Unlimited training**: No token constraints
+    - **Batch size**: 64 samples
+    - **Learning rate**: 0.0002 with cosine restarts
+    - **Mixed precision**: FP16 training
+    - **Memory optimization**: Gradient checkpointing enabled
+
+# Attention Sinks configuration for endless fluent generation
+attention_sinks:
+  enabled: true # Enable attention sinks for improved long sequence generation
+  attention_sink_size: 4 # Number of initial tokens to use as attention sinks
+  attention_sink_window_size: 1020 # Size of sliding window for recent tokens
+  inject_to_text_encoder: true # Apply to text encoder
+  inject_to_text_decoder: true # Apply to text decoder
+  position_shift_enabled: true # Enable position shifting for proper handling
+
+  # Advanced attention sinks settings
+  cache_compression: true # Enable KV cache compression
+  adaptive_window_size: false # Experimental: adaptive window sizing
+  memory_efficient_attention: true # Use memory-efficient attention patterns
+
+  # Integration with existing BitMar features
+  preserve_episodic_memory: true # Ensure episodic memory functionality is preserved
+  preserve_quantization: true # Ensure BitNet quantization is preserved
+  preserve_cross_modal_fusion: true # Ensure cross-modal fusion is preserved

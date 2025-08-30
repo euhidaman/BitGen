@@ -2,6 +2,9 @@
 # Generic multimodal training - ready for any dataset
 
 model:
+  # NEW: Episodic Memory Control for Ablation Study
+  use_episodic_memory: true  # Set to false to disable memory for ablation study
+
   # BitNet Text Encoder
   vocab_size: 50257 # GPT-2 vocabulary
   text_encoder_dim: 128 # Balanced size
@@ -168,7 +171,7 @@ memory_optimization:
 
 # Weights & Biases (Simplified logging for 100M token dataset training)
 wandb:
-  project: "bitmar-100M-attention-epochs"
+  project: "bitgen-full"
   entity: "babylm-ntust"
   api_key: null
   log_every_n_steps: 100 # Regular logging
