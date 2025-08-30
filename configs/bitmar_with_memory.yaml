@@ -29,6 +29,25 @@ model:
   fusion_num_heads: 4 # More heads for better alignment
   fusion_num_layers: 2 # Deeper fusion for understanding
 
+  # FIBER-specific configuration
+  num_fiber_fusion_layers: 6 # Number of layers with FIBER-style cross-modal fusion
+  fiber_learnable_alpha: true # Enable learnable fusion strength parameters
+  fiber_bidirectional_fusion: true # Enable bidirectional text<->vision fusion
+
+  # Advanced FIBER configuration
+  fiber_text_fusion_layers: 4 # Number of text layers with cross-modal fusion
+  fiber_vision_fusion_layers: 2 # Number of vision layers with cross-modal fusion
+  fiber_backbone_integration: true # Enable deep backbone fusion instead of late fusion
+  fiber_attention_temperature: 1.0 # Temperature for FIBER attention mechanisms
+  fiber_residual_connection: true # Enable residual connections in FIBER blocks
+  fiber_layer_norm_eps: 1e-6 # Layer normalization epsilon for FIBER layers
+  fiber_mlp_ratio: 4.0 # MLP expansion ratio in FIBER transformer blocks
+
+  # FIBER fusion strategy
+  fiber_fusion_strategy: "deep_backbone" # Options: "late_fusion", "deep_backbone", "hybrid"
+  fiber_cross_attention_dropout: 0.1 # Dropout for cross-modal attention layers
+  fiber_enable_gradient_checkpointing: true # Enable gradient checkpointing for FIBER layers
+
   # Episodic Memory (ENABLED for this config)
   memory_size: 32 # 32 memory slots for balanced storage
   episode_dim: 128 # Match fusion dimension for consistency

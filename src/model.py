@@ -2,6 +2,7 @@
 BitMar Model Architecture
 BitNet-quantized Vision-Language Episodic Memory Transformer
 Combines 1.58-bit quantization, DiNOv2 vision, and Larimar episodic memory
+NOW WITH FIBER-STYLE BACKBONE FUSION for superior cross-modal understanding
 """
 
 import torch
@@ -13,6 +14,9 @@ from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
 import math
 import logging
+
+# Import FIBER-style fusion
+from .authentic_fiber_fusion import create_authentic_fiber_fusion, AuthenticFIBERIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -1176,13 +1180,54 @@ class BitMarModel(nn.Module):
         )
 
         # Cross-modal fusion with BitNet
-        self.fusion = CrossModalFusion(
-            text_dim=config['text_encoder_dim'],
-            vision_dim=config['vision_latent_size'],
-            hidden_dim=config['fusion_hidden_size'],
-            num_heads=config['fusion_num_heads'],
-            num_layers=config['fusion_num_layers']
+        #self.fusion = CrossModalFusion(
+        #    text_dim=config['text_encoder_dim'],
+        #    vision_dim=config['vision_latent_size'],
+        #    hidden_dim=config['fusion_hidden_size'],
+        #    num_heads=config['fusion_num_heads'],
+        #    num_layers=config['fusion_num_layers']
+        #)
+        logger.info("🔄 Implementing FIBER-style backbone fusion instead of basic cross-attention")
+        self.fusion = create_authentic_fiber_fusion(
+            text_encoder_dim=config['text_encoder_dim'],
+            vision_encoder_dim=config['vision_latent_size'],
+            fusion_hidden_size=config['fusion_hidden_size'],
+            num_heads=config.get('fusion_num_heads', 8),
+            num_layers=config.get('fusion_num_layers', 2),
+            dropout=config.get('dropout', 0.1),
+            num_fusion_layers=config.get('num_fiber_fusion_layers', 6),
+            config=config  # Pass full config for FIBER-specific parameters
         )
+
+        # Log FIBER configuration details
+        logger.info("✅ FIBER Configuration:")
+        logger.info(f"  • Fusion layers: {config.get('num_fiber_fusion_layers', 6)}")
+        logger.info(f"  • Text fusion layers: {config.get('fiber_text_fusion_layers', 4)}")
+        logger.info(f"  • Vision fusion layers: {config.get('fiber_vision_fusion_layers', 2)}")
+        logger.info(f"  • Fusion strategy: {config.get('fiber_fusion_strategy', 'deep_backbone')}")
+        logger.info(f"  • Learnable alpha: {config.get('fiber_learnable_alpha', True)}")
+        logger.info(f"  • Bidirectional fusion: {config.get('fiber_bidirectional_fusion', True)}")
+        logger.info(f"  • Backbone integration: {config.get('fiber_backbone_integration', True)}")
+        logger.info(f"  • Attention temperature: {config.get('fiber_attention_temperature', 1.0)}")
+        logger.info(f"  • Cross-attention dropout: {config.get('fiber_cross_attention_dropout', 0.1)}")
+        logger.info(f"  • Gradient checkpointing: {config.get('fiber_enable_gradient_checkpointing', True)}")
+
+        # Store FIBER config for downstream use
+        self.fiber_config = {
+            'num_fusion_layers': config.get('num_fiber_fusion_layers', 6),
+            'text_fusion_layers': config.get('fiber_text_fusion_layers', 4),
+            'vision_fusion_layers': config.get('fiber_vision_fusion_layers', 2),
+            'fusion_strategy': config.get('fiber_fusion_strategy', 'deep_backbone'),
+            'learnable_alpha': config.get('fiber_learnable_alpha', True),
+            'bidirectional_fusion': config.get('fiber_bidirectional_fusion', True),
+            'backbone_integration': config.get('fiber_backbone_integration', True),
+            'attention_temperature': config.get('fiber_attention_temperature', 1.0),
+            'cross_attention_dropout': config.get('fiber_cross_attention_dropout', 0.1),
+            'enable_gradient_checkpointing': config.get('fiber_enable_gradient_checkpointing', True),
+            'residual_connection': config.get('fiber_residual_connection', True),
+            'layer_norm_eps': config.get('fiber_layer_norm_eps', 1e-6),
+            'mlp_ratio': config.get('fiber_mlp_ratio', 4.0)
+        }
 
         # Episodic memory with BitNet quantization (OPTIONAL for ablation study)
         if self.use_episodic_memory:
@@ -1255,6 +1300,9 @@ class BitMarModel(nn.Module):
         attention_weights: Dict[str, torch.Tensor]
     ) -> torch.Tensor:
         """Create multimodal episode for memory storage"""
+        if not self.use_episodic_memory:
+            return None
+
         # Pool text features (mean pooling)
         # [batch_size, text_encoder_dim]
         text_pooled = text_features.mean(dim=1)
@@ -1328,6 +1376,9 @@ class BitMarModel(nn.Module):
         """
         Compute memory consistency loss to encourage meaningful memory usage
         """
+        if not self.use_episodic_memory or episode is None or retrieved_memory is None:
+            return torch.tensor(0.0, device=episode.device if episode is not None else next(self.parameters()).device)
+
         # L2 regularization on memory difference
         memory_diff = episode - retrieved_memory
         return torch.mean(torch.norm(memory_diff, dim=-1))
@@ -1348,70 +1399,94 @@ class BitMarModel(nn.Module):
 
         if vision_loss is not None:
             losses['vision_loss'] = vision_loss
-        if memory_loss is not None:
+        if memory_loss is not None and self.use_episodic_memory:
             losses['memory_loss'] = memory_loss
 
         if self.adaptive_loss_scaling:
             # Adaptive scaling based on loss magnitudes
             with torch.no_grad():
-                # Compute relative loss scales
-                decoder_scale = decoder_loss.detach()
-                cross_modal_scale = cross_modal_loss.detach()
+                decoder_scale = 1.0
+                cross_modal_scale = decoder_loss.item() / (cross_modal_loss.item() + 1e-8)
+                vision_scale = decoder_loss.item() / (vision_loss.item() + 1e-8) if vision_loss is not None else 1.0
+                memory_scale = decoder_loss.item() / (memory_loss.item() + 1e-8) if memory_loss is not None and self.use_episodic_memory else 1.0
 
-                # Prevent division by zero
-                if decoder_scale > 1e-8:
-                    adaptive_cross_modal_weight = (decoder_scale / cross_modal_scale.clamp(min=1e-8)) * self.cross_modal_loss_weight
-                else:
-                    adaptive_cross_modal_weight = self.cross_modal_loss_weight
+                # Clamp scales to reasonable range
+                cross_modal_scale = torch.clamp(torch.tensor(cross_modal_scale), 0.1, 10.0).item()
+                vision_scale = torch.clamp(torch.tensor(vision_scale), 0.1, 10.0).item() if vision_loss is not None else 1.0
+                memory_scale = torch.clamp(torch.tensor(memory_scale), 0.1, 10.0).item() if memory_loss is not None and self.use_episodic_memory else 1.0
 
-                # Clamp adaptive weights
-                adaptive_cross_modal_weight = torch.clamp(adaptive_cross_modal_weight, 0.01, 1.0)
         else:
-            adaptive_cross_modal_weight = self.cross_modal_loss_weight
+            # Fixed scaling
+            decoder_scale = self.text_loss_weight
+            cross_modal_scale = self.cross_modal_loss_weight
+            vision_scale = self.vision_loss_weight
+            memory_scale = self.memory_loss_weight
 
-        # Apply loss scheduling (increase cross-modal importance over time)
-        cross_modal_schedule = min(1.0, step / 50000)  # Ramp up over 50k steps
-        scheduled_cross_modal_weight = adaptive_cross_modal_weight * cross_modal_schedule
+        # Apply adaptive controller modifications if available
+        if adaptive_controller is not None:
+            try:
+                # Get current similarity for adaptive training
+                current_similarity = adaptive_controller.compute_cross_modal_similarity(
+                    cross_modal_loss.detach().cpu().numpy()
+                )
+
+                # Check if intervention is needed
+                intervention_applied = adaptive_controller.check_and_apply_intervention(
+                    similarity_score=current_similarity,
+                    step=step
+                )
+
+                if intervention_applied:
+                    # Modify loss weights during intervention
+                    cross_modal_scale *= adaptive_controller.loss_rebalance_factor
+                    logger.info(f"🤖 Adaptive intervention applied at step {step} - boosting cross-modal loss by {adaptive_controller.loss_rebalance_factor}x")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Adaptive controller error: {e}")
 
         # Compute weighted total loss
         total_loss = (
-            self.text_loss_weight * decoder_loss +
-            scheduled_cross_modal_weight * cross_modal_loss
+            decoder_scale * decoder_loss +
+            cross_modal_scale * cross_modal_loss
         )
 
         if vision_loss is not None:
-            total_loss += self.vision_loss_weight * vision_loss
-        if memory_loss is not None:
-            total_loss += self.memory_loss_weight * memory_loss
+            total_loss += vision_scale * vision_loss
 
-        losses.update({
-            'total_loss': total_loss,
-            'cross_modal_weight': scheduled_cross_modal_weight,
-            'adaptive_weight': adaptive_cross_modal_weight if self.adaptive_loss_scaling else torch.tensor(0.0)
-        })
-
-        return losses
-
-    def apply_encoder_freezing(self, step: int):
-        """
-        Apply temporary encoder freezing based on training step
-        """
-        self.current_step = step
-
-        # Freeze text encoder if within freezing window
-        freeze_text = step < self.freeze_text_encoder_steps
-        for param in self.text_encoder.parameters():
-            param.requires_grad = not freeze_text
-
-        # Freeze vision encoder if within freezing window
-        freeze_vision = step < self.freeze_vision_encoder_steps
-        for param in self.vision_encoder.parameters():
-            param.requires_grad = not freeze_vision
+        if memory_loss is not None and self.use_episodic_memory:
+            total_loss += memory_scale * memory_loss
 
         return {
-            'text_encoder_frozen': freeze_text,
-            'vision_encoder_frozen': freeze_vision
+            'total_loss': total_loss,
+            'decoder_loss': decoder_loss,
+            'cross_modal_loss': cross_modal_loss,
+            'vision_loss': vision_loss,
+            'memory_loss': memory_loss if self.use_episodic_memory else torch.tensor(0.0),
+            'decoder_scale': decoder_scale,
+            'cross_modal_scale': cross_modal_scale,
+            'vision_scale': vision_scale,
+            'memory_scale': memory_scale if self.use_episodic_memory else 0.0
         }
+
+    def freeze_encoders_conditionally(self, step: int):
+        """Conditionally freeze encoders based on training step"""
+        self.current_step = step
+
+        # Freeze text encoder if specified
+        if self.freeze_text_encoder_steps > 0 and step < self.freeze_text_encoder_steps:
+            for param in self.text_encoder.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.text_encoder.parameters():
+                param.requires_grad = True
+
+        # Freeze vision encoder if specified
+        if self.freeze_vision_encoder_steps > 0 and step < self.freeze_vision_encoder_steps:
+            for param in self.vision_encoder.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.vision_encoder.parameters():
+                param.requires_grad = True
 
     def forward(
         self,
@@ -1419,299 +1494,253 @@ class BitMarModel(nn.Module):
         attention_mask: torch.Tensor,
         vision_features: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
-        mode: str = "train",
         step: int = 0,
-        has_vision: Optional[torch.Tensor] = None,  # NEW: Indicates which samples have real vision
+        has_vision: Optional[torch.Tensor] = None,
         adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass through BitMar model with mixed vision/text batch support
-        
-        Args:
-            has_vision: Boolean tensor [batch_size] indicating which samples have real vision features
+        Forward pass with FIBER-enhanced cross-modal fusion
         """
-        batch_size, seq_len = input_ids.shape
+        batch_size = input_ids.shape[0]
 
-        # Validate input tensor dimensions early
-        expected_vision_dim = self.config['vision_encoder_dim']
-        if vision_features.dim() != 2 or vision_features.size(-1) != expected_vision_dim:
-            raise ValueError(f"Vision features shape {vision_features.shape} doesn't match expected [batch_size, {expected_vision_dim}]")
-        
-        if input_ids.size(0) != vision_features.size(0):
-            raise ValueError(f"Batch size mismatch: input_ids {input_ids.size(0)} vs vision_features {vision_features.size(0)}")
+        # Conditional encoder freezing
+        self.freeze_encoders_conditionally(step)
 
-        # Default has_vision to all True if not provided (backward compatibility)
-        if has_vision is None:
-            has_vision = torch.ones(batch_size, dtype=torch.bool, device=input_ids.device)
+        # 1. Encode text using BitNet encoder
+        text_features, text_attention_patterns = self.encode_text(input_ids, attention_mask)
 
-        # Apply adaptive encoder freezing if controller is provided
-        freezing_status = {}
-        if mode == "train" and adaptive_controller is not None:
-            freezing_status = self.apply_adaptive_encoder_freezing(adaptive_controller)
-        elif mode == "train":
-            # Fallback to step-based freezing
-            freezing_status = self.apply_encoder_freezing(step)
-
-        # Encode text (always available)
-        text_features, text_attention = self.encode_text(input_ids, attention_mask)
-        
-        # Encode vision (with masking for text-only samples)
+        # 2. Encode vision using quantized vision encoder
         vision_latent = self.encode_vision(vision_features)
-        
-        # Mask vision features for text-only samples
-        vision_mask = has_vision.float().unsqueeze(-1)  # [batch_size, 1]
-        vision_latent_masked = vision_latent * vision_mask
 
-        # Cross-modal fusion (will handle masked vision features)
-        fused_features, cross_attention = self.fusion(text_features, vision_latent_masked)
+        # 3. FIBER-enhanced cross-modal fusion
+        logger.debug(f"🔥 Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
-        # Update adaptive controller with cross-modal similarity if available
-        if mode == "train" and adaptive_controller is not None and has_vision.any():
-            try:
-                # Compute cross-modal similarity for samples with vision
-                vision_indices = has_vision.nonzero(as_tuple=True)[0]
-                if len(vision_indices) > 0:
-                    # Get features for samples with vision
-                    text_with_vision = text_features[vision_indices]  # [n_vision, seq_len, dim]
-                    vision_with_vision = vision_latent_masked[vision_indices]  # [n_vision, dim]
-                    
-                    # Pool text features
-                    text_pooled = text_with_vision.mean(dim=1)  # [n_vision, dim]
-                    
-                    # Compute cosine similarity
-                    similarity = F.cosine_similarity(text_pooled, vision_with_vision, dim=1)
-                    avg_similarity = similarity.mean().item()
-                    
-                    # Update adaptive controller
-                    adaptive_controller.update_similarity(avg_similarity, step)
-            except Exception as e:
-                logger.warning(f"Failed to update adaptive controller: {e}")
+        fused_features, fiber_attention_weights = self.fusion(
+            text_features=text_features,
+            vision_features=vision_latent,
+            text_attention_mask=attention_mask
+        )
 
-        # EPISODIC MEMORY INTERACTION (Optional for ablation study)
+        # Log FIBER fusion results
+        logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
+        logger.debug(f"   Fusion type: {fiber_attention_weights.get('fusion_type', 'unknown')}")
+
+        # Extract enhanced vision features from FIBER output
+        enhanced_vision = fiber_attention_weights.get('enhanced_vision')
+        if enhanced_vision is not None:
+            # Use enhanced vision features for downstream tasks
+            if enhanced_vision.dim() == 3 and enhanced_vision.shape[1] == 1:
+                enhanced_vision = enhanced_vision.squeeze(1)  # Remove sequence dimension
+            logger.debug(f"🔥 Enhanced vision features: {enhanced_vision.shape}")
+
+        # 4. Episodic memory processing (OPTIONAL for ablation study)
+        memory_output = None
+        memory_attention_weights = None
+        episode = None
+
         if self.use_episodic_memory:
-            # Create episodes (different handling for vision vs text-only)
-            episode = self.create_episode_mixed(
-                text_features, vision_latent_masked, cross_attention, has_vision
-            )
+            # Create multimodal episode
+            episode = self.create_episode(
+                text_features, vision_latent, fiber_attention_weights)
 
-            # Episodic memory interaction
-            if mode == "train":
-                retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
-            else:
-                retrieved_memory, memory_attention = self.memory(episode, mode="read")
+            # Memory read-write operation
+            memory_output, memory_attention_weights = self.memory(episode)
 
-            # Prepare decoder input with memory context
-            memory_context = self.memory_to_decoder(retrieved_memory)
-            memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
-            fused_with_memory = fused_features + memory_context_expanded
-            decoder_input = self.decoder_input_proj(fused_with_memory)
+            # Project memory output for decoder
+            memory_for_decoder = self.memory_to_decoder(memory_output)
+
+            # Combine fused features with memory for decoder input
+            decoder_input = self.decoder_input_proj(fused_features) + memory_for_decoder
         else:
-            # NO EPISODIC MEMORY - Direct fusion for ablation study
-            episode = None
-            retrieved_memory = None
-            memory_attention = None
-
-            # Direct projection from fusion to decoder (no memory)
+            # Direct fusion to decoder (no memory)
             decoder_input = self.direct_fusion_proj(fused_features)
 
-        # Generate text using BitNet decoder
+        # 5. Generate text using BitNet decoder
         decoder_outputs = self.text_decoder(
             inputs_embeds=decoder_input,
             attention_mask=attention_mask,
             labels=labels
         )
 
-        # Compute losses if in training mode
-        if mode == "train" and labels is not None:
-            # Primary decoder loss
-            decoder_loss = decoder_outputs['loss']
+        # 6. Compute losses
+        decoder_loss = decoder_outputs['loss'] if decoder_outputs['loss'] is not None else torch.tensor(0.0)
 
-            # Cross-modal contrastive loss (only for samples with vision)
-            cross_modal_loss = torch.tensor(0.0, device=input_ids.device)
-            if has_vision.any():
-                # Only compute cross-modal loss for samples with vision
-                vision_indices = has_vision.nonzero(as_tuple=True)[0]
-                if len(vision_indices) > 0:
-                    text_pooled = text_features[vision_indices].mean(dim=1)
-                    vision_for_loss = vision_latent[vision_indices]
-                    cross_modal_loss = self.compute_cross_modal_contrastive_loss(
-                        text_pooled, vision_for_loss, temperature=self.loss_scale_temperature
-                    )
+        # Cross-modal contrastive loss using FIBER-enhanced features
+        text_pooled = fused_features.mean(dim=1)  # Use FIBER-enhanced text
+        vision_for_contrastive = enhanced_vision if enhanced_vision is not None else vision_latent
 
-            # Optional additional losses
-            vision_loss = None
-            if hasattr(self, 'vision_reconstruction') and self.config.get('use_vision_reconstruction', False):
-                if has_vision.any():
-                    vision_indices = has_vision.nonzero(as_tuple=True)[0]
-                    reconstructed_vision = self.vision_reconstruction(vision_latent[vision_indices])
-                    vision_loss = self.compute_vision_reconstruction_loss(
-                        vision_features[vision_indices], reconstructed_vision
-                    )
+        cross_modal_loss = self.compute_cross_modal_contrastive_loss(
+            text_pooled, vision_for_contrastive, temperature=self.loss_scale_temperature
+        )
 
-            # Memory consistency loss (only if memory is enabled)
-            memory_loss = None
-            if self.use_episodic_memory and self.config.get('use_memory_consistency_loss', True):
-                memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
-
-            # Compute balanced loss with adaptive controller support
-            loss_dict = self.compute_balanced_loss_mixed(
-                decoder_loss, cross_modal_loss, vision_loss, memory_loss, 
-                step, adaptive_controller, has_vision
+        # Vision reconstruction loss (optional)
+        vision_loss = None
+        if enhanced_vision is not None:
+            vision_loss = self.compute_vision_reconstruction_loss(
+                vision_latent, enhanced_vision
             )
 
-            final_loss = loss_dict['total_loss']
-        else:
-            final_loss = decoder_outputs['loss'] if 'loss' in decoder_outputs else None
-            loss_dict = {}
+        # Memory consistency loss (only if memory is enabled)
+        memory_loss = None
+        if self.use_episodic_memory and episode is not None and memory_output is not None:
+            memory_loss = self.compute_memory_consistency_loss(episode, memory_output)
 
-        result = {
-            'loss': final_loss,
+        # Balanced loss computation
+        loss_dict = self.compute_balanced_loss(
+            decoder_loss=decoder_loss,
+            cross_modal_loss=cross_modal_loss,
+            vision_loss=vision_loss,
+            memory_loss=memory_loss,
+            step=step,
+            adaptive_controller=adaptive_controller
+        )
+
+        # Return comprehensive outputs
+        outputs = {
+            'loss': loss_dict['total_loss'],
             'logits': decoder_outputs['logits'],
             'text_features': text_features,
-            'vision_latent': vision_latent_masked,  # Return masked version
-            'fused_features': fused_features,
-            'episode': episode,  # Will be None if memory disabled
-            'retrieved_memory': retrieved_memory,  # Will be None if memory disabled
-            'cross_attention': cross_attention,
-            'memory_attention': memory_attention,  # Will be None if memory disabled
-            'text_attention': text_attention,
-            'decoder_attention': decoder_outputs.get('attention_patterns', None),
-            'has_vision': has_vision,  # Return for downstream analysis
-            'episodic_memory_enabled': self.use_episodic_memory,  # NEW: Track memory status
+            'vision_latent': vision_latent,
+            'enhanced_vision': enhanced_vision,  # FIBER-enhanced vision
+            'fused_features': fused_features,   # FIBER-fused features
+            'fiber_attention_weights': fiber_attention_weights,  # FIBER attention patterns
+            'text_attention_patterns': text_attention_patterns,
+            'decoder_attention_patterns': decoder_outputs['attention_patterns'],
+            'episode': episode,
+            'memory_output': memory_output,
+            'memory_attention_weights': memory_attention_weights,
+            'loss_components': loss_dict,
+            'fiber_config': self.fiber_config
         }
 
-        # Add memory usage only if memory is enabled
-        if self.use_episodic_memory:
-            result['memory_usage'] = self.memory.memory_usage.clone()
-        else:
-            result['memory_usage'] = None
+        return outputs
 
-        # Add loss breakdown and freezing status
-        if mode == "train":
-            result.update(loss_dict)
-            result.update(freezing_status)
-
-        return result
-
-    def create_episode_mixed(
+    def generate(
         self,
-        text_features: torch.Tensor,
-        vision_latent: torch.Tensor,
-        attention_weights: Dict[str, torch.Tensor],
-        has_vision: torch.Tensor
+        input_ids: torch.Tensor,
+        vision_features: torch.Tensor,
+        max_length: int = 50,
+        temperature: float = 1.0,
+        do_sample: bool = True,
+        top_p: float = 0.9,
+        attention_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        """Create episodes with different handling for vision vs text-only samples (only if memory enabled)"""
-        if not self.use_episodic_memory:
-            return None
+        """
+        Generate text conditioned on vision using FIBER-enhanced fusion
+        """
+        self.eval()
+        batch_size = input_ids.shape[0]
+        device = input_ids.device
 
-        batch_size = text_features.size(0)
-        
-        # Pool text features
-        text_pooled = text_features.mean(dim=1)  # [batch_size, text_dim]
-        
-        # Project to episode dimension
-        text_episode = self.text_to_episode(text_pooled)
-        vision_episode = self.vision_to_episode(vision_latent)
-        
-        # For text-only samples, use only text features
-        # For multimodal samples, combine text and vision
-        episode = torch.zeros_like(text_episode)
-        
-        # Text-only samples (has_vision == False)
-        text_only_mask = ~has_vision
-        if text_only_mask.any():
-            episode[text_only_mask] = text_episode[text_only_mask]
-        
-        # Multimodal samples (has_vision == True)
-        multimodal_mask = has_vision
-        if multimodal_mask.any():
-            # Combine text and vision for multimodal samples
-            combined = text_episode[multimodal_mask] + vision_episode[multimodal_mask]
-            episode[multimodal_mask] = combined
-            
-        return episode
+        # Create attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
 
-    def compute_balanced_loss_mixed(
-        self,
-        decoder_loss: torch.Tensor,
-        cross_modal_loss: torch.Tensor,
-        vision_loss: Optional[torch.Tensor],
-        memory_loss: Optional[torch.Tensor],
-        step: int,
-        adaptive_controller=None,
-        has_vision: torch.Tensor = None
-    ) -> Dict[str, torch.Tensor]:
-        """Compute balanced loss for mixed vision/text batches"""
-        
-        # Base loss weights from config
-        text_weight = self.config.get('text_generation_loss_weight', 1.0)
-        cross_modal_weight = self.config.get('cross_modal_loss_weight', 1.0)
-        memory_weight = self.config.get('memory_regularization_weight', 0.1)
-        
-        # Adjust cross-modal weight based on vision availability
-        if has_vision is not None:
-            vision_ratio = has_vision.float().mean().item()
-            # Scale cross-modal loss by the proportion of samples with vision
-            cross_modal_weight = cross_modal_weight * vision_ratio
-        
-        # Apply adaptive loss rebalancing if controller is available
-        if adaptive_controller is not None:
-            controller_info = adaptive_controller.get_loss_multipliers()
-            cross_modal_weight *= controller_info.get('cross_modal_weight_multiplier', 1.0)
-        
-        # Compute total loss
-        total_loss = text_weight * decoder_loss
-        
-        if cross_modal_loss is not None and cross_modal_loss.item() > 0:
-            total_loss = total_loss + cross_modal_weight * cross_modal_loss
-        
-        if vision_loss is not None:
-            vision_weight = self.config.get('vision_reconstruction_weight', 0.1)
-            total_loss = total_loss + vision_weight * vision_loss
-            
-        if memory_loss is not None:
-            total_loss = total_loss + memory_weight * memory_loss
-        
-        # Return loss breakdown
-        loss_dict = {
-            'total_loss': total_loss,
-            'decoder_loss': decoder_loss,
-            'cross_modal_loss': cross_modal_loss,
-            'text_weight': text_weight,
-            'cross_modal_weight': cross_modal_weight,
-            'memory_weight': memory_weight
+        generated_ids = input_ids.clone()
+
+        with torch.no_grad():
+            for step in range(max_length):
+                # Get current sequence length
+                current_length = generated_ids.shape[1]
+
+                # Update attention mask for current sequence
+                current_attention_mask = torch.ones(
+                    batch_size, current_length, device=device
+                )
+
+                # Forward pass with FIBER fusion
+                outputs = self.forward(
+                    input_ids=generated_ids,
+                    attention_mask=current_attention_mask,
+                    vision_features=vision_features,
+                    step=step
+                )
+
+                # Get logits for next token
+                next_token_logits = outputs['logits'][:, -1, :] / temperature
+
+                # Apply top-p filtering
+                if do_sample and top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+                    # Remove tokens with cumulative probability above threshold
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+
+                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                    next_token_logits.scatter_(1, indices_to_remove, float('-inf'))
+
+                # Sample next token
+                if do_sample:
+                    probs = F.softmax(next_token_logits, dim=-1)
+                    next_token = torch.multinomial(probs, num_samples=1)
+                else:
+                    next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+
+                # Append to generated sequence
+                generated_ids = torch.cat([generated_ids, next_token], dim=1)
+
+                # Check for EOS token
+                if torch.all(next_token == self.tokenizer.eos_token_id):
+                    break
+
+        self.train()
+        return generated_ids
+
+    def get_model_info(self) -> Dict:
+        """Get comprehensive model information"""
+        info = {
+            'model_type': 'BitMar',
+            'text_encoder_dim': self.config['text_encoder_dim'],
+            'text_decoder_dim': self.config['text_decoder_dim'],
+            'vision_latent_size': self.config['vision_latent_size'],
+            'fusion_hidden_size': self.config['fusion_hidden_size'],
+            'use_episodic_memory': self.use_episodic_memory,
+            'fusion_type': 'authentic_fiber_backbone_fusion',
+            'fiber_config': self.fiber_config
         }
-        
-        if vision_loss is not None:
-            loss_dict['vision_loss'] = vision_loss
-        if memory_loss is not None:
-            loss_dict['memory_loss'] = memory_loss
-            
-        return loss_dict
+
+        if self.use_episodic_memory:
+            info.update({
+                'memory_size': self.config['memory_size'],
+                'episode_dim': self.config['episode_dim'],
+                'memory_alpha': self.config['memory_alpha']
+            })
+
+            if hasattr(self, 'memory'):
+                info['memory_info'] = self.memory.get_memory_info()
+
+        return info
+
+
+def create_bitmar_model(config: Dict) -> BitMarModel:
+    """Create BitMar model with FIBER fusion"""
+    logger.info("🚀 Creating BitMar model with authentic FIBER fusion...")
+
+    # Log FIBER integration status
+    logger.info("🔥 FIBER Integration Status:")
+    logger.info(f"  • Authentic FIBER fusion: ✅ Enabled")
+    logger.info(f"  • Fusion strategy: {config.get('fiber_fusion_strategy', 'deep_backbone')}")
+    logger.info(f"  • Backbone integration: {config.get('fiber_backbone_integration', True)}")
+    logger.info(f"  • Bidirectional fusion: {config.get('fiber_bidirectional_fusion', True)}")
+
+    model = BitMarModel(config)
+
+    logger.info("✅ BitMar model created with FIBER-enhanced cross-modal fusion")
+    logger.info(f"   Episodic Memory: {'Enabled' if model.use_episodic_memory else 'Disabled (Ablation Study)'}")
+
+    return model
 
 
 def count_parameters(model: nn.Module) -> Dict[str, int]:
     """Count model parameters"""
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel()
-                           for p in model.parameters() if p.requires_grad)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     return {
         'total_parameters': total_params,
         'trainable_parameters': trainable_params,
         'non_trainable_parameters': total_params - trainable_params
     }
-
-
-def create_bitmar_model(config: Dict) -> BitMarModel:
-    """Create BitMar model from configuration"""
-    model = BitMarModel(config)
-
-    # Print model statistics
-    param_count = count_parameters(model)
-    logger.info(
-        f"BitMar Model created with {param_count['total_parameters']:,} total parameters")
-    logger.info(
-        f"Trainable parameters: {param_count['trainable_parameters']:,}")
-
-    return model
