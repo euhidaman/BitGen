@@ -49,18 +49,6 @@ cover/
 *.mo
 *.pot
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
 
 # Sphinx documentation
 docs/_build/
@@ -82,21 +70,11 @@ ipython_config.py
 # pipenv
 Pipfile.lock
 
-# poetry
-poetry.lock
 
-# pdm
-.pdm.toml
 
 # PEP 582
 __pypackages__/
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
@@ -151,10 +129,6 @@ wandb/
 # Data files
 data/
 datasets/
-*.csv
-*.json
-*.jsonl
-*.txt
 *.tsv
 *.parquet
 *.arrow

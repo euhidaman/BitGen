@@ -1,0 +1,36 @@
+# Core PyTorch and ML dependencies
+torch
+torchvision
+transformers
+
+# Hugging Face ecosystem
+huggingface_hub
+
+# Core scientific computing
+numpy
+scipy
+scikit-learn
+
+# Data visualization
+matplotlib
+seaborn
+
+# Progress bars and utilities
+tqdm
+requests
+
+# Configuration and logging
+pyyaml
+wandb
+
+# Image processing
+pillow
+
+# Optional: Carbon footprint tracking
+codecarbon
+
+# Data processing
+pandas
+
+# System utilities
+psutil
