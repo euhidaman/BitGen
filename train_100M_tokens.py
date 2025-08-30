@@ -1,7 +1,6 @@
 """
-Token-Aware Training Script for BitMar 100M Token Model
-Handles exactly 100M tokens with perfect image-caption alignment
-Includes advanced token tracking
+Training Script for BitMar Model
+Handles multimodal training with perfect image-caption alignment
 """
 
 import os
@@ -39,7 +38,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('training_100M_tokens.log'),
+        logging.FileHandler('training.log'),
         logging.StreamHandler()
     ]
 )
@@ -60,21 +59,6 @@ try:
 except ImportError:
     FLOPS_TRACKER_AVAILABLE = False
     logger.warning("⚠️  FLOPS tracker not available")
-
-# Try to import token-constrained dataset
-try:
-    from src.token_constrained_dataset import create_token_constrained_data_module
-    TOKEN_CONSTRAINED_AVAILABLE = True
-    logger.info("✅ Token-constrained dataset available")
-except ImportError:
-    try:
-        # Try importing without src prefix (in case running from different directory)
-        from token_constrained_dataset import create_token_constrained_data_module
-        TOKEN_CONSTRAINED_AVAILABLE = True
-        logger.info("✅ Token-constrained dataset available (direct import)")
-    except ImportError:
-        TOKEN_CONSTRAINED_AVAILABLE = False
-        logger.warning("⚠️  Token-constrained dataset not available")
 
 # Try to import optional components
 try:
@@ -103,18 +87,18 @@ except ImportError:
     logger.warning("⚠️  Attention Sinks integration not available")
 
 
-class TokenAwareTrainer:
-    """Token-aware trainer for exactly 100M tokens"""
+class SimpleTrainer:
+    """Simple trainer for multimodal training"""
 
     def __init__(self, config_path: str, device: Optional[str] = None):
-        """Initialize trainer with token awareness"""
+        """Initialize trainer"""
         # Load configuration with validation
         try:
             with open(config_path, 'r') as f:
                 self.config = yaml.safe_load(f)
             
             # Validate required config sections
-            required_sections = ['token_constraints', 'model', 'data', 'training', 'output']
+            required_sections = ['model', 'data', 'training', 'output']
             for section in required_sections:
                 if section not in self.config:
                     raise ValueError(f"Missing required config section: {section}")
@@ -143,7 +127,6 @@ class TokenAwareTrainer:
                 if device.startswith('cuda'):
                     if not torch.cuda.is_available():
                         logger.error(f"❌ CUDA not available but {device} requested!")
-                        logger.error(f"   Training on CPU will take 15+ hours. Please install CUDA or use --device cpu explicitly")
                         raise RuntimeError(f"CUDA not available for {device}")
                     elif device != "cuda:0" and not torch.cuda.device_count() > int(device.split(':')[1]):
                         logger.warning(f"Device {device} not available, using cuda:0")
@@ -170,18 +153,16 @@ class TokenAwareTrainer:
             else:
                 self.device = torch.device("cpu")
                 logger.warning(f"⚠️  No GPU available, using CPU (training will be very slow!)")
-                logger.warning(f"   Expected training time: 15+ hours on CPU with batch_size=96")
 
-        # Token tracking
-        self.tokens_processed = 0
-        self.target_tokens = self.config['token_constraints']['total_tokens']
-        self.token_log_frequency = self.config.get('token_tracking', {}).get('log_frequency', 1000)
-        
         # Training state
         self.global_step = 0
         self.current_epoch = 0
         self.best_similarity = 0.0
-        self.token_exhausted = False
+        self.tokens_processed = 0  # Keep for logging only, no limits
+
+        # NO TOKEN LIMITS - train on all available data
+        self.unlimited_training = True
+        self.enforce_token_limits = False
 
         # Setup directories
         self.setup_directories()
@@ -195,12 +176,12 @@ class TokenAwareTrainer:
         # Setup Hugging Face Hub integration
         self.setup_huggingface_hub()
 
-        logger.info(f"🎯 Token-aware trainer initialized for {self.target_tokens:,} tokens")
+        logger.info(f"🎯 Simple trainer initialized")
         logger.info(f"Device: {self.device}")
 
     def setup_directories(self):
         """Create output directories"""
-        for dir_name in ['checkpoint_dir', 'log_dir', 'attention_dir', 'memory_dir', 'results_dir', 'token_logs_dir']:
+        for dir_name in ['checkpoint_dir', 'log_dir', 'attention_dir', 'memory_dir', 'results_dir']:
             dir_path = Path(self.config['output'][dir_name])
             dir_path.mkdir(parents=True, exist_ok=True)
             setattr(self, dir_name, dir_path)
@@ -211,9 +192,9 @@ class TokenAwareTrainer:
         
         if wandb_config.get('project'):
             try:
-                # Enhanced run name with token info
-                run_name = f"bitmar-100M-tokens-{wandb.util.generate_id()[:8]}"
-                
+                # Standard run name without token info
+                run_name = f"bitmar-{wandb.util.generate_id()[:8]}"
+
                 self.wandb_logger = BitMarWandbLogger(
                     project_name=wandb_config['project'],
                     config=self.config,
@@ -221,7 +202,7 @@ class TokenAwareTrainer:
                     run_name=run_name
                 )
                 self.use_wandb = True
-                logger.info("✅ Weights & Biases initialized for 100M token training")
+                logger.info("✅ Weights & Biases initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize wandb: {e}")
                 self.use_wandb = False
@@ -237,19 +218,19 @@ class TokenAwareTrainer:
             return
 
         try:
-            carbon_logs_dir = Path("./carbon_logs_100M")
+            carbon_logs_dir = Path("./carbon_logs")
             carbon_logs_dir.mkdir(exist_ok=True)
 
             self.carbon_tracker = EmissionsTracker(
-                project_name="BitMar-100M-Token-Training",
-                experiment_id=f"bitmar-100M-{self.device.type}",
+                project_name="BitMar-Training",
+                experiment_id=f"bitmar-{self.device.type}",
                 output_dir=str(carbon_logs_dir),
-                output_file="emissions_100M.csv",
+                output_file="emissions.csv",
                 log_level="INFO",
                 save_to_file=True,
                 tracking_mode="machine"
             )
-            logger.info("🌱 Carbon emissions tracking enabled for 100M token training")
+            logger.info("🌱 Carbon emissions tracking enabled")
         except Exception as e:
             logger.warning(f"Failed to setup carbon tracking: {e}")
             self.carbon_tracker = None
@@ -659,27 +640,18 @@ class TokenAwareTrainer:
         return result
 
     def setup_model_and_data(self):
-        """Setup model and token-constrained data"""
-        logger.info("Setting up model and token-constrained data...")
+        """Setup model and data"""
+        logger.info("Setting up model and data...")
 
         # Clear any existing model artifacts to prevent dimension mismatches
         checkpoint_dir = Path(self.config['output']['checkpoint_dir'])
         if checkpoint_dir.exists():
             logger.info("Checkpoint directory exists - using fresh model initialization to avoid dimension conflicts")
 
-        # Check if we should use token-constrained dataset
-        if self.config.get('token_constraints') and TOKEN_CONSTRAINED_AVAILABLE:
-            logger.info("🎯 Using token-constrained dataset for 100M tokens")
-            # Pass the full data config including token constraints
-            data_config = self.config['data'].copy()
-            data_config['token_constraints'] = self.config['token_constraints']
-            self.data_module = create_token_constrained_data_module(data_config)
-        else:
-            if self.config.get('token_constraints') and not TOKEN_CONSTRAINED_AVAILABLE:
-                logger.warning("⚠️  Token constraints specified but token-constrained dataset not available")
-            logger.info("📊 Using standard BabyLM dataset")
-            self.data_module = create_data_module(self.config['data'])
-        
+        # Using generic dataset - no specific dataset dependencies
+        logger.info("📊 Using generic multimodal dataset loader")
+        self.data_module = create_data_module(self.config['data'])
+
         self.data_module.setup(rebuild_cache=getattr(self, 'rebuild_cache', False))
 
         # Override train_dataloader to use custom collate function
@@ -714,25 +686,20 @@ class TokenAwareTrainer:
             )
         self.data_module.train_dataloader = custom_train_dataloader
 
-        # Get and log token statistics if available
-        if hasattr(self.data_module, 'get_token_statistics'):
-            token_stats = self.data_module.get_token_statistics()
-            logger.info("📊 Token Statistics:")
-            for key, value in token_stats.items():
+        # Log dataset information if available
+        if hasattr(self.data_module, 'get_dataset_info'):
+            dataset_info = self.data_module.get_dataset_info()
+            logger.info("📊 Dataset Information:")
+            for key, value in dataset_info.items():
                 if isinstance(value, int):
                     logger.info(f"  • {key}: {value:,}")
                 else:
                     logger.info(f"  • {key}: {value}")
-
-            # Verify token constraints
-            if token_stats['total_tokens'] != self.target_tokens:
-                logger.warning(f"Token mismatch: Expected {self.target_tokens:,}, got {token_stats['total_tokens']:,}")
         else:
-            logger.warning("⚠️  Token statistics not available - using standard dataset")
-            logger.info(f"Target tokens: {self.target_tokens:,}")
+            logger.info("📊 Using standard dataset - no token constraints applied")
 
         # Create model
-        logger.info("Creating BitMar model with updated configuration...")
+        logger.info("Creating BitMar model...")
         logger.info(f"Model config dimensions:")
         logger.info(f"  • text_encoder_dim: {self.config['model']['text_encoder_dim']}")
         logger.info(f"  • vision_latent_size: {self.config['model']['vision_latent_size']}")
@@ -845,21 +812,12 @@ class TokenAwareTrainer:
         self.setup_flops_tracking()
 
     def setup_optimizer(self):
-        """Setup optimizer and scheduler for 100M token training"""
-        # Calculate total training steps based on exact token count
+        """Setup optimizer and scheduler"""
         train_loader = self.data_module.train_dataloader()
-        
-        # Estimate steps per epoch
         steps_per_epoch = len(train_loader)
-        
-        # Calculate how many steps we need to process exactly 100M tokens
-        avg_tokens_per_batch = self.target_tokens // (steps_per_epoch * self.config['training']['max_epochs'])
-        estimated_total_steps = self.target_tokens // avg_tokens_per_batch
 
         logger.info(f"Training planning:")
         logger.info(f"  • Steps per epoch: {steps_per_epoch}")
-        logger.info(f"  • Estimated avg tokens per batch: {avg_tokens_per_batch}")
-        logger.info(f"  • Estimated total steps: {estimated_total_steps}")
 
         # Create optimizer
         self.optimizer = AdamW(
@@ -893,8 +851,7 @@ class TokenAwareTrainer:
         )
         
         logger.info(f"Scheduler configured: T_0={T_0}, T_mult={T_mult}")
-
-        logger.info(f"✅ Optimizer and scheduler configured for 100M token training")
+        logger.info(f"✅ Optimizer and scheduler configured")
 
     def setup_adaptive_training(self):
         """Setup adaptive training controller"""
@@ -903,7 +860,7 @@ class TokenAwareTrainer:
             return
 
         adaptive_config = self.config.get('adaptive_training', {})
-        adaptive_logs_dir = Path("./logs/adaptive_training_100M")
+        adaptive_logs_dir = Path("./logs/adaptive_training")
         adaptive_logs_dir.mkdir(parents=True, exist_ok=True)
 
         self.adaptive_controller = AdaptiveTrainingController(
@@ -916,7 +873,7 @@ class TokenAwareTrainer:
             save_dir=str(adaptive_logs_dir)
         )
 
-        logger.info("🤖 Adaptive training controller enabled for 100M token training")
+        logger.info("🤖 Adaptive training controller enabled")
 
     def setup_flops_tracking(self):
         """Setup FLOPS tracking system"""
@@ -999,8 +956,8 @@ class TokenAwareTrainer:
                 # Disable wandb if it keeps failing
                 self.use_wandb = False
 
-    def save_token_checkpoint(self):
-        """Save checkpoint with token information and automatic cleanup"""
+    def save_checkpoint(self):
+        """Save checkpoint and automatic cleanup"""
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -1008,20 +965,19 @@ class TokenAwareTrainer:
             'epoch': self.current_epoch,
             'global_step': self.global_step,
             'tokens_processed': self.tokens_processed,
-            'target_tokens': self.target_tokens,
             'best_similarity': self.best_similarity,
             'config': self.config
         }
         
         # Save regular checkpoint
-        checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{self.current_epoch}_tokens_{self.tokens_processed}.pt'
+        checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{self.current_epoch}_step_{self.global_step}.pt'
         torch.save(checkpoint, checkpoint_path)
         
         # Save latest checkpoint
         latest_path = self.checkpoint_dir / 'latest_checkpoint.pt'
         torch.save(checkpoint, latest_path)
         
-        # NEW: Save episodic memory separately for edge deployment
+        # Save episodic memory separately for edge deployment
         if hasattr(self.model, 'memory'):
             try:
                 from src.memory_utils import MemoryManager
@@ -1034,9 +990,9 @@ class TokenAwareTrainer:
                     )
                     logger.info(f"📦 Edge deployment package created: {package_path}")
 
-                # Always export compressed memory for edge use
+                # Export compressed memory for edge use
                 memory_export_path = memory_manager.export_memory_for_edge(
-                    f"memory_epoch_{self.current_epoch}_tokens_{self.tokens_processed}",
+                    f"memory_epoch_{self.current_epoch}_step_{self.global_step}",
                     compress=True
                 )
                 logger.info(f"💾 Memory exported for edge deployment: {memory_export_path}")
@@ -1079,7 +1035,7 @@ class TokenAwareTrainer:
             logger.warning(f"Failed to cleanup old checkpoints: {e}")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
-        """Train one epoch with token awareness"""
+        """Train one epoch"""
         self.model.train()
         train_loader = self.data_module.train_dataloader()
         
@@ -1279,13 +1235,8 @@ class TokenAwareTrainer:
                 # Update progress bar
                 progress_bar.set_postfix({
                     'loss': f"{loss.item():.4f}",
-                    'tokens': f"{self.tokens_processed:,}",
                     'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}"
                 })
-
-                # Log token progress periodically
-                if self.global_step % self.token_log_frequency == 0:
-                    self.log_token_progress()
 
                 # Enhanced wandb logging
                 if self.use_wandb and self.global_step % 100 == 0:
@@ -1367,11 +1318,11 @@ class TokenAwareTrainer:
                 if hasattr(self, 'save_every_n_steps') and self.save_every_n_steps is not None:
                     if self.global_step % self.save_every_n_steps == 0:
                         logger.info(f"💾 Saving step-based checkpoint at step {self.global_step}")
-                        self.save_step_checkpoint()
+                        self.save_checkpoint()
 
                 # Save checkpoint periodically (default behavior)
                 if self.global_step % 5000 == 0:
-                    self.save_token_checkpoint()
+                    self.save_checkpoint()
 
             except Exception as e:
                 logger.error(f"Training step failed at step {self.global_step}: {e}")
@@ -1434,9 +1385,9 @@ class TokenAwareTrainer:
             return 0.0
 
     def train(self):
-        """Main training loop with token awareness"""
-        logger.info("🚀 Starting 100M token training...")
-        
+        """Main training loop"""
+        logger.info("🚀 Starting BitMar training...")
+
         # Start carbon tracking
         if self.carbon_tracker:
             self.carbon_tracker.start()
@@ -1452,7 +1403,7 @@ class TokenAwareTrainer:
                 epoch_metrics = self.train_epoch(epoch)
 
                 # Save checkpoint after each epoch
-                self.save_token_checkpoint()
+                self.save_checkpoint()
 
                 # Upload checkpoint to Hugging Face Hub after each epoch
                 if self.hf_hub_enabled and self.hf_upload_after_epoch:
@@ -1472,7 +1423,7 @@ class TokenAwareTrainer:
                         logger.warning(f"Failed to log epoch summary to wandb: {e}")
                         self.use_wandb = False
 
-                # Continue training for all epochs (no token limit stopping)
+                # Continue training for all epochs
 
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
@@ -1486,7 +1437,7 @@ class TokenAwareTrainer:
                 logger.info(f"🌱 Carbon emissions: {emissions:.6f} kg CO2")
 
             # Final checkpoint
-            self.save_token_checkpoint()
+            self.save_checkpoint()
 
             # Upload final model to Hugging Face Hub
             if self.hf_hub_enabled and self.hf_upload_final_model:
@@ -1534,11 +1485,11 @@ class TokenAwareTrainer:
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to generate final memory report: {e}")
 
-            # Final token summary
-            logger.info("🎯 Final Token Summary:")
-            logger.info(f"  • Target tokens: {self.target_tokens:,}")
-            logger.info(f"  • Processed tokens: {self.tokens_processed:,}")
-            logger.info(f"  • Completion: {(self.tokens_processed/self.target_tokens)*100:.2f}%")
+            # Final training summary
+            logger.info("🎯 Final Training Summary:")
+            logger.info(f"  • Epochs completed: {self.current_epoch + 1}")
+            logger.info(f"  • Total steps: {self.global_step}")
+            logger.info(f"  • Tokens processed: {self.tokens_processed:,}")
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
 
             if self.use_wandb:
@@ -1550,13 +1501,13 @@ class TokenAwareTrainer:
 
 def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description="Train BitMar with exactly 100M tokens")
-    
+    parser = argparse.ArgumentParser(description="Train BitMar Model")
+
     parser.add_argument("--config", type=str, default="configs/bitmar_100M_tokens.yaml",
                        help="Path to configuration file")
     parser.add_argument("--device", type=str, help="Device to use (cuda:0, cpu)")
     parser.add_argument("--rebuild_cache", action="store_true",
-                       help="Rebuild token-constrained dataset cache")
+                       help="Rebuild dataset cache")
     parser.add_argument("--save_every_n_steps", type=int, default=None,
                        help="Save checkpoint every N training steps (optional)")
 
@@ -1564,7 +1515,7 @@ def main():
     
     try:
         # Initialize trainer
-        trainer = TokenAwareTrainer(args.config, device=args.device)
+        trainer = SimpleTrainer(args.config, device=args.device)
         trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
         trainer.save_every_n_steps = args.save_every_n_steps  # Pass step-based saving option
 
