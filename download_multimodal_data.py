@@ -245,23 +245,36 @@ class MultimodalDatasetDownloader:
 
         return all_captions, len(all_captions)
 
-    def download_all(self) -> Dict[str, int]:
-        """Download all datasets and return statistics"""
+    def download_all(self, download_localized_narratives: bool = True, download_coco: bool = True) -> Dict[str, int]:
+        """Download selected datasets and return statistics"""
         logger.info("🚀 Starting multimodal dataset download...")
 
         total_stats = {}
 
-        # Download Localized Narratives
-        ln_stats = self.download_localized_narratives()
-        total_stats.update(ln_stats)
+        # Download Localized Narratives (optional)
+        if download_localized_narratives:
+            logger.info("📥 Downloading Localized Narratives...")
+            ln_stats = self.download_localized_narratives()
+            total_stats.update(ln_stats)
+        else:
+            logger.info("⏭️  Skipping Localized Narratives download")
 
-        # Download COCO annotations
-        coco_stats = self.download_coco_annotations()
-        total_stats.update(coco_stats)
+        # Download COCO annotations (optional)
+        if download_coco:
+            logger.info("📥 Downloading COCO...")
+            coco_stats = self.download_coco_annotations()
+            total_stats.update(coco_stats)
+        else:
+            logger.info("⏭️  Skipping COCO download")
 
-        # Prepare unified dataset
-        all_captions, total_captions = self.prepare_unified_dataset()
-        total_stats['total_unified_captions'] = total_captions
+        # Only prepare unified dataset if we downloaded something
+        if download_localized_narratives or download_coco:
+            # Prepare unified dataset
+            all_captions, total_captions = self.prepare_unified_dataset()
+            total_stats['total_unified_captions'] = total_captions
+        else:
+            logger.warning("⚠️  No datasets selected for download!")
+            return {}
 
         # Print summary
         logger.info("📊 Dataset Download Summary:")
@@ -284,18 +297,68 @@ def main():
     parser.add_argument("--skip_images", action="store_true",
                        help="Skip downloading actual images (annotations only)")
 
+    # Dataset selection arguments
+    dataset_group = parser.add_argument_group("Dataset Selection", "Choose which datasets to download")
+    dataset_group.add_argument("--localized-narratives-only", action="store_true",
+                              help="Download only Localized Narratives dataset (~1.16M samples)")
+    dataset_group.add_argument("--coco-only", action="store_true",
+                              help="Download only COCO dataset (~615K samples)")
+    dataset_group.add_argument("--both", action="store_true",
+                              help="Download both datasets (~1.78M total samples)")
+
     args = parser.parse_args()
+
+    # Validate arguments
+    selected_options = [args.localized_narratives_only, args.coco_only, args.both]
+    if sum(selected_options) > 1:
+        logger.error("❌ Please select only one dataset option")
+        parser.print_help()
+        return 1
 
     try:
         downloader = MultimodalDatasetDownloader(args.data_dir)
-        stats = downloader.download_all()
 
-        logger.info("✅ Download completed successfully!")
-        logger.info("📁 Data structure:")
-        logger.info(f"  📂 {args.data_dir}/")
-        logger.info(f"    📄 all_captions.json ({stats.get('total_unified_captions', 0):,} captions)")
-        logger.info(f"    📂 localized_narratives/")
-        logger.info(f"    📂 coco/")
+        # Determine which datasets to download based on arguments
+        if args.localized_narratives_only:
+            logger.info("🎯 Downloading ONLY Localized Narratives dataset")
+            download_localized_narratives = True
+            download_coco = False
+        elif args.coco_only:
+            logger.info("🎯 Downloading ONLY COCO dataset")
+            download_localized_narratives = False
+            download_coco = True
+        elif args.both:
+            logger.info("🎯 Downloading BOTH Localized Narratives and COCO datasets")
+            download_localized_narratives = True
+            download_coco = True
+        else:
+            # Default behavior: show help and ask user to choose
+            logger.info("Please specify which dataset(s) to download:")
+            logger.info("  --localized-narratives-only  : ~1.16M samples (smaller)")
+            logger.info("  --coco-only                  : ~615K samples (smallest)")
+            logger.info("  --both                       : ~1.78M samples (largest)")
+            parser.print_help()
+            return 0
+
+        # Show estimated sizes
+        if download_localized_narratives and download_coco:
+            logger.info("📊 Estimated download: ~1.78M image-caption pairs (both datasets)")
+        elif download_localized_narratives:
+            logger.info("📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
+        elif download_coco:
+            logger.info("📊 Estimated download: ~615K image-caption pairs (COCO)")
+
+        stats = downloader.download_all(download_localized_narratives, download_coco)
+
+        if stats:
+            logger.info("✅ Download completed successfully!")
+            logger.info("📁 Data structure:")
+            logger.info(f"  📂 {args.data_dir}/")
+            logger.info(f"    📄 all_captions.json ({stats.get('total_unified_captions', 0):,} captions)")
+            if download_localized_narratives:
+                logger.info(f"    📂 localized_narratives/")
+            if download_coco:
+                logger.info(f"    📂 coco/")
 
     except Exception as e:
         logger.error(f"❌ Download failed: {e}")
