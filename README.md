@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
-BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet-quantized text processing, DiNOv2 vision encoding, and episodic memory mechanisms for efficient multimodal understanding.
+BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet-quantized text processing, generic vision encoding, and episodic memory mechanisms for efficient multimodal understanding.
 
 ## 🌟 Key Features
 

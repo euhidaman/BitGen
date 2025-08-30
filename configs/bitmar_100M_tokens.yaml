@@ -14,7 +14,7 @@ model:
   text_decoder_heads: 4 # Balance between quality and efficiency
 
   # Vision processing
-  vision_encoder_dim: 768 # DiNOv2 input (fixed)
+  vision_encoder_dim: 768 # Generic vision feature dimension
   vision_latent_size: 128 # Match text encoder dim for consistency
   vision_hidden_size: 64 # Intermediate processing
   vision_compression_method: "learned_compression" # Best for cross-modal alignment
@@ -247,11 +247,11 @@ token_tracking:
 # Hugging Face Hub integration for model checkpoint saving
 huggingface_hub:
   enabled: true # Enable automatic uploads to HF Hub
-  repo_id: "euhidaman/bitmar-attention-multimodal" # Replace with your HF repo ID
+  repo_id: "euhidaman/bitmar-localized-narratives-coco" # Updated repo name for new dataset
   private: true # Keep repo private by default
   upload_after_epoch: true # Upload checkpoint after each epoch
   upload_final_model: true # Upload final model at end
-  commit_message_template: "BitMar 100M tokens - Epoch {epoch} - {tokens_processed:,} tokens processed"
+  commit_message_template: "BitMar Multimodal - Epoch {epoch} - {tokens_processed:,} tokens from 1.78M samples"
   create_model_card: true # Generate model card automatically
   model_card_template: |
     ---
@@ -260,34 +260,64 @@ huggingface_hub:
     tags:
     - bitmar
     - multimodal
-    - babylm
+    - localized-narratives
+    - coco
     - cross-modal
+    - vision-language
+    - episodic-memory
+    - bitnet
     datasets:
-    - babylm_multimodal
+    - localized_narratives
+    - coco_captions
     ---
     
-    # BitMar 100M Token Model
+    # BitMar: Multimodal Vision-Language Transformer
     
-    This model was trained on exactly 100 million tokens as part of the BabyLM challenge.
+    This model was trained on **1.78M image-caption pairs** from Localized Narratives and COCO datasets.
     
     ## Training Details
-    - Total tokens: 100,000,000
-    - Epochs completed: {epoch}
-    - Tokens processed: {tokens_processed:,}
-    - Cross-modal similarity: {best_similarity:.4f}
+    - **Dataset**: Localized Narratives (~1.16M) + COCO Captions (~615K) = 1,775,000 pairs
+    - **Training approach**: Unlimited - uses entire dataset without token constraints
+    - **Epochs completed**: {epoch}
+    - **Tokens processed**: {tokens_processed:,}
+    - **Cross-modal similarity**: {best_similarity:.4f}
+    - **No token limits**: Trains on all available data
     
     ## Model Architecture
-    - Text encoder: {text_encoder_layers} layers, {text_encoder_dim} hidden size
-    - Vision encoder: DiNOv2 features compressed to {vision_latent_size}
-    - Episodic memory: {memory_size} slots
+    - **Text encoder**: {text_encoder_layers} layers, {text_encoder_dim} hidden size
+    - **Vision processing**: Generic 768-dim features compressed to {vision_latent_size}
+    - **Episodic memory**: {memory_size} memory slots for cross-modal associations
+    - **BitNet quantization**: 1.58-bit quantized text processing
+    - **Attention sinks**: Enabled for long sequence generation
+    
+    ## Dataset Sources
+    - **Localized Narratives**: Dense paragraph descriptions from Open Images + COCO
+    - **COCO Captions**: High-quality human annotations (5 per image)
+    - **Total scale**: 1,775,000 image-caption pairs
+    
+    ## Key Features
+    - Cross-modal episodic memory for visual-text associations
+    - BitNet quantization for efficient inference
+    - Attention sinks for endless fluent generation
+    - No training constraints - uses full dataset
     
     ## Usage
     ```python
     from transformers import AutoModel, AutoTokenizer
     
     model = AutoModel.from_pretrained("{repo_id}")
-    tokenizer = AutoTokenizer.from_pretrained("{repo_id}")
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    
+    # The model processes both text and vision features
+    # Vision features should be 768-dimensional
     ```
+    
+    ## Training Configuration
+    - **Unlimited training**: No token constraints
+    - **Batch size**: 64 samples
+    - **Learning rate**: 0.0002 with cosine restarts
+    - **Mixed precision**: FP16 training
+    - **Memory optimization**: Gradient checkpointing enabled
 
 # Attention Sinks configuration for endless fluent generation
 attention_sinks:
