@@ -11,7 +11,6 @@ BitMar is a **Vision-Language Episodic Memory Transformer** designed for the Bab
 - **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
 - **Episodic Memory**: Cross-modal memory system for visual-text associations
 - **Comprehensive Logging**: Detailed WandB visualizations and metrics tracking
-- **Automatic Evaluation**: Built-in evaluation pipelines for both 2024 and 2025 tracks
 - **Hugging Face Integration**: Automatic model uploads after each epoch
 - **Carbon Tracking**: Environmental impact monitoring
 
@@ -50,43 +49,13 @@ python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_ever
 python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
 ```
 
-### Training with Evaluation Control
-
-```bash
-# Enable fast evaluation after each epoch (default: enabled)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_fast_eval
-
-# Disable fast evaluation to speed up training
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval
-
-# Enable full evaluation at the end (default: enabled)
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_full_eval
-
-# Disable full evaluation to save time
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_full_eval
-
-# Custom evaluation setup
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval --enable_full_eval
-```
-
-### Environment Variable Control
-
-```bash
-# Set evaluation flags via environment variables (useful for bash scripts)
-export BITMAR_ENABLE_FAST_EVAL=true
-export BITMAR_ENABLE_FULL_EVAL=false
-python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
-```
-
 ### Complete Training Command with All Options
 
 ```bash
 python train_100M_tokens.py \
     --config configs/bitmar_100M_tokens.yaml \
     --device cuda:0 \
-    --save_every_n_steps 1000 \
-    --enable_fast_eval \
-    --enable_full_eval
+    --save_every_n_steps 1000
 ```
 
 ## 📊 WandB Logging & Visualizations
@@ -164,18 +133,6 @@ BitMar includes comprehensive logging to Weights & Biases with detailed visualiz
 **huggingface/repo_url**
 - **What**: Link to uploaded model repository
 - **Interpretation**: Direct link to view uploaded models
-
-### 🧪 Evaluation Results
-
-**epoch_X/eval_2025_success** and **epoch_X/eval_2024_success**
-- **What**: Success status of fast evaluation after each epoch
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks evaluation pipeline health
-
-**final/eval_2025_success** and **final/eval_2024_success**
-- **What**: Success status of full evaluation at training end
-- **Interpretation**: Final model evaluation results
 
 ### 🔧 Optional Advanced Metrics
 
