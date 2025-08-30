@@ -1,0 +1,163 @@
+# BitMar Configuration - WITHOUT EPISODIC MEMORY
+# For ablation study comparison - this is the baseline model without episodic memory
+
+model:
+  # NEW: Episodic Memory Control for Ablation Study
+  use_episodic_memory: false  # DISABLED for this config (ablation study)
+
+  # BitNet Text Encoder
+  vocab_size: 50257 # GPT-2 vocabulary
+  text_encoder_dim: 128 # Balanced size
+  text_encoder_layers: 4 # More layers for better understanding
+  text_encoder_heads: 4 # More heads for cross-modal alignment
+
+  # BitNet Text Decoder
+  text_decoder_dim: 128 # Match encoder dimension
+  text_decoder_layers: 4 # Sufficient for text generation
+  text_decoder_heads: 4 # Balance between quality and efficiency
+
+  # Vision processing
+  vision_encoder_dim: 768 # Generic vision feature dimension
+  vision_latent_size: 128 # Match text encoder dim for consistency
+  vision_hidden_size: 64 # Intermediate processing
+  vision_compression_method: "learned_compression" # Best for cross-modal alignment
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+
+  # Cross-modal fusion
+  fusion_hidden_size: 128 # Match text encoder dim for consistency
+  fusion_num_heads: 4 # More heads for better alignment
+  fusion_num_layers: 2 # Deeper fusion for understanding
+
+  # Episodic Memory (DISABLED for this config - ablation study baseline)
+  # memory_size: 32 # Commented out - not used without memory
+  # episode_dim: 128 # Commented out - not used without memory
+  # memory_alpha: 0.2 # Commented out - not used without memory
+  # direct_writing: true # Commented out - not used without memory
+  memory_compression: false # Disabled since no memory
+  enable_adaptive_training: true # Keep adaptive training for fair comparison
+
+  # Model configuration
+  max_seq_len: 256 # Balanced sequence length
+  dropout: 0.15 # Moderate dropout
+
+# Vision feature configuration
+vision_feature_reduction:
+  enabled: true
+  method: "learned_compression" # Best for cross-modal alignment
+  target_dim: 64 # Balanced compression
+  spatial_pooling: true # Reduce spatial dimensions
+  pool_method: "attention" # Attention-based pooling for better features
+
+  # Compression parameters
+  hidden_dim: 128 # Intermediate compression layer
+  learnable: true # Enable learning during training
+  preserve_spatial_info: true # Keep spatial relationships
+
+data:
+  # Dataset configuration - Localized Narratives + COCO with DiNOv3 vision processing
+  dataset_dir: "./data"  # Dataset directory
+  text_encoder_name: "gpt2"
+  max_seq_length: 256 # Balanced sequence length
+
+  # Vision processing options
+  extract_vision_features: false  # Set to true for real DiNOv3 features (slower)
+  use_dummy_vision: true          # Set to false for real vision features
+  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m"  # DiNOv3 small (faster)
+
+  # DataLoader settings
+  batch_size: 64 # Increased batch size for faster training
+  num_workers: 6 # Efficient data loading
+  pin_memory: true # Faster GPU transfers
+  persistent_workers: true # Keep workers alive
+
+  # Data strategy - PERFECT IMAGE-CAPTION ALIGNMENT GUARANTEED
+  shuffle_datasets: true # Shuffle for better mixing
+  ensure_alignment: true # CRITICAL: Ensure perfect image-caption alignment
+  validate_alignment: true # Validate alignment before training
+  alignment_verification: "strict" # Strict alignment verification
+  never_break_pairs: true # NEVER separate image-caption pairs
+  alignment_check_frequency: 1000 # Check alignment every 1000 samples
+  maintain_index_mapping: true # Keep original index mapping for alignment
+
+  # Use all data - no limits of any kind
+  use_all_data: true # Use entire dataset
+  max_samples: null # No sample limit
+  train_only: true # Use all data for training
+
+training:
+  # Training configuration - Train on ALL available data for as many epochs as needed
+  max_epochs: 20 # Increased epochs to utilize all data
+  accumulate_grad_batches: 2 # Reduced from 4 due to increased batch_size from 32 to 96
+  gradient_clip_val: 0.3 # Balanced gradient clipping
+  val_check_interval: 1000 # Reduced from 2000 for faster training with batch_size=96
+  scheduler: "cosine_with_restarts" # Cosine with restarts for better convergence
+  min_lr: 0.00005 # Reasonable minimum learning rate
+  warmup_steps: 1000 # Proper warmup for stability
+  learning_rate: 0.0002 # Balanced learning rate
+  weight_decay: 0.02 # Balanced regularization
+  optimizer: "adamw8bit" # Stable optimizer choice
+
+  # Scheduler configuration
+  scheduler_config:
+    T_0: 1000 # Reduced from 2000 due to faster training with batch_size=96
+    T_mult: 2 # Multiply restart period (must be integer >= 1)
+    eta_min_ratio: 0.1 # Minimum LR ratio
+
+  # Balanced training objectives (Enhanced alignment focus)
+  cross_modal_loss_weight: 1.5 # Higher weight for cross-modal alignment
+  text_generation_loss_weight: 1.0 # Standard weight for text generation
+  memory_regularization_weight: 0.0 # NO memory regularization (disabled)
+  alignment_consistency_weight: 0.5 # Additional loss for alignment consistency
+
+  # NO TOKEN CONSTRAINTS - Use all available data
+  track_token_usage: true # Monitor token consumption for logging only
+  log_token_progress: true # Log token usage progress for information
+  stop_at_token_limit: false # NEVER stop at any token limit
+  enforce_token_limits: false # Do not enforce any token limits
+  use_all_available_data: true # Use all data in the dataset
+
+# Output directories (separate for ablation study)
+output:
+  checkpoint_dir: "checkpoints_without_memory"
+  log_dir: "logs_without_memory"
+  attention_dir: "attention_without_memory"
+  memory_dir: "memory_without_memory"
+  results_dir: "results_without_memory"
+  token_logs_dir: "token_logs_without_memory"
+
+# Weights & Biases (separate project for ablation comparison)
+wandb:
+  project: "bitmar-ablation-without-memory"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 100
+  log_attention: true
+  log_memory: false # DISABLED - no memory to log
+  log_gradients: true
+  log_token_usage: true
+  log_cross_modal_similarity: true
+  log_alignment_quality: true
+  save_code: true
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: false # DISABLED - no memory to plot
+  plot_token_distribution: true
+  plot_alignment_metrics: true
+
+  # Memory Visualization Settings (DISABLED for no-memory ablation)
+  log_memory_evolution: false
+  plot_memory_evolution_heatmap: false
+  plot_memory_diversity: false
+  plot_memory_access_patterns: false
+  memory_visualization_frequency: 0
+  memory_snapshot_frequency: 0
+
+# Hugging Face Hub integration (separate repo for ablation)
+huggingface_hub:
+  enabled: true
+  repo_id: "euhidaman/bitmar-without-memory-ablation"
+  private: true
+  upload_after_epoch: true
+  upload_final_model: true
+  commit_message_template: "BitMar WITHOUT Memory - Epoch {epoch} - {tokens_processed:,} tokens from ablation study"

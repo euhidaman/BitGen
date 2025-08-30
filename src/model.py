@@ -1130,11 +1130,15 @@ class BitMarModel(nn.Module):
         super().__init__()
         self.config = config
 
+        # NEW: Episodic memory toggle for ablation studies
+        self.use_episodic_memory = config.get('use_episodic_memory', True)
+        logger.info(f"🧠 Episodic Memory: {'Enabled' if self.use_episodic_memory else 'Disabled (Ablation Study)'}")
+
         # Loss balancing parameters
         self.cross_modal_loss_weight = config.get('cross_modal_loss_weight', 0.1)
         self.text_loss_weight = config.get('text_loss_weight', 1.0)
         self.vision_loss_weight = config.get('vision_loss_weight', 0.1)
-        self.memory_loss_weight = config.get('memory_loss_weight', 0.05)
+        self.memory_loss_weight = config.get('memory_loss_weight', 0.05) if self.use_episodic_memory else 0.0
 
         # Dynamic loss scaling
         self.adaptive_loss_scaling = config.get('adaptive_loss_scaling', True)
@@ -1180,35 +1184,52 @@ class BitMarModel(nn.Module):
             num_layers=config['fusion_num_layers']
         )
 
-        # Episodic memory with BitNet quantization
-        self.memory = EpisodicMemory(
-            memory_size=config['memory_size'],
-            episode_dim=config['episode_dim'],
-            alpha=config['memory_alpha'],
-            direct_writing=config['direct_writing']
-        )
+        # Episodic memory with BitNet quantization (OPTIONAL for ablation study)
+        if self.use_episodic_memory:
+            self.memory = EpisodicMemory(
+                memory_size=config['memory_size'],
+                episode_dim=config['episode_dim'],
+                alpha=config['memory_alpha'],
+                direct_writing=config['direct_writing']
+            )
 
-        # Additional BitNet projection layers
-        self.text_to_episode = BitNetLinear(
-            config['text_encoder_dim'],
-            config['episode_dim']
-        )
-        
-        self.vision_to_episode = BitNetLinear(
-            config['vision_latent_size'],
-            config['episode_dim']
-        )
-        
-        self.memory_to_decoder = BitNetLinear(
-            config['episode_dim'],
-            config['fusion_hidden_size']
-        )
+            # Memory projection layers (only if memory is enabled)
+            self.text_to_episode = BitNetLinear(
+                config['text_encoder_dim'],
+                config['episode_dim']
+            )
 
-        # Projection to decoder dimension
-        self.decoder_input_proj = BitNetLinear(
-            config['fusion_hidden_size'],
-            config['text_decoder_dim']
-        )
+            self.vision_to_episode = BitNetLinear(
+                config['vision_latent_size'],
+                config['episode_dim']
+            )
+
+            self.memory_to_decoder = BitNetLinear(
+                config['episode_dim'],
+                config['text_decoder_dim']
+            )
+
+            # Decoder input projection (with memory)
+            self.decoder_input_proj = BitNetLinear(
+                config['fusion_hidden_size'],
+                config['text_decoder_dim']
+            )
+
+            logger.info(f"✅ Episodic Memory initialized: {config['memory_size']} slots, {config['episode_dim']} dimensions")
+        else:
+            self.memory = None
+            self.text_to_episode = None
+            self.vision_to_episode = None
+            self.memory_to_decoder = None
+            self.decoder_input_proj = None
+
+            # Alternative fusion for non-memory model (direct path to decoder)
+            self.direct_fusion_proj = BitNetLinear(
+                config['fusion_hidden_size'],
+                config['text_decoder_dim']
+            )
+
+            logger.info("🚫 Episodic Memory disabled for ablation study")
 
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
@@ -1466,22 +1487,32 @@ class BitMarModel(nn.Module):
             except Exception as e:
                 logger.warning(f"Failed to update adaptive controller: {e}")
 
-        # Create episodes (different handling for vision vs text-only)
-        episode = self.create_episode_mixed(
-            text_features, vision_latent_masked, cross_attention, has_vision
-        )
+        # EPISODIC MEMORY INTERACTION (Optional for ablation study)
+        if self.use_episodic_memory:
+            # Create episodes (different handling for vision vs text-only)
+            episode = self.create_episode_mixed(
+                text_features, vision_latent_masked, cross_attention, has_vision
+            )
 
-        # Episodic memory interaction
-        if mode == "train":
-            retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
+            # Episodic memory interaction
+            if mode == "train":
+                retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
+            else:
+                retrieved_memory, memory_attention = self.memory(episode, mode="read")
+
+            # Prepare decoder input with memory context
+            memory_context = self.memory_to_decoder(retrieved_memory)
+            memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
+            fused_with_memory = fused_features + memory_context_expanded
+            decoder_input = self.decoder_input_proj(fused_with_memory)
         else:
-            retrieved_memory, memory_attention = self.memory(episode, mode="read")
+            # NO EPISODIC MEMORY - Direct fusion for ablation study
+            episode = None
+            retrieved_memory = None
+            memory_attention = None
 
-        # Prepare decoder input
-        memory_context = self.memory_to_decoder(retrieved_memory)
-        memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
-        fused_with_memory = fused_features + memory_context_expanded
-        decoder_input = self.decoder_input_proj(fused_with_memory)
+            # Direct projection from fusion to decoder (no memory)
+            decoder_input = self.direct_fusion_proj(fused_features)
 
         # Generate text using BitNet decoder
         decoder_outputs = self.text_decoder(
@@ -1517,8 +1548,9 @@ class BitMarModel(nn.Module):
                         vision_features[vision_indices], reconstructed_vision
                     )
 
+            # Memory consistency loss (only if memory is enabled)
             memory_loss = None
-            if self.config.get('use_memory_consistency_loss', True):
+            if self.use_episodic_memory and self.config.get('use_memory_consistency_loss', True):
                 memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
 
             # Compute balanced loss with adaptive controller support
@@ -1538,15 +1570,21 @@ class BitMarModel(nn.Module):
             'text_features': text_features,
             'vision_latent': vision_latent_masked,  # Return masked version
             'fused_features': fused_features,
-            'episode': episode,
-            'retrieved_memory': retrieved_memory,
+            'episode': episode,  # Will be None if memory disabled
+            'retrieved_memory': retrieved_memory,  # Will be None if memory disabled
             'cross_attention': cross_attention,
-            'memory_attention': memory_attention,
+            'memory_attention': memory_attention,  # Will be None if memory disabled
             'text_attention': text_attention,
             'decoder_attention': decoder_outputs.get('attention_patterns', None),
-            'memory_usage': self.memory.memory_usage.clone(),
             'has_vision': has_vision,  # Return for downstream analysis
+            'episodic_memory_enabled': self.use_episodic_memory,  # NEW: Track memory status
         }
+
+        # Add memory usage only if memory is enabled
+        if self.use_episodic_memory:
+            result['memory_usage'] = self.memory.memory_usage.clone()
+        else:
+            result['memory_usage'] = None
 
         # Add loss breakdown and freezing status
         if mode == "train":
@@ -1555,109 +1593,6 @@ class BitMarModel(nn.Module):
 
         return result
 
-    def apply_adaptive_encoder_freezing(self, adaptive_controller):
-        """
-        Apply encoder freezing based on adaptive controller decisions
-        """
-        if adaptive_controller is None:
-            return {'text_encoder_frozen': False, 'vision_encoder_frozen': False}
-        
-        freeze_states = adaptive_controller.get_encoder_freeze_states()
-        
-        # Freeze/unfreeze text encoder
-        for param in self.text_encoder.parameters():
-            param.requires_grad = not freeze_states['freeze_text_encoder']
-        
-        # Freeze/unfreeze vision encoder
-        for param in self.vision_encoder.parameters():
-            param.requires_grad = not freeze_states['freeze_vision_encoder']
-        
-        return {
-            'text_encoder_frozen': freeze_states['freeze_text_encoder'],
-            'vision_encoder_frozen': freeze_states['freeze_vision_encoder']
-        }
-
-    def generate(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        vision_features: torch.Tensor,
-        max_length: int = 100,
-        temperature: float = 0.7,
-        top_p: float = 0.9
-    ) -> Dict[str, torch.Tensor]:
-        """Generate text given input text and vision features"""
-        self.eval()
-
-        with torch.no_grad():
-            # Encode inputs
-            outputs = self.forward(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                vision_features=vision_features,
-                mode="inference"
-            )
-
-            # Start with input sequence
-            generated_ids = input_ids.clone()
-
-            for _ in range(max_length - input_ids.size(1)):
-                # Get next token logits
-                # [batch_size, vocab_size]
-                next_logits = outputs['logits'][:, -1, :]
-
-                # Apply temperature
-                next_logits = next_logits / temperature
-
-                # Apply top-p filtering
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(
-                        next_logits, descending=True)
-                    cumulative_probs = torch.cumsum(
-                        F.softmax(sorted_logits, dim=-1), dim=-1)
-
-                    # Remove tokens with cumulative probability above the threshold
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[...,
-                                             1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
-
-                    indices_to_remove = sorted_indices_to_remove.scatter(
-                        1, sorted_indices, sorted_indices_to_remove)
-                    next_logits[indices_to_remove] = float('-inf')
-
-                # Sample next token
-                probs = F.softmax(next_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-
-                # Append to generated sequence
-                generated_ids = torch.cat([generated_ids, next_token], dim=1)
-
-                # Update attention mask
-                attention_mask = torch.cat([
-                    attention_mask,
-                    torch.ones_like(next_token)
-                ], dim=1)
-
-                # Check for EOS token
-                if next_token.item() == self.tokenizer.eos_token_id:
-                    break
-
-                # Update outputs for next iteration
-                outputs = self.forward(
-                    input_ids=generated_ids,
-                    attention_mask=attention_mask,
-                    vision_features=vision_features,
-                    mode="inference"
-                )
-
-        return {
-            'generated_ids': generated_ids,
-            'generated_text': self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True),
-            'attention_patterns': outputs['cross_attention'],
-            'memory_patterns': outputs['memory_attention']
-        }
-
     def create_episode_mixed(
         self,
         text_features: torch.Tensor,
@@ -1665,7 +1600,10 @@ class BitMarModel(nn.Module):
         attention_weights: Dict[str, torch.Tensor],
         has_vision: torch.Tensor
     ) -> torch.Tensor:
-        """Create episodes with different handling for vision vs text-only samples"""
+        """Create episodes with different handling for vision vs text-only samples (only if memory enabled)"""
+        if not self.use_episodic_memory:
+            return None
+
         batch_size = text_features.size(0)
         
         # Pool text features

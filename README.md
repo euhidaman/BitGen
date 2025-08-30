@@ -10,8 +10,9 @@ BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet
 - **Unlimited Training**: No token constraints - trains on entire dataset
 - **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
 - **DiNOv3 Vision Embeddings**: Pre-computed 768-dim features for visual understanding
-- **Episodic Memory**: Cross-modal memory system for visual-text associations
+- **Episodic Memory**: Cross-modal memory system for visual-text associations (optional for ablation studies)
 - **Selective Dataset Support**: Choose between Localized Narratives, COCO, or both
+- **Ablation Study Support**: Train with/without episodic memory for performance comparison
 - **Comprehensive Logging**: Detailed WandB visualizations and metrics tracking
 - **Hugging Face Integration**: Automatic model uploads after each epoch
 - **Carbon Tracking**: Environmental impact monitoring
@@ -61,14 +62,11 @@ venv\Scripts\activate
 # Linux/Mac:
 source venv/bin/activate
 
+# Install dependencies from requirements.txt
+pip install -r requirements.txt
+
 # Install PyTorch with CUDA support (recommended)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install core dependencies
-pip install transformers datasets wandb huggingface_hub
-pip install numpy scipy scikit-learn matplotlib seaborn
-pip install tqdm pyyaml requests pillow
-pip install codecarbon  # Optional: for carbon tracking
 ```
 
 ### Step 2: Download Dataset (Choose Your Size)
@@ -109,362 +107,49 @@ print(f'Vision features shape: {dataset[0][\"vision_features\"].shape}')
 "
 ```
 
-### Step 4: Configure Training
-Edit `configs/bitmar_config.yaml` to match your dataset choice:
+## 🧪 Ablation Study: Episodic Memory vs. No Memory
 
-```yaml
-data:
-  dataset_dir: "./data"
-  extract_vision_features: true   # Enable DiNOv3 embeddings
-  use_dummy_vision: false        # Use real DiNOv3 features
-  batch_size: 64                 # Adjust for your GPU (32/64/128)
-  
-training:
-  max_epochs: 20                 # Full dataset passes
-  learning_rate: 0.0002
-```
+The repository includes configurations for ablation studies to compare model performance with and without episodic memory.
 
-### Step 5: Start Training
+### Configuration Files for Ablation Study:
+- `configs/bitmar_with_memory.yaml` - **Full model with episodic memory**
+- `configs/bitmar_without_memory.yaml` - **Baseline model without episodic memory**
+- `configs/bitmar_config.yaml` - **Default configuration**
+
+### Step 4A: Train Model WITH Episodic Memory
 ```bash
-# Basic training with automatic DiNOv3 embedding extraction
-python train_100M_tokens.py --config configs/bitmar_config.yaml
+# Train the full BitMar model with episodic memory (32 slots, 128-dim episodes)
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
 
-# With specific GPU
-python train_100M_tokens.py --config configs/bitmar_config.yaml --device cuda:0
-
-# With frequent checkpoints
-python train_100M_tokens.py --config configs/bitmar_config.yaml --save_every_n_steps 1000
-
-# Rebuild dataset cache if needed
-python train_100M_tokens.py --config configs/bitmar_config.yaml --rebuild_cache
+# Expected output directories:
+# - checkpoints_with_memory/
+# - logs_with_memory/
+# - WandB project: bitmar-ablation-with-memory
+# - HF repo: euhidaman/bitmar-with-memory-ablation
 ```
 
-## 🔄 Data Flow Pipeline
-
-The complete data flow showing where DiNOv3 fits:
-
-```
-1. Download Phase:
-   Raw Images + Captions (COCO/Localized Narratives)
-           ↓
-2. Embedding Phase (during dataset loading):
-   DiNOv3 processes images → 768-dim embeddings
-           ↓
-3. Training Phase:
-   Pre-computed embeddings → Your BitNet Model (1.58-bit quantized)
-```
-
-**DiNOv3 Usage:**
-- ✅ **ONLY for preprocessing**: Creates embeddings from images during dataset loading
-- ✅ **NOT part of your main model**: DiNOv3 runs once during `dataset.py` initialization
-- ✅ **Your model is separate**: Uses BitNet quantization with your own encoder/decoder
-
-## 💾 Training Variations by Dataset Size
-
-### COCO Only Training (Fastest)
+### Step 4B: Train Model WITHOUT Episodic Memory
 ```bash
-# Download COCO only
-python download_multimodal_data.py --coco-only
+# Train the baseline model without episodic memory (direct fusion only)
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml
 
-# Train on 615K samples
-python train_100M_tokens.py --config configs/bitmar_config.yaml
-# Expected: 2-4 hours on RTX 4090
+# Expected output directories:
+# - checkpoints_without_memory/
+# - logs_without_memory/
+# - WandB project: bitmar-ablation-without-memory
+# - HF repo: euhidaman/bitmar-without-memory-ablation
 ```
 
-### Localized Narratives Only Training (Balanced)
+### Step 5: Monitor Both Training Runs
 ```bash
-# Download Localized Narratives only  
-python download_multimodal_data.py --localized-narratives-only
+# Monitor WITH memory model
+tail -f logs_with_memory/training.log
 
-# Train on 1.16M samples
-python train_100M_tokens.py --config configs/bitmar_config.yaml
-# Expected: 6-10 hours on RTX 4090
-```
+# Monitor WITHOUT memory model (in separate terminal)
+tail -f logs_without_memory/training.log
 
-### Full Dataset Training (Maximum Performance)
-```bash
-# Download both datasets
-python download_multimodal_data.py --both
-
-# Train on 1.78M samples
-python train_100M_tokens.py --config configs/bitmar_config.yaml
-# Expected: 10-15 hours on RTX 4090
-```
-
-## 📈 Expected Training Statistics by Dataset
-
-### COCO Only (615K samples):
-- **Estimated tokens**: ~155M tokens
-- **Steps per epoch**: ~9,600 steps
-- **Total steps (20 epochs)**: ~192K steps
-- **Training time**: 2-4 hours (RTX 4090)
-
-### Localized Narratives Only (1.16M samples):
-- **Estimated tokens**: ~290M tokens
-- **Steps per epoch**: ~18,100 steps
-- **Total steps (20 epochs)**: ~362K steps
-- **Training time**: 6-10 hours (RTX 4090)
-
-### Both Datasets (1.78M samples):
-- **Estimated tokens**: ~445M tokens
-- **Steps per epoch**: ~27,700 steps
-- **Total steps (20 epochs)**: ~554K steps
-- **Training time**: 10-15 hours (RTX 4090)
-
-## 🎛️ Advanced Configuration
-
-### Vision Feature Processing
-```yaml
-data:
-  # DiNOv3 embedding configuration
-  extract_vision_features: true          # Enable real DiNOv3 features
-  use_dummy_vision: false               # Disable dummy features
-  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m"  # DiNOv3 small
-  
-  # Alternative: DiNOv3 base (higher quality, slower)
-  # vision_model: "facebook/dinov3-vitb16-pretrain-lvd1689m"
-```
-
-### Memory and Performance
-```yaml
-memory_optimization:
-  use_gradient_checkpointing: true      # Trade compute for memory
-  use_fp16: true                       # Mixed precision training
-  empty_cache_frequency: 10           # GPU memory cleanup
-  
-data:
-  batch_size: 32    # Reduce if GPU memory issues
-  num_workers: 4    # Reduce if CPU bottleneck
-```
-
-## 🔧 Troubleshooting
-
-### Dataset Issues
-```bash
-# If dataset download fails, retry specific dataset
-python download_multimodal_data.py --coco-only --data_dir ./data
-
-# If vision features fail, use dummy features temporarily
-# Edit configs/bitmar_config.yaml:
-# data:
-#   use_dummy_vision: true
-#   extract_vision_features: false
-```
-
-### Memory Issues
-```bash
-# Reduce batch size in config
-# data:
-#   batch_size: 32  # or 16 for low memory
-
-# Enable gradient checkpointing
-# memory_optimization:
-#   use_gradient_checkpointing: true
-```
-
-### GPU Issues
-```bash
-# Force CPU training (very slow)
-python train_100M_tokens.py --config configs/bitmar_config.yaml --device cpu
-
-# Use specific GPU
-python train_100M_tokens.py --config configs/bitmar_config.yaml --device cuda:1
-```
-
-## 📊 Monitoring Training Progress
-
-### Weights & Biases Dashboard
-Training automatically logs comprehensive metrics:
-- Real-time loss curves and learning rates
-- Cross-modal similarity scores
-- DiNOv3 embedding quality metrics
-- Token processing statistics
-- Memory usage and episodic memory evolution
-- Attention pattern visualizations
-- Model quantization statistics
-- FLOPS and computational efficiency
-- Carbon emissions tracking
-
-### Local Monitoring Commands
-```bash
-# View training logs in real-time
-tail -f training.log
-
-# Monitor GPU usage (NVIDIA GPUs)
+# Check GPU usage
 watch -n 1 nvidia-smi
-
-# Check disk space (checkpoints grow over time)
-watch -n 30 "df -h ."
-
-# Monitor Python process memory
-ps aux | grep python
-
-# Check checkpoint sizes
-ls -lh checkpoints_100M_dataset/
-```
-
-## 📁 Output Directory Structure
-
-After training, you'll have:
-
-```
-BitGen/
-├── data/                                  # Dataset files
-│   ├── all_captions.json                 # Unified captions
-│   ├── localized_narratives/             # LN annotations (if downloaded)
-│   └── coco/                            # COCO annotations (if downloaded)
-├── checkpoints_100M_dataset/             # Model checkpoints
-│   ├── latest_checkpoint.pt             # Most recent model
-│   ├── checkpoint_epoch_X_step_Y.pt     # Epoch checkpoints
-│   └── memory_exports/                  # Edge deployment packages
-├── logs_100M_dataset/                   # Training logs
-├── attention_100M_dataset/              # Attention analysis
-├── memory_100M_dataset/                 # Memory visualizations  
-├── results_100M_dataset/                # Final results
-├── flops_logs_100M/                     # FLOPS tracking data
-├── carbon_logs/                         # CO2 emissions tracking
-└── training.log                         # Main training log
-```
-
-## 🚨 System Requirements by Dataset Size
-
-### COCO Only (~615K samples):
-- **GPU**: 6GB VRAM minimum (RTX 3060 or better)
-- **RAM**: 12GB system RAM
-- **Storage**: 10GB free space
-- **Training time**: 2-4 hours (RTX 4090)
-
-### Localized Narratives Only (~1.16M samples):
-- **GPU**: 8GB VRAM minimum (RTX 3070 or better)  
-- **RAM**: 16GB system RAM
-- **Storage**: 15GB free space
-- **Training time**: 6-10 hours (RTX 4090)
-
-### Both Datasets (~1.78M samples):
-- **GPU**: 12GB VRAM minimum (RTX 4070 Ti or better)
-- **RAM**: 24GB system RAM recommended
-- **Storage**: 25GB free space
-- **Training time**: 10-15 hours (RTX 4090)
-
-## 🎯 Complete Step-by-Step Workflow
-
-### Phase 1: Environment Setup
-```bash
-# 1. Clone repository
-git clone https://github.com/euhidaman/BitGen.git
-cd BitGen
-
-# 2. Create and activate virtual environment
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# 3. Install dependencies
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install transformers datasets wandb huggingface_hub
-pip install numpy scipy scikit-learn matplotlib seaborn
-pip install tqdm pyyaml requests pillow codecarbon
-```
-
-### Phase 2: Dataset Selection & Download
-
-#### Choose your dataset size:
-
-**Small Dataset (Quick experiments):**
-```bash
-python download_multimodal_data.py --coco-only --data_dir ./data
-# Downloads: 615K samples, ~500MB, 2-4 hour training
-```
-
-**Medium Dataset (Balanced training):**
-```bash
-python download_multimodal_data.py --localized-narratives-only --data_dir ./data
-# Downloads: 1.16M samples, ~1.5GB, 6-10 hour training
-```
-
-**Large Dataset (Maximum performance):**
-```bash
-python download_multimodal_data.py --both --data_dir ./data
-# Downloads: 1.78M samples, ~2GB, 10-15 hour training
-```
-
-**Check available options:**
-```bash
-python download_multimodal_data.py --help
-# Shows all dataset selection options with size estimates
-```
-
-### Phase 3: Dataset Verification
-```bash
-# Verify dataset was downloaded correctly
-python -c "
-import json
-from pathlib import Path
-data_dir = Path('./data')
-if (data_dir / 'all_captions.json').exists():
-    with open(data_dir / 'all_captions.json', 'r') as f:
-        captions = json.load(f)
-    print(f'✅ Dataset loaded: {len(captions):,} captions')
-else:
-    print('❌ Dataset not found. Please run download script first.')
-"
-```
-
-### Phase 4: DiNOv3 Embedding Configuration
-Edit `configs/bitmar_config.yaml` for vision processing:
-
-```yaml
-data:
-  # DiNOv3 vision embedding settings
-  extract_vision_features: true   # Enable real DiNOv3 embeddings
-  use_dummy_vision: false        # Disable dummy features for real training
-  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m"  # DiNOv3 small (faster)
-  
-  # For higher quality (slower):
-  # vision_model: "facebook/dinov3-vitb16-pretrain-lvd1689m"  # DiNOv3 base
-```
-
-### Phase 5: Training Configuration
-Adjust training settings based on your hardware:
-
-```yaml
-data:
-  batch_size: 64        # Reduce to 32 or 16 if GPU memory issues
-  num_workers: 6        # Adjust based on CPU cores
-  
-training:
-  max_epochs: 20        # Full dataset passes
-  learning_rate: 0.0002
-  gradient_clip_val: 0.3
-```
-
-### Phase 6: Start Training
-```bash
-# Basic training (uses config defaults)
-python train_100M_tokens.py --config configs/bitmar_config.yaml
-
-# With specific GPU selection
-python train_100M_tokens.py --config configs/bitmar_config.yaml --device cuda:0
-
-# With frequent checkpointing (every 1000 steps)
-python train_100M_tokens.py --config configs/bitmar_config.yaml --save_every_n_steps 1000
-
-# Rebuild dataset cache if you changed vision settings
-python train_100M_tokens.py --config configs/bitmar_config.yaml --rebuild_cache
-```
-
-### Phase 7: Background Training (Linux/Mac)
-```bash
-# Run training in background with full logging
-nohup python train_100M_tokens.py --config configs/bitmar_config.yaml > training_output.log 2>&1 &
-
-# Monitor progress in real-time
-tail -f training_output.log
-
-# Check training process
-ps aux | grep train_100M_tokens
 ```
 
 ## 🔄 DiNOv3 Data Flow Pipeline
@@ -485,73 +170,172 @@ Phase 2: Embedding Creation (during dataset loading)
 
 Phase 3: Training (DiNOv3 NOT involved)
 ├── Your BitNet model receives pre-computed embeddings
-├── BitNet 1.58-bit quantized text processing
-├── Episodic memory cross-modal fusion
+├── WITH Memory: BitNet + Episodic Memory + Cross-modal fusion
+├── WITHOUT Memory: BitNet + Direct fusion (no memory)
 └── No DiNOv3 code runs during training
 ```
 
 **Key Point**: DiNOv3 is **preprocessing only** - your main model uses BitNet quantization and your own architecture.
 
-## 📈 Training Monitoring & Logs
+## 📈 Ablation Study Results Comparison
 
-### Real-time Monitoring
+After training both models, you can compare:
+
+### Model Architecture Differences:
+
+**WITH Episodic Memory:**
+- ✅ 32 memory slots for cross-modal associations
+- ✅ Episode creation from text+vision features
+- ✅ Memory attention patterns
+- ✅ ~10-15% more parameters due to memory components
+- ✅ Memory consolidation and retrieval mechanisms
+
+**WITHOUT Episodic Memory:**
+- ❌ No memory components
+- ✅ Direct fusion of text+vision → decoder
+- ✅ Fewer parameters (baseline)
+- ✅ Same BitNet quantization and DiNOv3 embeddings
+- ❌ No long-term cross-modal associations
+
+### Expected Performance Differences:
+- **Cross-modal similarity**: Memory model should show higher similarity scores
+- **Text generation quality**: Memory model should produce more contextually relevant text
+- **Training efficiency**: No-memory model trains slightly faster
+- **Parameter count**: Memory model has more parameters but better multimodal understanding
+
+## 💾 Training Variations by Dataset Size
+
+### COCO Only Training (Fastest)
 ```bash
-# Training logs
-tail -f training.log
+# Download COCO only
+python download_multimodal_data.py --coco-only
 
-# GPU monitoring (if using NVIDIA GPU)
-watch -n 1 nvidia-smi
+# Train WITH memory
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
+# Expected: 2-4 hours on RTX 4090
 
-# Disk space monitoring (checkpoints grow over time)
-watch -n 30 "df -h ."
-
-# Training process status
-ps aux | grep python
+# Train WITHOUT memory  
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml
+# Expected: 1.5-3 hours on RTX 4090
 ```
 
-### Weights & Biases Dashboard
-Access your training dashboard at: `https://wandb.ai/[your-username]/bitmar-100M-attention-epochs`
-
-**Logged Metrics:**
-- Loss curves and learning rates
-- Cross-modal similarity scores
-- DiNOv3 embedding quality metrics
-- Token processing statistics
-- Memory usage and episodic memory evolution
-- Attention pattern visualizations
-- BitNet quantization statistics
-- FLOPS and computational efficiency
-- Carbon emissions tracking
-
-## 🚨 Troubleshooting Guide
-
-### Dataset Download Issues
+### Localized Narratives Only Training (Balanced)
 ```bash
-# If download fails, check internet connection and retry
-python download_multimodal_data.py --coco-only --data_dir ./data
+# Download Localized Narratives only  
+python download_multimodal_data.py --localized-narratives-only
 
-# Check downloaded files
-ls -la data/
-ls -la data/localized_narratives/  # If using LN
-ls -la data/coco/                  # If using COCO
+# Train WITH memory
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
+# Expected: 6-10 hours on RTX 4090
+
+# Train WITHOUT memory
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml
+# Expected: 5-8 hours on RTX 4090
 ```
 
-### DiNOv3 Embedding Issues
+### Full Dataset Training (Maximum Performance)
 ```bash
-# If DiNOv3 download fails, temporarily use dummy features
-# Edit configs/bitmar_config.yaml:
-data:
-  extract_vision_features: false
-  use_dummy_vision: true
+# Download both datasets
+python download_multimodal_data.py --both
 
-# Then run training to test other components
-python train_100M_tokens.py --config configs/bitmar_config.yaml
+# Train WITH memory
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
+# Expected: 10-15 hours on RTX 4090
+
+# Train WITHOUT memory
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml
+# Expected: 8-12 hours on RTX 4090
 ```
 
-### GPU Memory Issues
+## 📈 Expected Training Statistics by Configuration
+
+### WITH Episodic Memory Model:
+- **Architecture**: BitNet + DiNOv3 + Episodic Memory (32 slots, 128-dim)
+- **Parameters**: ~15-20% more than baseline
+- **Training time**: ~20-30% longer due to memory operations
+- **Expected benefits**: Better cross-modal understanding, contextual associations
+
+### WITHOUT Episodic Memory Model (Baseline):
+- **Architecture**: BitNet + DiNOv3 + Direct Fusion
+- **Parameters**: Baseline parameter count
+- **Training time**: Faster (no memory operations)
+- **Purpose**: Ablation baseline to measure memory contribution
+
+## 🎛️ Advanced Configuration for Ablation Study
+
+### Memory Configuration (bitmar_with_memory.yaml):
+```yaml
+model:
+  use_episodic_memory: true        # ENABLED
+  memory_size: 32                  # 32 memory slots
+  episode_dim: 128                 # 128-dim episodes
+  memory_alpha: 0.2               # Memory update rate
+  direct_writing: true            # Direct memory writing
+
+output:
+  checkpoint_dir: "checkpoints_with_memory"
+  log_dir: "logs_with_memory"
+
+wandb:
+  project: "bitmar-ablation-with-memory"
+  
+huggingface_hub:
+  repo_id: "euhidaman/bitmar-with-memory-ablation"
+```
+
+### No Memory Configuration (bitmar_without_memory.yaml):
+```yaml
+model:
+  use_episodic_memory: false       # DISABLED for ablation
+  # memory_size: commented out    # No memory parameters
+  # episode_dim: commented out
+  # memory_alpha: commented out
+
+output:
+  checkpoint_dir: "checkpoints_without_memory"
+  log_dir: "logs_without_memory"
+
+wandb:
+  project: "bitmar-ablation-without-memory"
+  
+huggingface_hub:
+  repo_id: "euhidaman/bitmar-without-memory-ablation"
+```
+
+## 🔧 Troubleshooting Ablation Study
+
+### If Memory Model Fails:
 ```bash
-# Reduce batch size
-# Edit configs/bitmar_config.yaml:
+# Check if memory components are properly initialized
+python -c "
+from src.model import create_bitmar_model
+import yaml
+with open('configs/bitmar_with_memory.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+model = create_bitmar_model(config['model'])
+print(f'Memory enabled: {model.use_episodic_memory}')
+print(f'Memory slots: {getattr(model.memory, \"memory_size\", \"None\")}')
+"
+```
+
+### If No-Memory Model Fails:
+```bash
+# Check if direct fusion is properly configured
+python -c "
+from src.model import create_bitmar_model
+import yaml
+with open('configs/bitmar_without_memory.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+model = create_bitmar_model(config['model'])
+print(f'Memory enabled: {model.use_episodic_memory}')
+print(f'Direct fusion: {hasattr(model, \"direct_fusion_proj\")}')
+"
+```
+
+### Memory vs GPU Issues:
+```bash
+# Reduce batch size for memory-constrained GPUs
+# Edit configs/bitmar_with_memory.yaml or bitmar_without_memory.yaml:
 data:
   batch_size: 32  # or 16 for 8GB GPUs
 
@@ -561,33 +345,209 @@ memory_optimization:
   use_fp16: true
 ```
 
-### CPU Training (Not Recommended)
+## 📊 Monitoring Both Training Runs
+
+### Weights & Biases Dashboards:
+- **With Memory**: `https://wandb.ai/[username]/bitmar-ablation-with-memory`
+- **Without Memory**: `https://wandb.ai/[username]/bitmar-ablation-without-memory`
+
+### Local Monitoring Commands:
 ```bash
-# Force CPU training if GPU unavailable
-python train_100M_tokens.py --config configs/bitmar_config.yaml --device cpu
-# Warning: Will be 50-100x slower than GPU training
+# Monitor WITH memory training
+tail -f logs_with_memory/training.log
+
+# Monitor WITHOUT memory training (separate terminal)
+tail -f logs_without_memory/training.log
+
+# Compare GPU usage
+watch -n 1 nvidia-smi
+
+# Check checkpoint sizes
+ls -lh checkpoints_with_memory/
+ls -lh checkpoints_without_memory/
+
+# Compare parameter counts
+du -sh checkpoints_with_memory/
+du -sh checkpoints_without_memory/
 ```
+
+## 📁 Output Directory Structure for Ablation Study
+
+After running both configurations:
+
+```
+BitGen/
+├── data/                                    # Shared dataset
+│   ├── all_captions.json                   # Unified captions
+│   ├── localized_narratives/               # LN annotations (if downloaded)
+│   └── coco/                              # COCO annotations (if downloaded)
+├── checkpoints_with_memory/                # WITH memory checkpoints
+│   ├── latest_checkpoint.pt
+│   ├── checkpoint_epoch_X_step_Y.pt
+│   └── memory_exports/
+├── checkpoints_without_memory/             # WITHOUT memory checkpoints
+│   ├── latest_checkpoint.pt
+│   ├── checkpoint_epoch_X_step_Y.pt
+│   └── (no memory exports)
+├── logs_with_memory/                       # WITH memory logs
+├── logs_without_memory/                    # WITHOUT memory logs
+├── attention_with_memory/                  # WITH memory attention analysis
+├── attention_without_memory/               # WITHOUT memory attention analysis
+├── memory_with_memory/                     # Memory visualizations (only for memory model)
+├── results_with_memory/                    # WITH memory results
+├── results_without_memory/                 # WITHOUT memory results
+└── training.log                           # Current training log
+```
+
+## 🚨 System Requirements by Configuration
+
+### WITH Episodic Memory Model:
+- **GPU**: 8GB VRAM minimum (RTX 3070 or better) - needs memory for 32 slots
+- **RAM**: 16GB system RAM
+- **Storage**: 20GB free space (larger checkpoints due to memory)
+- **Training time**: +20-30% longer than no-memory model
+
+### WITHOUT Episodic Memory Model (Baseline):
+- **GPU**: 6GB VRAM minimum (RTX 3060 or better) - lighter memory usage
+- **RAM**: 12GB system RAM
+- **Storage**: 15GB free space (smaller checkpoints)
+- **Training time**: Baseline timing (faster)
+
+## 🎯 Complete Ablation Study Workflow
+
+### Phase 1: Environment Setup
+```bash
+# 1. Clone and setup environment
+git clone https://github.com/euhidaman/BitGen.git
+cd BitGen
+python -m venv venv
+venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+### Phase 2: Dataset Preparation
+```bash
+# Choose your dataset size (recommend --both for complete ablation study)
+python download_multimodal_data.py --both --data_dir ./data
+
+# Verify dataset
+python -c "
+import json
+with open('./data/all_captions.json', 'r') as f:
+    captions = json.load(f)
+print(f'✅ Dataset ready: {len(captions):,} samples')
+"
+```
+
+### Phase 3: Run Ablation Study (Both Models)
+
+#### Train Model WITH Episodic Memory:
+```bash
+# Start training WITH episodic memory
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
+
+# Monitor training
+tail -f logs_with_memory/training.log
+
+# Check memory utilization
+python -c "
+import torch
+checkpoint = torch.load('checkpoints_with_memory/latest_checkpoint.pt', map_location='cpu')
+print('WITH Memory Model:')
+print(f'  Parameters: {sum(p.numel() for p in checkpoint[\"model_state_dict\"].values()):,}')
+print(f'  Memory slots: 32')
+print(f'  Episode dimensions: 128')
+"
+```
+
+#### Train Model WITHOUT Episodic Memory:
+```bash
+# Start training WITHOUT episodic memory (baseline)
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml
+
+# Monitor training
+tail -f logs_without_memory/training.log
+
+# Check parameter difference
+python -c "
+import torch
+checkpoint = torch.load('checkpoints_without_memory/latest_checkpoint.pt', map_location='cpu')
+print('WITHOUT Memory Model (Baseline):')
+print(f'  Parameters: {sum(p.numel() for p in checkpoint[\"model_state_dict\"].values()):,}')
+print(f'  Memory slots: 0 (disabled)')
+print(f'  Direct fusion: enabled')
+"
+```
+
+### Phase 4: Compare Results
+
+#### Parameter Count Comparison:
+```bash
+# Compare model sizes
+python -c "
+import torch
+from pathlib import Path
+
+# Load WITH memory checkpoint
+if Path('checkpoints_with_memory/latest_checkpoint.pt').exists():
+    with_memory = torch.load('checkpoints_with_memory/latest_checkpoint.pt', map_location='cpu')
+    with_params = sum(p.numel() for p in with_memory['model_state_dict'].values())
+    print(f'WITH Memory: {with_params:,} parameters')
+else:
+    print('WITH Memory checkpoint not found')
+
+# Load WITHOUT memory checkpoint  
+if Path('checkpoints_without_memory/latest_checkpoint.pt').exists():
+    without_memory = torch.load('checkpoints_without_memory/latest_checkpoint.pt', map_location='cpu')
+    without_params = sum(p.numel() for p in without_memory['model_state_dict'].values())
+    print(f'WITHOUT Memory: {without_params:,} parameters')
+    
+    if 'with_params' in locals():
+        difference = with_params - without_params
+        percentage = (difference / without_params) * 100
+        print(f'Memory overhead: {difference:,} parameters ({percentage:.1f}% increase)')
+else:
+    print('WITHOUT Memory checkpoint not found')
+"
+```
+
+#### Training Metrics Comparison:
+- **WandB Dashboards**: Compare projects `bitmar-ablation-with-memory` vs `bitmar-ablation-without-memory`
+- **Cross-modal similarity**: Memory model should show higher sustained similarity
+- **Loss convergence**: Compare convergence patterns between both models
+- **Training time**: Memory model will be slower but should show better multimodal understanding
 
 ## 🎯 Quick Start Commands Summary
 
 ```bash
-# 1. Setup
+# 1. Setup environment
 git clone https://github.com/euhidaman/BitGen.git && cd BitGen
 python -m venv venv && venv\Scripts\activate
-pip install torch transformers wandb requests tqdm pyyaml numpy pillow
+pip install -r requirements.txt
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# 2. Choose dataset size and download
-python download_multimodal_data.py --coco-only        # Small (615K)
-# OR
-python download_multimodal_data.py --localized-narratives-only  # Medium (1.16M)
-# OR  
-python download_multimodal_data.py --both             # Large (1.78M)
+# 2. Download dataset (choose size)
+python download_multimodal_data.py --both        # Full dataset (1.78M samples)
 
-# 3. Start training
-python train_100M_tokens.py --config configs/bitmar_config.yaml
+# 3. Run ablation study (both models)
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml     # WITH memory
+python train_100M_tokens.py --config configs/bitmar_without_memory.yaml  # WITHOUT memory
 
-# 4. Monitor (optional)
-tail -f training.log
+# 4. Monitor training
+tail -f logs_with_memory/training.log      # Memory model
+tail -f logs_without_memory/training.log   # Baseline model
 ```
 
-**That's it!** Your model will train on the selected dataset with DiNOv3 embeddings and BitNet quantization, uploading checkpoints to Hugging Face Hub automatically.
+## 📋 Ablation Study Checklist
+
+- [ ] Environment setup completed
+- [ ] Dataset downloaded and verified
+- [ ] WITH memory model training started
+- [ ] WITHOUT memory model training started
+- [ ] Both WandB projects monitoring
+- [ ] Both HuggingFace repos receiving uploads
+- [ ] Performance comparison metrics collected
+- [ ] Results documented for paper
+
+**Result**: You'll have two trained models to demonstrate that episodic memory improves multimodal understanding compared to direct fusion baseline!
