@@ -1503,7 +1503,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="Train BitMar Model")
 
-    parser.add_argument("--config", type=str, default="configs/bitmar_100M_tokens.yaml",
+    parser.add_argument("--config", type=str, default="configs/bitmar_config.yaml",
                        help="Path to configuration file")
     parser.add_argument("--device", type=str, help="Device to use (cuda:0, cpu)")
     parser.add_argument("--rebuild_cache", action="store_true",

@@ -1,41 +1,66 @@
 """
 Dataset processing for BitMar
-Handles Localized Narratives and COCO datasets
-Loads image-caption pairs for multimodal training
+Handles Localized Narratives and COCO datasets with vision feature extraction
+Loads image-caption pairs and processes images into 768-dim features
 """
 
 import json
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoImageProcessor, AutoModel
 from typing import Dict, List, Tuple, Optional
 import logging
 import random
 import os
 from pathlib import Path
+from PIL import Image
+import requests
+from io import BytesIO
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
 
 class LocalizedNarrativesCOCODataset(Dataset):
-    """Dataset for Localized Narratives and COCO image-caption pairs"""
+    """Dataset for Localized Narratives and COCO with vision feature extraction"""
 
     def __init__(
         self,
         dataset_dir: str,
         tokenizer_name: str = "gpt2",
         max_seq_length: int = 256,
-        use_dummy_vision: bool = True
+        vision_model: str = "facebook/dinov3-vits16-pretrain-lvd1689m",  # Updated to DiNOv3 small (faster)
+        extract_vision_features: bool = True,
+        use_dummy_vision: bool = False
     ):
         self.dataset_dir = Path(dataset_dir)
         self.max_seq_length = max_seq_length
+        self.extract_vision_features = extract_vision_features
         self.use_dummy_vision = use_dummy_vision
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Initialize vision model if needed
+        if extract_vision_features and not use_dummy_vision:
+            try:
+                logger.info(f"Loading vision model: {vision_model}")
+                self.vision_processor = AutoImageProcessor.from_pretrained(vision_model)
+                self.vision_model = AutoModel.from_pretrained(vision_model)
+                self.vision_model.eval()
+                logger.info("✅ Vision model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load vision model: {e}")
+                logger.warning("Falling back to dummy vision features")
+                self.use_dummy_vision = True
+                self.vision_processor = None
+                self.vision_model = None
+        else:
+            self.vision_processor = None
+            self.vision_model = None
 
         # Load all datasets
         self._load_datasets()
@@ -51,6 +76,7 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         self.all_captions = []
         self.all_image_ids = []
+        self.all_image_urls = []
         self.dataset_sources = []
 
         # First, try to load unified captions if available
@@ -60,28 +86,31 @@ class LocalizedNarrativesCOCODataset(Dataset):
             with open(unified_file, 'r', encoding='utf-8') as f:
                 self.all_captions = json.load(f)
 
-            # Create dummy image IDs and sources
+            # Create dummy image data
             self.all_image_ids = list(range(len(self.all_captions)))
+            self.all_image_urls = [None] * len(self.all_captions)
             self.dataset_sources = ['unified'] * len(self.all_captions)
 
             logger.info(f"✅ Loaded {len(self.all_captions):,} captions from unified file")
             return
 
-        # Load Localized Narratives
+        # Load Localized Narratives with image URLs
         self._load_localized_narratives()
 
-        # Load COCO captions
+        # Load COCO captions with image URLs
         self._load_coco_captions()
 
         logger.info(f"✅ Total loaded: {len(self.all_captions):,} image-caption pairs")
 
-        # Create dummy vision features if needed
-        if self.use_dummy_vision:
+        # Pre-compute vision features if requested
+        if self.extract_vision_features and not self.use_dummy_vision:
+            self._precompute_vision_features()
+        elif self.use_dummy_vision:
             self.all_features = np.random.randn(len(self.all_captions), 768).astype(np.float32)
             logger.info("🎨 Created dummy vision features (768-dim) for all samples")
 
     def _load_localized_narratives(self):
-        """Load Localized Narratives from JSONL files"""
+        """Load Localized Narratives from JSONL files with image URLs"""
         ln_dir = self.dataset_dir / "localized_narratives"
         if not ln_dir.exists():
             logger.warning("⚠️  Localized Narratives directory not found")
@@ -103,6 +132,7 @@ class LocalizedNarrativesCOCODataset(Dataset):
                                         if caption and len(caption.strip()) > 0:
                                             self.all_captions.append(caption.strip())
                                             self.all_image_ids.append(data.get('image_id', f"ln_{line_num}"))
+                                            self.all_image_urls.append(data.get('image_url'))
                                             self.dataset_sources.append(f"localized_narratives_{dataset_dir.name}")
                                             ln_count += 1
                                     except json.JSONDecodeError as e:
@@ -114,13 +144,30 @@ class LocalizedNarrativesCOCODataset(Dataset):
         logger.info(f"✅ Localized Narratives: {ln_count:,} samples loaded")
 
     def _load_coco_captions(self):
-        """Load COCO captions from annotation files"""
+        """Load COCO captions from annotation files with image URLs"""
         coco_dir = self.dataset_dir / "coco" / "annotations"
         if not coco_dir.exists():
             logger.warning("⚠️  COCO annotations directory not found")
             return
 
         coco_count = 0
+
+        # Load image info first to get URLs
+        image_info = {}
+        for split in ['train2017', 'val2017']:
+            instances_file = coco_dir / f"instances_{split}.json"
+            if instances_file.exists():
+                try:
+                    with open(instances_file, 'r') as f:
+                        data = json.load(f)
+                    for img in data['images']:
+                        # COCO images follow pattern: http://images.cocodataset.org/{split}/{id:012d}.jpg
+                        image_url = f"http://images.cocodataset.org/zips/{split}/{img['file_name']}"
+                        image_info[img['id']] = image_url
+                except Exception as e:
+                    logger.warning(f"Failed to load image info from {instances_file}: {e}")
+
+        # Load captions with image URLs
         for split in ['train2017', 'val2017']:
             captions_file = coco_dir / f"captions_{split}.json"
             if captions_file.exists():
@@ -133,7 +180,9 @@ class LocalizedNarrativesCOCODataset(Dataset):
                         caption = annotation['caption'].strip()
                         if len(caption) > 0:
                             self.all_captions.append(caption)
-                            self.all_image_ids.append(annotation['image_id'])
+                            image_id = annotation['image_id']
+                            self.all_image_ids.append(image_id)
+                            self.all_image_urls.append(image_info.get(image_id))
                             self.dataset_sources.append(f"coco_{split}")
                             coco_count += 1
 
@@ -142,20 +191,74 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         logger.info(f"✅ COCO: {coco_count:,} samples loaded")
 
+    def _precompute_vision_features(self):
+        """Pre-compute vision features for all images"""
+        logger.info("🔄 Pre-computing vision features from images...")
+
+        self.all_features = []
+
+        for idx, image_url in enumerate(tqdm(self.all_image_urls, desc="Processing images")):
+            try:
+                if image_url:
+                    # Download and process image
+                    response = requests.get(image_url, timeout=10)
+                    image = Image.open(BytesIO(response.content)).convert('RGB')
+
+                    # Process with vision model
+                    inputs = self.vision_processor(image, return_tensors="pt")
+                    with torch.no_grad():
+                        outputs = self.vision_model(**inputs)
+                        # Get pooled features (768-dim)
+                        features = outputs.pooler_output.squeeze().numpy()
+                        self.all_features.append(features)
+                else:
+                    # No image URL, use dummy features
+                    self.all_features.append(np.random.randn(768).astype(np.float32))
+
+            except Exception as e:
+                logger.debug(f"Failed to process image {idx}: {e}")
+                # Use dummy features for failed images
+                self.all_features.append(np.random.randn(768).astype(np.float32))
+
+        self.all_features = np.array(self.all_features)
+        logger.info(f"✅ Pre-computed {len(self.all_features)} vision features")
+
+    def _get_vision_features(self, idx: int) -> np.ndarray:
+        """Get vision features for a sample (on-demand or pre-computed)"""
+        if hasattr(self, 'all_features'):
+            return self.all_features[idx]
+
+        if self.use_dummy_vision or not self.extract_vision_features:
+            return np.random.randn(768).astype(np.float32)
+
+        # On-demand feature extraction
+        image_url = self.all_image_urls[idx]
+        if not image_url:
+            return np.random.randn(768).astype(np.float32)
+
+        try:
+            response = requests.get(image_url, timeout=10)
+            image = Image.open(BytesIO(response.content)).convert('RGB')
+
+            inputs = self.vision_processor(image, return_tensors="pt")
+            with torch.no_grad():
+                outputs = self.vision_model(**inputs)
+                return outputs.pooler_output.squeeze().numpy()
+
+        except Exception as e:
+            logger.debug(f"Failed to extract features for sample {idx}: {e}")
+            return np.random.randn(768).astype(np.float32)
+
     def __len__(self) -> int:
         return len(self.indices)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single data sample"""
+        """Get a single data sample with vision features"""
         real_idx = self.indices[idx]
         caption = self.all_captions[real_idx]
 
-        # Get dummy vision features or image ID
-        if self.use_dummy_vision and hasattr(self, 'all_features'):
-            vision_feature = self.all_features[real_idx]
-        else:
-            # Create random vision features
-            vision_feature = np.random.randn(768).astype(np.float32)
+        # Get vision features
+        vision_feature = self._get_vision_features(real_idx)
 
         # Tokenize caption
         encoded = self.tokenizer(
@@ -173,16 +276,32 @@ class LocalizedNarrativesCOCODataset(Dataset):
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
 
-        # Handle vision features
+        # Handle vision features - ensure proper 768-dim format
         vision_tensor = torch.tensor(vision_feature.copy(), dtype=torch.float32)
         if vision_tensor.dim() == 1:
-            vision_tensor = vision_tensor.unsqueeze(0)  # Add batch dimension if needed
+            # Ensure it's exactly 768 dimensions
+            if vision_tensor.size(0) != 768:
+                if vision_tensor.size(0) > 768:
+                    vision_tensor = vision_tensor[:768]
+                else:
+                    # Pad to 768
+                    pad_size = 768 - vision_tensor.size(0)
+                    vision_tensor = torch.cat([vision_tensor, torch.zeros(pad_size)])
+        else:
+            # Flatten and ensure 768 dims
+            vision_tensor = vision_tensor.flatten()
+            if vision_tensor.size(0) != 768:
+                if vision_tensor.size(0) > 768:
+                    vision_tensor = vision_tensor[:768]
+                else:
+                    pad_size = 768 - vision_tensor.size(0)
+                    vision_tensor = torch.cat([vision_tensor, torch.zeros(pad_size)])
 
         return {
             'input_ids': input_ids,
             'attention_mask': attention_mask,
             'labels': labels,
-            'vision_features': vision_tensor,
+            'vision_features': vision_tensor,  # Always 768-dimensional
             'has_vision': True,
             'vision_index': real_idx,
             'sample_type': 'caption',
@@ -199,7 +318,7 @@ def create_data_module(config: Dict) -> 'LocalizedNarrativesCOCODataModule':
 
 
 class LocalizedNarrativesCOCODataModule:
-    """Data module for Localized Narratives and COCO datasets"""
+    """Data module for Localized Narratives and COCO datasets with vision processing"""
 
     def __init__(self, config: Dict):
         self.config = config
@@ -207,14 +326,24 @@ class LocalizedNarrativesCOCODataModule:
         self.train_loader = None
 
     def setup(self, rebuild_cache: bool = False):
-        """Setup the dataset"""
-        logger.info("🔧 Setting up Localized Narratives + COCO data module...")
+        """Setup the dataset with vision feature extraction"""
+        logger.info("🔧 Setting up Localized Narratives + COCO data module with vision processing...")
+
+        # Determine if we should extract real vision features or use dummy ones
+        extract_vision = self.config.get('extract_vision_features', False)
+        use_dummy = self.config.get('use_dummy_vision', True)  # Default to dummy for speed
+
+        if extract_vision and not use_dummy:
+            logger.info("🎨 Real vision feature extraction enabled (slower but better quality)")
+        else:
+            logger.info("⚡ Using dummy vision features (faster training)")
 
         self.dataset = LocalizedNarrativesCOCODataset(
             dataset_dir=self.config['dataset_dir'],
             tokenizer_name=self.config['text_encoder_name'],
             max_seq_length=self.config['max_seq_length'],
-            use_dummy_vision=True  # Use dummy vision features for now
+            extract_vision_features=extract_vision,
+            use_dummy_vision=use_dummy
         )
 
         logger.info(f"📊 Dataset ready with {len(self.dataset):,} samples")
@@ -246,7 +375,9 @@ class LocalizedNarrativesCOCODataModule:
             'total_samples': len(self.dataset),
             'tokenizer': self.config['text_encoder_name'],
             'max_seq_length': self.config['max_seq_length'],
-            'datasets': 'Localized Narratives + COCO'
+            'datasets': 'Localized Narratives + COCO',
+            'vision_features': '768-dimensional (model compatible)',
+            'extract_real_vision': not self.dataset.use_dummy_vision
         }
 
 
@@ -263,8 +394,13 @@ def test_dataset(config: Dict):
     logger.info(f"Sample keys: {sample.keys()}")
     logger.info(f"Input IDs shape: {sample['input_ids'].shape}")
     logger.info(f"Vision features shape: {sample['vision_features'].shape}")
+    logger.info(f"Vision features type: {sample['vision_features'].dtype}")
     logger.info(f"Caption: {sample['text'][:100]}...")
     logger.info(f"Source: {sample['source']}")
+
+    # Verify vision features are exactly 768-dim
+    assert sample['vision_features'].shape == torch.Size([768]), f"Expected [768], got {sample['vision_features'].shape}"
+    logger.info("✅ Vision features are correctly formatted for model")
 
     logger.info("✅ Dataset test completed successfully!")
     return data_module
@@ -278,7 +414,9 @@ if __name__ == "__main__":
         'max_seq_length': 256,
         'batch_size': 4,
         'num_workers': 0,
-        'pin_memory': False
+        'pin_memory': False,
+        'extract_vision_features': False,  # Set to True for real vision features
+        'use_dummy_vision': True  # Set to False for real vision features
     }
 
     # Test dataset

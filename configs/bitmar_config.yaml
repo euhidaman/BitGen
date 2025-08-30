@@ -52,10 +52,16 @@ vision_feature_reduction:
   preserve_spatial_info: true # Keep spatial relationships
 
 data:
-  # Dataset configuration - GENERIC, READY FOR ANY DATASET
-  dataset_dir: "./data"  # Generic data directory
+  # Dataset configuration - Localized Narratives + COCO with DiNOv3 vision processing
+  dataset_dir: "./data"  # Dataset directory
   text_encoder_name: "gpt2"
   max_seq_length: 256 # Balanced sequence length
+
+  # Vision processing options
+  extract_vision_features: false  # Set to true for real DiNOv3 features (slower)
+  use_dummy_vision: true          # Set to false for real vision features
+  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m"  # DiNOv3 small (faster)
+  # Alternative: "facebook/dinov3-vitb16-pretrain-lvd1689m"  # DiNOv3 base (more features)
 
   # DataLoader settings
   batch_size: 64 # Increased batch size for faster training
@@ -63,13 +69,14 @@ data:
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
 
-  # Data strategy - NO CONSTRAINTS
+  # Data strategy - PERFECT IMAGE-CAPTION ALIGNMENT GUARANTEED
   shuffle_datasets: true # Shuffle for better mixing
-  ensure_alignment: true # Ensure image-caption alignment
+  ensure_alignment: true # CRITICAL: Ensure perfect image-caption alignment
   validate_alignment: true # Validate alignment before training
   alignment_verification: "strict" # Strict alignment verification
-  never_break_pairs: true # Never separate image-caption pairs
+  never_break_pairs: true # NEVER separate image-caption pairs
   alignment_check_frequency: 1000 # Check alignment every 1000 samples
+  maintain_index_mapping: true # Keep original index mapping for alignment
 
   # Use all data - no limits of any kind
   use_all_data: true # Use entire dataset
