@@ -2,8 +2,17 @@
 # For ablation study comparison - this is the baseline model without episodic memory
 
 model:
-  # NEW: Episodic Memory Control for Ablation Study
-  use_episodic_memory: false  # DISABLED for this config (ablation study)
+  # NEW: Robot Reasoning Configuration (similar to deepseek-r1's structured reasoning)
+  enable_robot_reasoning: true # Enable robot selection reasoning capabilities
+  robot_data_dir: "D:/BabyLM/robot_selection_data/data" # Path to robot selection data
+
+  # Robot reasoning specific settings
+  robot_reasoning_loss_weight: 0.2 # Weight for robot selection loss
+  reasoning_format_validation: true # Validate XML reasoning format
+  enable_multi_robot_coordination: true # Support multi-robot task decomposition
+
+  # Episodic Memory Control for Ablation Study
+  use_episodic_memory: false # DISABLED for this config (ablation study)
 
   # BitNet Text Encoder
   vocab_size: 50257 # GPT-2 vocabulary
@@ -74,15 +83,26 @@ vision_feature_reduction:
   preserve_spatial_info: true # Keep spatial relationships
 
 data:
-  # Dataset configuration - Localized Narratives + COCO with DiNOv3 vision processing
-  dataset_dir: "./data"  # Dataset directory
+  # Dataset configuration - Localized Narratives + COCO + Robot Reasoning (hybrid training)
+  dataset_dir: "./data" # Dataset directory
   text_encoder_name: "gpt2"
   max_seq_length: 256 # Balanced sequence length
 
+  # Robot reasoning data integration (after multimodal training)
+  include_robot_data: true # Include robot selection examples for reasoning grounding
+  robot_data_ratio: 0.3 # 30% robot selection, 70% multimodal data
+  robot_data_dir: "D:/BabyLM/robot_selection_data/data" # Robot selection data path
+  reasoning_augmentation: true # Augment training with reasoning format
+
+  # Training phases configuration
+  multimodal_epochs: 15 # First train on multimodal data (localized narratives + COCO)
+  reasoning_epochs: 5 # Then ground reasoning on robot selection tasks
+  hybrid_training: true # Enable hybrid multimodal + reasoning training
+
   # Vision processing options
-  extract_vision_features: false  # Set to true for real DiNOv3 features (slower)
-  use_dummy_vision: true          # Set to false for real vision features
-  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m"  # DiNOv3 small (faster)
+  extract_vision_features: false # Set to true for real DiNOv3 features (slower)
+  use_dummy_vision: true # Set to false for real vision features
+  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m" # DiNOv3 small (faster)
 
   # DataLoader settings
   batch_size: 64 # Increased batch size for faster training
@@ -293,11 +313,11 @@ huggingface_hub:
     - localized_narratives
     - coco_captions
     ---
-    
+
     # BitMar WITHOUT Episodic Memory (Ablation Study Baseline)
-    
+
     This model was trained on **1.78M image-caption pairs** with **episodic memory disabled** for ablation study comparison.
-    
+
     ## Training Details
     - **Dataset**: Localized Narratives (~1.16M) + COCO Captions (~615K) = 1,775,000 pairs
     - **Episodic Memory**: DISABLED (baseline for comparison)
@@ -306,40 +326,40 @@ huggingface_hub:
     - **Tokens processed**: {tokens_processed:,}
     - **Cross-modal similarity**: {best_similarity:.4f}
     - **No token limits**: Trains on all available data
-    
+
     ## Model Architecture
     - **Text encoder**: {text_encoder_layers} layers, {text_encoder_dim} hidden size
     - **Vision processing**: Generic 768-dim features compressed to {vision_latent_size}
     - **Memory**: NONE (direct fusion baseline)
     - **BitNet quantization**: 1.58-bit quantized text processing
     - **Attention sinks**: Enabled for long sequence generation
-    
+
     ## Dataset Sources
     - **Localized Narratives**: Dense paragraph descriptions from Open Images + COCO
     - **COCO Captions**: High-quality human annotations (5 per image)
     - **Total scale**: 1,775,000 image-caption pairs
-    
+
     ## Ablation Study
     This is the **WITHOUT MEMORY** baseline variant. Compare with the full model at:
     `euhidaman/bitmar-with-memory-ablation`
-    
+
     ## Key Features
     - Direct cross-modal fusion (no episodic memory)
     - BitNet quantization for efficient inference
     - Attention sinks for endless fluent generation
     - No training constraints - uses full dataset
-    
+
     ## Usage
     ```python
     from transformers import AutoModel, AutoTokenizer
-    
+
     model = AutoModel.from_pretrained("{repo_id}")
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    
+
     # The model processes both text and vision features
     # Vision features should be 768-dimensional
     ```
-    
+
     ## Training Configuration
     - **Unlimited training**: No token constraints
     - **Batch size**: 64 samples

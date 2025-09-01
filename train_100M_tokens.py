@@ -51,6 +51,10 @@ from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 from src.memory_visualization_integration import setup_memory_visualization
 
+# Robot reasoning imports for unified training
+from src.robot_reasoning_dataset import create_robot_reasoning_data_module, create_robot_reasoning_trainer_integration
+from src.robot_reasoning import ReasoningFormatValidator, create_robot_reasoning_integration
+
 # Try to import FLOPS tracker
 try:
     from src.flops_tracker import FLOPsTracker, FLOPsEstimator
@@ -640,17 +644,40 @@ class SimpleTrainer:
         return result
 
     def setup_model_and_data(self):
-        """Setup model and data"""
-        logger.info("Setting up model and data...")
+        """Setup model and data with unified robot reasoning support"""
+        logger.info("Setting up model and data with robot reasoning support...")
 
         # Clear any existing model artifacts to prevent dimension mismatches
         checkpoint_dir = Path(self.config['output']['checkpoint_dir'])
         if checkpoint_dir.exists():
             logger.info("Checkpoint directory exists - using fresh model initialization to avoid dimension conflicts")
 
-        # Using generic dataset - no specific dataset dependencies
-        logger.info("📊 Using generic multimodal dataset loader")
-        self.data_module = create_data_module(self.config['data'])
+        # Detect if robot reasoning is enabled in config
+        self.enable_robot_reasoning = self.config['model'].get('enable_robot_reasoning', False)
+
+        if self.enable_robot_reasoning:
+            logger.info("🤖 Robot reasoning enabled - creating hybrid dataset")
+
+            # Create robot reasoning data module for hybrid training
+            robot_data_config = self.config['data'].copy()
+            robot_data_config.update({
+                'robot_data_dir': self.config['model'].get('robot_data_dir', "D:/BabyLM/robot_selection_data/data"),
+                'robot_data_ratio': self.config['data'].get('robot_data_ratio', 0.3),
+                'include_multimodal_data': True,
+                'include_robot_data': True
+            })
+
+            # Use robot reasoning data module for hybrid training
+            self.data_module = create_robot_reasoning_data_module(robot_data_config)
+
+            # Initialize robot reasoning trainer mixin
+            self.reasoning_trainer_mixin = create_robot_reasoning_trainer_integration()
+
+            logger.info("✅ Robot reasoning data module and trainer mixin initialized")
+        else:
+            logger.info("📊 Using standard multimodal dataset loader")
+            self.data_module = create_data_module(self.config['data'])
+            self.reasoning_trainer_mixin = None
 
         self.data_module.setup(rebuild_cache=getattr(self, 'rebuild_cache', False))
 
@@ -664,6 +691,8 @@ class SimpleTrainer:
                 dataset = self.data_module.train_dataset
             elif hasattr(self.data_module, 'dataset'):
                 dataset = self.data_module.dataset
+            elif hasattr(self.data_module, 'hybrid_dataset'):
+                dataset = self.data_module.hybrid_dataset
             else:
                 logger.error("No dataset found in data module")
                 raise AttributeError("Data module has no dataset attribute")
@@ -698,15 +727,22 @@ class SimpleTrainer:
         else:
             logger.info("📊 Using standard dataset - no token constraints applied")
 
-        # Create model
+        # Create model with robot reasoning enabled if configured
+        model_config = self.config['model'].copy()
+        if self.enable_robot_reasoning:
+            model_config['enable_robot_reasoning'] = True
+            model_config['robot_data_dir'] = self.config['model'].get('robot_data_dir', "D:/BabyLM/robot_selection_data/data")
+            logger.info("🤖 Creating model with robot reasoning capabilities")
+
         logger.info("Creating BitMar model...")
         logger.info(f"Model config dimensions:")
         logger.info(f"  • text_encoder_dim: {self.config['model']['text_encoder_dim']}")
         logger.info(f"  • vision_latent_size: {self.config['model']['vision_latent_size']}")
         logger.info(f"  • fusion_hidden_size: {self.config['model']['fusion_hidden_size']}")
-        logger.info(f"  • episode_dim: {self.config['model']['episode_dim']}")
-        
-        self.model = create_bitmar_model(self.config['model'])
+        if self.config['model'].get('use_episodic_memory', True):
+            logger.info(f"  • episode_dim: {self.config['model']['episode_dim']}")
+
+        self.model = create_bitmar_model(model_config)
 
         # Apply attention sinks if enabled and available
         if ATTENTION_SINKS_AVAILABLE and self.config.get('attention_sinks', {}).get('enabled', False):
@@ -763,8 +799,8 @@ class SimpleTrainer:
         # Verify model is on correct device
         logger.info(f"🎮 Device Verification:")
         logger.info(f"  • Model device: {next(self.model.parameters()).device}")
-        logger.info(f"  • Expected device: {self.device}")
-        
+        logger.info(f"  �� Expected device: {self.device}")
+
         if self.device.type == 'cuda':
             logger.info(f"  • GPU memory before training: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
             logger.info(f"  • GPU memory reserved: {torch.cuda.memory_reserved(self.device) / 1024**3:.2f} GB")
@@ -851,7 +887,7 @@ class SimpleTrainer:
         )
         
         logger.info(f"Scheduler configured: T_0={T_0}, T_mult={T_mult}")
-        logger.info(f"✅ Optimizer and scheduler configured")
+        logger.info(f"�� Optimizer and scheduler configured")
 
     def setup_adaptive_training(self):
         """Setup adaptive training controller"""
@@ -1035,7 +1071,7 @@ class SimpleTrainer:
             logger.warning(f"Failed to cleanup old checkpoints: {e}")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
-        """Train one epoch"""
+        """Train one epoch with unified robot reasoning support"""
         self.model.train()
         train_loader = self.data_module.train_dataloader()
         
@@ -1043,8 +1079,14 @@ class SimpleTrainer:
         epoch_metrics = {
             'train_loss': 0.0,
             'cross_modal_similarity': 0.0,
-            'tokens_in_epoch': 0
+            'tokens_in_epoch': 0,
+            'robot_reasoning_accuracy': 0.0,
+            'reasoning_format_accuracy': 0.0,
+            'reasoning_quality_score': 0.0
         }
+
+        reasoning_batches = 0
+        total_batches = 0
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,}")
 
@@ -1085,6 +1127,21 @@ class SimpleTrainer:
                 
                 batch = processed_batch
                 
+                # Check if this is a robot reasoning batch
+                is_robot_batch = batch.get('is_robot_reasoning', torch.tensor([False]))
+                if isinstance(is_robot_batch, torch.Tensor):
+                    is_robot_batch = is_robot_batch.any().item()
+                elif isinstance(is_robot_batch, (list, tuple)):
+                    is_robot_batch = any(is_robot_batch)
+
+                if is_robot_batch:
+                    reasoning_batches += 1
+                    # Set robot labels for robot reasoning loss computation
+                    if hasattr(self.model, '_current_robot_labels'):
+                        self.model._current_robot_labels = batch.get('robot_labels', [])
+
+                total_batches += 1
+
                 # Ensure required keys exist and are properly formatted
                 if 'vision_index' not in batch or not torch.is_tensor(batch['vision_index']):
                     batch['vision_index'] = torch.arange(batch['input_ids'].size(0), device=self.device)
@@ -1160,6 +1217,35 @@ class SimpleTrainer:
 
                 loss = outputs['loss']
 
+                # Compute robot reasoning metrics if this batch contains reasoning data
+                if is_robot_batch and self.reasoning_trainer_mixin:
+                    try:
+                        reasoning_metrics = self.reasoning_trainer_mixin.compute_robot_reasoning_metrics(outputs, batch)
+
+                        if reasoning_metrics:
+                            for key, value in reasoning_metrics.items():
+                                if key in epoch_metrics:
+                                    epoch_metrics[key] += value
+
+                        # Log reasoning examples periodically
+                        if self.global_step % 500 == 0:
+                            self.reasoning_trainer_mixin.log_robot_reasoning_examples(batch, outputs, self.global_step)
+
+                        # Compute deepseek-r1 style rewards for logging
+                        if self.model.robot_reasoning_integration:
+                            reward_functions = self.model.robot_reasoning_integration.get_reward_functions()
+                            reward_metrics = self.reasoning_trainer_mixin.compute_tiny_r1_style_rewards(
+                                batch, outputs, reward_functions
+                            )
+
+                            # Log reward metrics
+                            if self.use_wandb and reward_metrics:
+                                wandb_rewards = {f'rewards/{k}': v for k, v in reward_metrics.items()}
+                                wandb.log(wandb_rewards, step=self.global_step)
+
+                    except Exception as e:
+                        logger.warning(f"Robot reasoning metrics computation failed: {e}")
+
                 # Log memory visualization if available
                 if self.memory_viz is not None:
                     try:
@@ -1232,13 +1318,20 @@ class SimpleTrainer:
                     except Exception as e:
                         logger.warning(f"Cross-modal similarity computation failed: {e}")
 
-                # Update progress bar
-                progress_bar.set_postfix({
+                # Update progress bar with robot reasoning info
+                progress_info = {
                     'loss': f"{loss.item():.4f}",
                     'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}"
-                })
+                }
 
-                # Enhanced wandb logging
+                if self.enable_robot_reasoning:
+                    progress_info['robot_batches'] = f"{reasoning_batches}/{total_batches}"
+                    if reasoning_batches > 0 and 'reasoning_metrics' in locals():
+                        progress_info['robot_acc'] = f"{reasoning_metrics.get('robot_selection_accuracy', 0.0):.3f}"
+
+                progress_bar.set_postfix(progress_info)
+
+                # Enhanced wandb logging with robot reasoning
                 if self.use_wandb and self.global_step % 100 == 0:
                     # Use comprehensive WandB logging instead of basic logging
                     if self.wandb_logger:
@@ -1255,11 +1348,28 @@ class SimpleTrainer:
                             )
 
                             # Also log token-specific metrics
-                            wandb.log({
+                            log_dict = {
                                 'tokens/processed': self.tokens_processed,
                                 'tokens/batch_size': batch_tokens,
                                 'step': self.global_step
-                            }, step=self.global_step)
+                            }
+
+                            # Add robot reasoning metrics if available
+                            if self.enable_robot_reasoning:
+                                log_dict['train/reasoning_batch_ratio'] = reasoning_batches / max(total_batches, 1)
+
+                                # Add robot reasoning loss components
+                                loss_components = outputs.get('loss_components', {})
+                                if loss_components.get('robot_reasoning_loss') is not None:
+                                    log_dict['train/robot_reasoning_loss'] = loss_components['robot_reasoning_loss'].item()
+
+                                # Add robot selection probabilities if available
+                                robot_outputs = outputs.get('robot_reasoning_outputs')
+                                if robot_outputs and 'robot_selections' in robot_outputs:
+                                    for robot_key, probs in robot_outputs['robot_selections'].items():
+                                        log_dict[f'robot_reasoning/{robot_key}_avg_prob'] = probs.mean().item()
+
+                            wandb.log(log_dict, step=self.global_step)
 
                         except Exception as e:
                             logger.warning(f"Failed to log comprehensive metrics to wandb: {e}")
@@ -1335,8 +1445,9 @@ class SimpleTrainer:
                         if torch.is_tensor(v):
                             logger.error(f"    {k}: {v.shape}")
                     logger.error(f"  Model config:")
-                    logger.error(f"    Memory size: {self.config['model']['memory_size']}")
-                    logger.error(f"    Episode dim: {self.config['model']['episode_dim']}")
+                    if self.config['model'].get('use_episodic_memory', True):
+                        logger.error(f"    Memory size: {self.config['model']['memory_size']}")
+                        logger.error(f"    Episode dim: {self.config['model']['episode_dim']}")
                     logger.error(f"    Max seq length: {self.config['model']['max_seq_len']}")
                 
                 # Clear any gradients and free memory
@@ -1353,12 +1464,23 @@ class SimpleTrainer:
         if epoch_losses:
             epoch_metrics['train_loss'] = np.mean(epoch_losses)
             epoch_metrics['cross_modal_similarity'] = epoch_metrics['cross_modal_similarity'] / len(epoch_losses)
-        
+
+            # Calculate robot reasoning metrics averages
+            if reasoning_batches > 0:
+                for key in ['robot_reasoning_accuracy', 'reasoning_format_accuracy', 'reasoning_quality_score']:
+                    if key in epoch_metrics:
+                        epoch_metrics[key] = epoch_metrics[key] / reasoning_batches
+
         logger.info(f"Epoch {epoch} completed:")
         logger.info(f"  • Loss: {epoch_metrics['train_loss']:.4f}")
         logger.info(f"  • Cross-modal similarity: {epoch_metrics['cross_modal_similarity']:.4f}")
         logger.info(f"  • Tokens in epoch: {epoch_metrics['tokens_in_epoch']:,}")
         logger.info(f"  • Total tokens processed: {self.tokens_processed:,}")
+
+        if self.enable_robot_reasoning and reasoning_batches > 0:
+            logger.info(f"  • Robot reasoning batches: {reasoning_batches}/{total_batches}")
+            logger.info(f"  • Robot reasoning accuracy: {epoch_metrics['robot_reasoning_accuracy']:.4f}")
+            logger.info(f"  • Reasoning format accuracy: {epoch_metrics['reasoning_format_accuracy']:.4f}")
 
         return epoch_metrics
 
@@ -1384,9 +1506,72 @@ class SimpleTrainer:
             logger.warning(f"Cross-modal similarity computation failed: {e}")
             return 0.0
 
+    def test_robot_reasoning(self, num_examples: int = 10):
+        """Test robot reasoning capabilities with sample tasks (unified integration)"""
+        if not self.enable_robot_reasoning or not hasattr(self.model, 'robot_reasoning_integration'):
+            logger.info("🚫 Robot reasoning not enabled or integrated")
+            return []
+
+        logger.info(f"🧪 Testing robot reasoning with {num_examples} examples...")
+
+        # Sample test tasks for robot reasoning
+        test_tasks = [
+            "Inspect a high-rise building's exterior for damage",
+            "Navigate underwater caves to collect samples",
+            "Deliver supplies through a crowded market",
+            "Survey agricultural fields from above",
+            "Climb stairs in a damaged building",
+            "Transport heavy equipment across desert terrain",
+            "Inspect underwater pipeline infrastructure",
+            "Navigate through forest terrain for wildlife monitoring",
+            "Coordinate multi-robot warehouse operations",
+            "Perform complex manipulation tasks in laboratory"
+        ]
+
+        self.model.eval()
+        test_results = []
+
+        with torch.no_grad():
+            for i, task in enumerate(test_tasks[:num_examples]):
+                try:
+                    # Generate reasoning for this task
+                    result = self.model.robot_reasoning_integration.generate_robot_reasoning(
+                        task=task,
+                        context=None,
+                        vision_features=None
+                    )
+
+                    test_results.append({
+                        'task': task,
+                        'reasoning': result['reasoning'],
+                        'selected_robots': result['selected_robots'],
+                        'full_response': result['full_response'],
+                        'format_valid': result['format_valid'],
+                        'xml_structure_score': result['xml_structure_score']
+                    })
+
+                    logger.info(f"🤖 Test {i+1}: {task}")
+                    logger.info(f"   Reasoning: {result['reasoning'][:100]}...")
+                    logger.info(f"   Selected: {result['selected_robots']}")
+                    logger.info(f"   Format valid: {result['format_valid']}")
+
+                except Exception as e:
+                    logger.error(f"Test {i+1} failed: {e}")
+
+        # Save test results
+        if hasattr(self, 'results_dir'):
+            test_results_path = self.results_dir / f"robot_reasoning_test_epoch_{self.current_epoch}.json"
+            with open(test_results_path, 'w') as f:
+                import json
+                json.dump(test_results, f, indent=2)
+            logger.info(f"💾 Robot reasoning test results saved to: {test_results_path}")
+
+        self.model.train()
+        return test_results
+
     def train(self):
-        """Main training loop"""
-        logger.info("🚀 Starting BitMar training...")
+        """Main training loop with integrated robot reasoning grounding"""
+        logger.info("🚀 Starting BitMar unified training with robot reasoning grounding...")
 
         # Start carbon tracking
         if self.carbon_tracker:
@@ -1396,34 +1581,138 @@ class SimpleTrainer:
         self.setup_model_and_data()
 
         try:
-            for epoch in range(self.config['training']['max_epochs']):
-                logger.info(f"Starting epoch {epoch + 1}/{self.config['training']['max_epochs']}")
-                
-                self.current_epoch = epoch
-                epoch_metrics = self.train_epoch(epoch)
+            # Check if hybrid training is enabled
+            data_config = self.config.get('data', {})
+            hybrid_training = data_config.get('hybrid_training', False)
+            multimodal_epochs = data_config.get('multimodal_epochs', 15)
+            reasoning_epochs = data_config.get('reasoning_epochs', 5)
 
-                # Save checkpoint after each epoch
-                self.save_checkpoint()
+            total_epochs = self.config['training']['max_epochs']
 
-                # Upload checkpoint to Hugging Face Hub after each epoch
-                if self.hf_hub_enabled and self.hf_upload_after_epoch:
-                    self.upload_checkpoint_to_hf(epoch)
+            if hybrid_training and self.enable_robot_reasoning:
+                logger.info("🔄 Hybrid training enabled - will train in phases:")
+                logger.info(f"   Phase 1: Multimodal training (epochs 1-{multimodal_epochs})")
+                logger.info(f"   Phase 2: Robot reasoning grounding (epochs {multimodal_epochs+1}-{total_epochs})")
 
-                # Log epoch summary to wandb with error handling
-                if self.use_wandb:
-                    try:
-                        wandb.log({
-                            'epoch/train_loss': epoch_metrics['train_loss'],
-                            'epoch/cross_modal_similarity': epoch_metrics['cross_modal_similarity'],
-                            'epoch/tokens_processed': self.tokens_processed,
-                            'epoch/tokens_in_epoch': epoch_metrics['tokens_in_epoch'],
-                            'epoch/number': epoch
-                        }, step=self.global_step)
-                    except Exception as e:
-                        logger.warning(f"Failed to log epoch summary to wandb: {e}")
-                        self.use_wandb = False
+                # Phase 1: Pure multimodal training
+                logger.info("🖼️ Starting Phase 1: Multimodal Training")
+                for epoch in range(multimodal_epochs):
+                    logger.info(f"Multimodal epoch {epoch + 1}/{multimodal_epochs}")
+                    self.current_epoch = epoch
 
-                # Continue training for all epochs
+                    # Temporarily disable robot reasoning for pure multimodal training
+                    original_robot_setting = self.enable_robot_reasoning
+                    self.enable_robot_reasoning = False
+
+                    epoch_metrics = self.train_epoch(epoch)
+
+                    # Restore robot reasoning setting
+                    self.enable_robot_reasoning = original_robot_setting
+
+                    # Save checkpoint
+                    self.save_checkpoint()
+
+                    # Upload to HuggingFace if enabled
+                    if self.hf_hub_enabled and self.hf_upload_after_epoch:
+                        self.upload_checkpoint_to_hf(epoch)
+
+                # Switch to robot reasoning dataset for Phase 2
+                logger.info("🤖 Switching to Phase 2: Robot Reasoning Grounding")
+                logger.info("   Updating data module for robot reasoning training...")
+
+                # Create robot reasoning data module for phase 2
+                robot_data_config = self.config['data'].copy()
+                robot_data_config.update({
+                    'include_multimodal_data': False,  # Pure robot reasoning for grounding
+                    'include_robot_data': True,
+                    'robot_data_ratio': 1.0  # 100% robot data for grounding phase
+                })
+
+                # Replace data module with robot reasoning focused one
+                from src.robot_reasoning_dataset import create_robot_reasoning_data_module
+                self.data_module = create_robot_reasoning_data_module(robot_data_config)
+                self.data_module.setup()
+
+                # Override train_dataloader again for robot reasoning phase
+                original_train_dataloader = self.data_module.train_dataloader
+                def robot_reasoning_train_dataloader():
+                    from torch.utils.data import DataLoader
+
+                    dataset = self.data_module.hybrid_dataset if hasattr(self.data_module, 'hybrid_dataset') else self.data_module.robot_dataset
+
+                    return DataLoader(
+                        dataset,
+                        batch_size=self.config['data']['batch_size'],
+                        shuffle=True,
+                        num_workers=self.config['data']['num_workers'],
+                        pin_memory=self.config['data'].get('pin_memory', True),
+                        persistent_workers=self.config['data'].get('persistent_workers', True) and self.config['data']['num_workers'] > 0,
+                        drop_last=True,
+                        collate_fn=self.custom_collate_fn
+                    )
+                self.data_module.train_dataloader = robot_reasoning_train_dataloader
+
+                # Phase 2: Robot reasoning grounding
+                for epoch in range(multimodal_epochs, total_epochs):
+                    logger.info(f"Robot reasoning grounding epoch {epoch + 1}/{total_epochs}")
+                    self.current_epoch = epoch
+
+                    epoch_metrics = self.train_epoch(epoch)
+
+                    # Test robot reasoning capabilities during grounding phase
+                    if epoch % 2 == 0:
+                        test_results = self.test_robot_reasoning(num_examples=5)
+
+                    # Save checkpoint
+                    self.save_checkpoint()
+
+                    # Upload to HuggingFace if enabled
+                    if self.hf_hub_enabled and self.hf_upload_after_epoch:
+                        self.upload_checkpoint_to_hf(epoch)
+
+            else:
+                # Standard training (no hybrid phases)
+                logger.info("📊 Standard unified training (multimodal + robot reasoning mixed)")
+
+                for epoch in range(total_epochs):
+                    logger.info(f"Starting epoch {epoch + 1}/{total_epochs}")
+
+                    self.current_epoch = epoch
+                    epoch_metrics = self.train_epoch(epoch)
+
+                    # Test robot reasoning capabilities periodically
+                    if self.enable_robot_reasoning and epoch % 2 == 0:
+                        test_results = self.test_robot_reasoning(num_examples=5)
+
+                    # Save checkpoint after each epoch
+                    self.save_checkpoint()
+
+                    # Upload checkpoint to Hugging Face Hub after each epoch
+                    if self.hf_hub_enabled and self.hf_upload_after_epoch:
+                        self.upload_checkpoint_to_hf(epoch)
+
+                    # Log epoch summary to wandb with error handling
+                    if self.use_wandb:
+                        try:
+                            epoch_log = {
+                                'epoch/train_loss': epoch_metrics['train_loss'],
+                                'epoch/cross_modal_similarity': epoch_metrics['cross_modal_similarity'],
+                                'epoch/tokens_processed': self.tokens_processed,
+                                'epoch/tokens_in_epoch': epoch_metrics['tokens_in_epoch'],
+                                'epoch/number': epoch
+                            }
+
+                            # Add robot reasoning metrics to epoch summary
+                            if self.enable_robot_reasoning:
+                                epoch_log['epoch/robot_reasoning_accuracy'] = epoch_metrics['robot_reasoning_accuracy']
+                                epoch_log['epoch/reasoning_format_accuracy'] = epoch_metrics['reasoning_format_accuracy']
+                                epoch_log['epoch/reasoning_quality_score'] = epoch_metrics['reasoning_quality_score']
+
+                            wandb.log(epoch_log, step=self.global_step)
+                        except Exception as e:
+                            logger.warning(f"Failed to log epoch summary to wandb: {e}")
+                            self.use_wandb = False
+
 
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
@@ -1431,6 +1720,11 @@ class SimpleTrainer:
             logger.error(f"Training failed with error: {e}")
             raise
         finally:
+            # Final robot reasoning test
+            if self.enable_robot_reasoning:
+                logger.info("🧪 Final robot reasoning test...")
+                final_test_results = self.test_robot_reasoning(num_examples=10)
+
             # Stop carbon tracking
             if self.carbon_tracker:
                 emissions = self.carbon_tracker.stop()
@@ -1491,6 +1785,9 @@ class SimpleTrainer:
             logger.info(f"  • Total steps: {self.global_step}")
             logger.info(f"  • Tokens processed: {self.tokens_processed:,}")
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
+
+            if self.enable_robot_reasoning:
+                logger.info(f"  • Robot reasoning: Enabled and tested")
 
             if self.use_wandb:
                 try:

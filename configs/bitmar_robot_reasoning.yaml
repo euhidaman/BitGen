@@ -1,0 +1,282 @@
+# BitMar Configuration - WITH ROBOT REASONING
+# Integrates deepseek-r1 style structured reasoning for robot selection tasks
+
+model:
+  # NEW: Robot Reasoning Configuration (similar to deepseek-r1's structured reasoning)
+  enable_robot_reasoning: true # Enable robot selection reasoning capabilities
+  robot_data_dir: "D:/BabyLM/robot_selection_data/data" # Path to robot selection data
+
+  # Robot reasoning specific settings
+  robot_reasoning_loss_weight: 0.2 # Weight for robot selection loss
+  reasoning_format_validation: true # Validate XML reasoning format
+  enable_multi_robot_coordination: true # Support multi-robot task decomposition
+
+  # Episodic Memory Control
+  use_episodic_memory: true # Keep episodic memory for robot task memory
+
+  # BitNet Text Encoder
+  vocab_size: 50257 # GPT-2 vocabulary
+  text_encoder_dim: 128 # Balanced size
+  text_encoder_layers: 4 # More layers for better understanding
+  text_encoder_heads: 4 # More heads for cross-modal alignment
+
+  # BitNet Text Decoder
+  text_decoder_dim: 128 # Match encoder dimension
+  text_decoder_layers: 4 # Sufficient for text generation
+  text_decoder_heads: 4 # Balance between quality and efficiency
+
+  # Vision processing
+  vision_encoder_dim: 768 # Generic vision feature dimension
+  vision_latent_size: 128 # Match text encoder dim for consistency
+  vision_hidden_size: 64 # Intermediate processing
+  vision_compression_method: "learned_compression" # Best for cross-modal alignment
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+
+  # Cross-modal fusion
+  fusion_hidden_size: 128 # Match text encoder dim for consistency
+  fusion_num_heads: 4 # More heads for better alignment
+  fusion_num_layers: 2 # Deeper fusion for understanding
+
+  # FIBER-specific configuration
+  num_fiber_fusion_layers: 6 # Number of layers with FIBER-style cross-modal fusion
+  fiber_learnable_alpha: true # Enable learnable fusion strength parameters
+  fiber_bidirectional_fusion: true # Enable bidirectional text<->vision fusion
+
+  # Advanced FIBER configuration
+  fiber_text_fusion_layers: 4 # Number of text layers with cross-modal fusion
+  fiber_vision_fusion_layers: 2 # Number of vision layers with cross-modal fusion
+  fiber_backbone_integration: true # Enable deep backbone fusion instead of late fusion
+  fiber_attention_temperature: 1.0 # Temperature for FIBER attention mechanisms
+  fiber_residual_connection: true # Enable residual connections in FIBER blocks
+  fiber_layer_norm_eps: 1e-6 # Layer normalization epsilon for FIBER layers
+  fiber_mlp_ratio: 4.0 # MLP expansion ratio in FIBER transformer blocks
+
+  # FIBER fusion strategy
+  fiber_fusion_strategy: "deep_backbone" # Options: "late_fusion", "deep_backbone", "hybrid"
+  fiber_cross_attention_dropout: 0.1 # Dropout for cross-modal attention layers
+  fiber_enable_gradient_checkpointing: true # Enable gradient checkpointing for FIBER layers
+
+  # Episodic Memory (ENABLED for robot reasoning)
+  memory_size: 64 # Larger memory for robot task patterns
+  episode_dim: 128 # Match fusion dimension for consistency
+  memory_alpha: 0.2 # Balanced adaptation rate
+  direct_writing: true
+  memory_compression: true # Enable memory compression
+  enable_adaptive_training: true # Enable adaptive cross-modal training
+
+  # Model configuration
+  max_seq_len: 512 # Longer sequences for reasoning
+  dropout: 0.15 # Moderate dropout
+
+# Robot reasoning specific configuration (inspired by deepseek-r1)
+robot_reasoning:
+  # Reasoning format (XML-based like deepseek-r1)
+  reasoning_format: "xml" # Use XML tags like <reasoning> and <answer>
+  system_prompt: |
+    You are an expert robot selection assistant. Analyze the given task and select the most suitable robot(s) from the available options.
+
+    Respond in the following format:
+    <reasoning>
+    Analyze the task requirements, environment constraints, and match them with robot capabilities and limitations. Consider all factors before making your selection.
+    </reasoning>
+    <answer>
+    Selected robot(s): [Robot Name(s)]
+    </answer>
+
+  # Reward functions (similar to deepseek-r1's multiple reward system)
+  reward_functions:
+    - "format_reward" # Reward proper XML format structure
+    - "reasoning_quality_reward" # Reward quality of reasoning content
+    - "robot_validity_reward" # Reward valid robot selections
+    - "correctness_reward" # Reward correct robot choices
+
+  reward_weights:
+    format_reward: 0.3
+    reasoning_quality_reward: 0.2
+    robot_validity_reward: 0.2
+    correctness_reward: 0.3
+
+  # Training configuration for reasoning
+  reasoning_training_steps: 5000 # Number of steps to focus on reasoning
+  reasoning_temperature: 0.8 # Temperature for reasoning generation
+  max_reasoning_length: 256 # Max tokens for reasoning section
+  max_answer_length: 64 # Max tokens for answer section
+
+# Vision feature configuration
+vision_feature_reduction:
+  enabled: true
+  method: "learned_compression" # Best for cross-modal alignment
+  target_dim: 64 # Balanced compression
+  spatial_pooling: true # Reduce spatial dimensions
+  pool_method: "attention" # Attention-based pooling for better features
+
+  # Compression parameters
+  hidden_dim: 128 # Intermediate compression layer
+  learnable: true # Enable learning during training
+  preserve_spatial_info: true # Keep spatial relationships
+
+data:
+  # Dataset configuration - Robot selection data + multimodal data
+  dataset_dir: "./data" # Dataset directory
+  text_encoder_name: "gpt2"
+  max_seq_length: 512 # Longer sequences for reasoning
+
+  # Vision processing options
+  extract_vision_features: false # Set to true for real DiNOv3 features (slower)
+  use_dummy_vision: true # Set to false for real vision features
+  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m" # DiNOv3 small (faster)
+
+  # DataLoader settings
+  batch_size: 32 # Smaller batch for reasoning training
+  num_workers: 4 # Efficient data loading
+  pin_memory: true # Faster GPU transfers
+  persistent_workers: true # Keep workers alive
+
+  # Robot reasoning data integration
+  include_robot_data: true # Include robot selection examples in training
+  robot_data_ratio: 0.3 # 30% robot selection, 70% multimodal data
+  reasoning_augmentation: true # Augment regular data with reasoning format
+
+  # Data strategy
+  shuffle_datasets: true # Shuffle for better mixing
+  ensure_alignment: true # Ensure perfect image-caption alignment
+  validate_alignment: true # Validate alignment before training
+  use_all_data: true # Use entire dataset
+
+training:
+  # Training configuration - Robot reasoning focused
+  max_epochs: 15 # Sufficient epochs for reasoning learning
+  accumulate_grad_batches: 4 # Larger accumulation for stability
+  gradient_clip_val: 0.5 # Higher clipping for reasoning stability
+  val_check_interval: 1000 # Regular validation
+  scheduler: "cosine_with_restarts" # Cosine with restarts
+  learning_rate: 0.0001 # Lower LR for stable reasoning learning
+  weight_decay: 0.01 # Light regularization
+  optimizer: "adamw8bit" # Stable optimizer choice
+
+  # Scheduler configuration
+  scheduler_config:
+    T_0: 2000 # Longer restart periods for reasoning
+    T_mult: 2
+    eta_min_ratio: 0.05 # Lower minimum LR
+
+  # Balanced training objectives (Robot reasoning focused)
+  cross_modal_loss_weight: 1.0 # Standard cross-modal alignment
+  text_generation_loss_weight: 1.0 # Standard text generation
+  memory_regularization_weight: 0.1 # Light memory regularization
+  robot_reasoning_loss_weight: 0.5 # Significant robot reasoning focus
+
+  # Reasoning-specific training parameters
+  reasoning_warmup_steps: 1000 # Warmup for reasoning capabilities
+  reasoning_curriculum: true # Start with simple tasks, progress to complex
+  validate_reasoning_format: true # Validate XML format during training
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_robot_reasoning"
+  log_dir: "logs_robot_reasoning"
+  attention_dir: "attention_robot_reasoning"
+  memory_dir: "memory_robot_reasoning"
+  results_dir: "results_robot_reasoning"
+  reasoning_dir: "reasoning_outputs" # NEW: Store reasoning examples
+
+# Weights & Biases - Robot reasoning focused
+wandb:
+  project: "bitgen-robot-reasoning"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 50 # More frequent logging for reasoning
+  log_attention: true
+  log_memory: true
+  log_reasoning: true # NEW: Log reasoning quality
+  log_robot_selections: true # NEW: Log robot selection accuracy
+  save_code: true
+  create_plots: true
+
+  # Robot reasoning specific logging
+  log_reasoning_format_adherence: true
+  log_robot_selection_accuracy: true
+  log_reasoning_quality_scores: true
+  plot_robot_selection_heatmaps: true
+  track_reasoning_improvement: true
+
+# Robot reasoning evaluation
+evaluation:
+  # Test robot selection accuracy
+  test_robot_selection: true
+  robot_selection_test_cases: 100
+  evaluate_reasoning_quality: true
+
+  # Evaluation metrics (similar to deepseek-r1's evaluation)
+  metrics:
+    - "robot_selection_accuracy"
+    - "reasoning_format_adherence"
+    - "reasoning_quality_score"
+    - "multi_robot_coordination_accuracy"
+    - "environment_classification_accuracy"
+
+# Hugging Face Hub integration
+huggingface_hub:
+  enabled: true
+  repo_id: "euhidaman/bitmar-robot-reasoning"
+  private: true
+  upload_after_epoch: true
+  upload_final_model: true
+  commit_message_template: "BitMar Robot Reasoning - Epoch {epoch} - {tokens_processed:,} tokens"
+  create_model_card: true
+  model_card_template: |
+    ---
+    language: en
+    license: mit
+    tags:
+    - bitmar
+    - robot-selection
+    - reasoning
+    - multimodal
+    - structured-reasoning
+    - xml-format
+    - deepseek-r1-style
+    datasets:
+    - robot_selection_data
+    ---
+
+    # BitMar with Robot Reasoning (deepseek-r1 Style)
+
+    This model implements structured reasoning for robot selection tasks, inspired by the deepseek-r1 approach.
+
+    ## Training Details
+    - **Reasoning format**: XML-based with `<reasoning>` and `<answer>` tags
+    - **Robot types**: 5 specialized robots (Drone, Underwater, Humanoid, Wheels, Legs)
+    - **Training approach**: Multi-objective with reasoning quality rewards
+    - **Epochs completed**: {epoch}
+    - **Tokens processed**: {tokens_processed:,}
+
+    ## Model Architecture
+    - **Structured reasoning**: XML format like deepseek-r1
+    - **Robot selection head**: Specialized for robot capability matching
+    - **Episodic memory**: {memory_size} slots for task patterns
+    - **BitNet quantization**: 1.58-bit quantized processing
+
+    ## Usage
+    ```python
+    # Example robot selection with reasoning
+    task = "Inspect underwater pipes for leaks"
+    reasoning_output = model.generate_robot_reasoning(task)
+    print(reasoning_output['reasoning'])
+    print(reasoning_output['selected_robots'])
+    ```
+
+    ## Reasoning Format
+    The model follows deepseek-r1's structured reasoning approach:
+    ```
+    <reasoning>
+    Task Analysis: Inspect underwater pipes for leaks
+    Environment: Underwater - requires waterproof robot with underwater navigation
+    Required capability: Inspection - needs good sensors and positioning
+    Underwater Robot selected for underwater navigation, marine inspection, and water environment specialization
+    </reasoning>
+    <answer>
+    Selected robot(s): Underwater Robot
+    </answer>
+    ```

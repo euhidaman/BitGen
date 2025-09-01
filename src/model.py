@@ -17,6 +17,7 @@ import logging
 
 # Import FIBER fusion
 from .fiber_fusion import create_fiber_fusion, FIBERIntegration
+from .robot_reasoning import RobotReasoningIntegration, create_robot_reasoning_integration
 
 logger = logging.getLogger(__name__)
 
@@ -1281,6 +1282,16 @@ class BitMarModel(nn.Module):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # NEW: Robot Reasoning Integration (similar to deepseek-r1's structured reasoning)
+        self.enable_robot_reasoning = config.get('enable_robot_reasoning', False)
+        if self.enable_robot_reasoning:
+            # Initialize robot reasoning capabilities
+            self.robot_reasoning_integration = None  # Will be set up during model creation
+            logger.info("🤖 Robot reasoning capabilities will be integrated")
+        else:
+            self.robot_reasoning_integration = None
+            logger.info("🚫 Robot reasoning disabled in config")
+
     def encode_text(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """Encode text using BitNet encoder"""
         text_features, attention_patterns = self.text_encoder(
@@ -1389,6 +1400,7 @@ class BitMarModel(nn.Module):
         cross_modal_loss: torch.Tensor,
         vision_loss: Optional[torch.Tensor] = None,
         memory_loss: Optional[torch.Tensor] = None,
+        robot_reasoning_loss: Optional[torch.Tensor] = None,
         step: int = 0,
         adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
@@ -1401,6 +1413,8 @@ class BitMarModel(nn.Module):
             losses['vision_loss'] = vision_loss
         if memory_loss is not None and self.use_episodic_memory:
             losses['memory_loss'] = memory_loss
+        if robot_reasoning_loss is not None:
+            losses['robot_reasoning_loss'] = robot_reasoning_loss
 
         if self.adaptive_loss_scaling:
             # Adaptive scaling based on loss magnitudes
@@ -1409,11 +1423,13 @@ class BitMarModel(nn.Module):
                 cross_modal_scale = decoder_loss.item() / (cross_modal_loss.item() + 1e-8)
                 vision_scale = decoder_loss.item() / (vision_loss.item() + 1e-8) if vision_loss is not None else 1.0
                 memory_scale = decoder_loss.item() / (memory_loss.item() + 1e-8) if memory_loss is not None and self.use_episodic_memory else 1.0
+                robot_reasoning_scale = decoder_loss.item() / (robot_reasoning_loss.item() + 1e-8) if robot_reasoning_loss is not None else 1.0
 
                 # Clamp scales to reasonable range
                 cross_modal_scale = torch.clamp(torch.tensor(cross_modal_scale), 0.1, 10.0).item()
                 vision_scale = torch.clamp(torch.tensor(vision_scale), 0.1, 10.0).item() if vision_loss is not None else 1.0
                 memory_scale = torch.clamp(torch.tensor(memory_scale), 0.1, 10.0).item() if memory_loss is not None and self.use_episodic_memory else 1.0
+                robot_reasoning_scale = torch.clamp(torch.tensor(robot_reasoning_scale), 0.1, 10.0).item() if robot_reasoning_loss is not None else 1.0
 
         else:
             # Fixed scaling
@@ -1456,16 +1472,21 @@ class BitMarModel(nn.Module):
         if memory_loss is not None and self.use_episodic_memory:
             total_loss += memory_scale * memory_loss
 
+        if robot_reasoning_loss is not None:
+            total_loss += robot_reasoning_scale * robot_reasoning_loss
+
         return {
             'total_loss': total_loss,
             'decoder_loss': decoder_loss,
             'cross_modal_loss': cross_modal_loss,
             'vision_loss': vision_loss,
             'memory_loss': memory_loss if self.use_episodic_memory else torch.tensor(0.0),
+            'robot_reasoning_loss': robot_reasoning_loss if robot_reasoning_loss is not None else torch.tensor(0.0),
             'decoder_scale': decoder_scale,
             'cross_modal_scale': cross_modal_scale,
             'vision_scale': vision_scale,
-            'memory_scale': memory_scale if self.use_episodic_memory else 0.0
+            'memory_scale': memory_scale if self.use_episodic_memory else 0.0,
+            'robot_reasoning_scale': robot_reasoning_scale if robot_reasoning_loss is not None else 0.0
         }
 
     def freeze_encoders_conditionally(self, step: int):
@@ -1585,12 +1606,31 @@ class BitMarModel(nn.Module):
         if self.use_episodic_memory and episode is not None and memory_output is not None:
             memory_loss = self.compute_memory_consistency_loss(episode, memory_output)
 
-        # Balanced loss computation
+        # NEW: Robot reasoning loss (similar to deepseek-r1's multi-objective training)
+        robot_reasoning_loss = None
+        robot_reasoning_outputs = None
+        if self.robot_reasoning_integration is not None:
+            try:
+                # Apply robot reasoning to fused features
+                robot_reasoning_outputs = self.robot_reasoning_integration.robot_selection_head(fused_features)
+
+                # Compute robot selection loss if labels are provided and this is a reasoning batch
+                if hasattr(self, '_current_robot_labels') and self._current_robot_labels:
+                    robot_reasoning_loss = self.robot_reasoning_integration.compute_reasoning_loss(
+                        outputs={'fused_features': fused_features},
+                        robot_labels=self._current_robot_labels
+                    )
+
+            except Exception as e:
+                logger.warning(f"Robot reasoning forward pass failed: {e}")
+
+        # Balanced loss computation (enhanced for robot reasoning)
         loss_dict = self.compute_balanced_loss(
             decoder_loss=decoder_loss,
             cross_modal_loss=cross_modal_loss,
             vision_loss=vision_loss,
             memory_loss=memory_loss,
+            robot_reasoning_loss=robot_reasoning_loss,  # NEW: Include robot reasoning loss
             step=step,
             adaptive_controller=adaptive_controller
         )
@@ -1610,7 +1650,10 @@ class BitMarModel(nn.Module):
             'memory_output': memory_output,
             'memory_attention_weights': memory_attention_weights,
             'loss_components': loss_dict,
-            'fiber_config': self.fiber_config
+            'fiber_config': self.fiber_config,
+            # NEW: Robot reasoning outputs (similar to deepseek-r1's structured outputs)
+            'robot_reasoning_outputs': robot_reasoning_outputs,
+            'robot_reasoning_loss': robot_reasoning_loss
         }
 
         return outputs
@@ -1716,8 +1759,8 @@ class BitMarModel(nn.Module):
 
 
 def create_bitmar_model(config: Dict) -> BitMarModel:
-    """Create BitMar model with FIBER fusion"""
-    logger.info("🚀 Creating BitMar model with authentic FIBER fusion...")
+    """Create BitMar model with FIBER fusion and robot reasoning"""
+    logger.info("🚀 Creating BitMar model with authentic FIBER fusion and robot reasoning...")
 
     # Log FIBER integration status
     logger.info("🔥 FIBER Integration Status:")
@@ -1728,8 +1771,20 @@ def create_bitmar_model(config: Dict) -> BitMarModel:
 
     model = BitMarModel(config)
 
+    # NEW: Integrate robot reasoning capabilities (similar to deepseek-r1's post-model setup)
+    if model.enable_robot_reasoning:
+        try:
+            robot_data_dir = config.get('robot_data_dir', "D:/BabyLM/robot_selection_data/data")
+            model.robot_reasoning_integration = create_robot_reasoning_integration(model, robot_data_dir)
+            logger.info("🤖 Robot reasoning integration completed successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to integrate robot reasoning: {e}")
+            model.robot_reasoning_integration = None
+            model.enable_robot_reasoning = False
+
     logger.info("✅ BitMar model created with FIBER-enhanced cross-modal fusion")
     logger.info(f"   Episodic Memory: {'Enabled' if model.use_episodic_memory else 'Disabled (Ablation Study)'}")
+    logger.info(f"   Robot Reasoning: {'Enabled' if model.robot_reasoning_integration is not None else 'Disabled'}")
 
     return model
 
