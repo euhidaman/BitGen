@@ -105,8 +105,8 @@ class MultimodalDatasetDownloader:
                     'test': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_test_localized_narratives.jsonl'
                 },
                 'coco': {
-                    'train': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_coco_train.jsonl',
-                    'validation': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_coco_val.jsonl'
+                    'train': 'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives.jsonl',
+                    'validation': 'https://storage.googleapis.com/localized-narratives/annotations/coco_val_localized_narratives.jsonl'
                 }
             },
             'coco': {
