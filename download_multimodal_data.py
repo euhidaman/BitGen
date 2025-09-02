@@ -663,10 +663,58 @@ class MultimodalDatasetDownloader:
         logger.info(f"✅ Downloaded {downloaded_count} Open Images")
 
     def _download_coco_images_by_ids(self, image_ids: List[str], dataset_id: str):
-        """Download COCO images using image IDs"""
+        """Download COCO images using bulk zip download for much faster downloads"""
         logger.info(f"🖼️ Downloading {len(image_ids)} COCO images for {dataset_id}...")
         
-        # COCO images follow pattern: http://images.cocodataset.org/train2017/000000{image_id:012d}.jpg
+        coco_dir = self.data_dir / "coco_images"
+        coco_dir.mkdir(exist_ok=True)
+        
+        # Determine split from dataset_id
+        split = "train2017" if "train" in dataset_id else "val2017"
+        
+        # Try bulk download first - much faster than individual downloads
+        zip_url = f"http://images.cocodataset.org/zips/{split}.zip"
+        zip_file = coco_dir / f"{split}.zip"
+        extract_dir = coco_dir / split
+        
+        if not extract_dir.exists():
+            logger.info(f"🗜️ Attempting bulk download of COCO {split} (~20GB zip file)...")
+            logger.info("This is MUCH faster than individual image downloads!")
+            
+            # Download the entire COCO split as zip
+            if self.download_file(zip_url, zip_file, f"COCO {split} bulk download"):
+                logger.info(f"📦 Extracting COCO {split} zip file...")
+                if self.extract_archive(zip_file, coco_dir):
+                    logger.info(f"✅ Successfully extracted COCO {split}")
+                    # Clean up zip file after extraction
+                    zip_file.unlink()
+                else:
+                    logger.error(f"❌ Failed to extract {zip_file}")
+                    # Fall back to individual downloads
+                    return self._download_coco_images_individually(image_ids, dataset_id)
+            else:
+                logger.warning("❌ Bulk download failed, falling back to individual image downloads...")
+                return self._download_coco_images_individually(image_ids, dataset_id)
+        else:
+            logger.info(f"✅ COCO {split} directory already exists, skipping bulk download")
+        
+        # Count how many of our needed images are present
+        downloaded_count = 0
+        for image_id in image_ids:
+            try:
+                padded_id = f"{int(image_id):012d}"
+                image_file = extract_dir / f"{padded_id}.jpg"
+                if image_file.exists():
+                    downloaded_count += 1
+            except Exception:
+                continue
+                
+        logger.info(f"✅ Found {downloaded_count}/{len(image_ids)} COCO images in bulk download")
+
+    def _download_coco_images_individually(self, image_ids: List[str], dataset_id: str):
+        """Fallback: Download COCO images individually (slower method)"""
+        logger.info(f"🐌 Fallback: Downloading {len(image_ids)} COCO images individually...")
+        
         coco_dir = self.data_dir / "coco_images"
         coco_dir.mkdir(exist_ok=True)
         
@@ -674,7 +722,7 @@ class MultimodalDatasetDownloader:
         split = "train2017" if "train" in dataset_id else "val2017"
         
         downloaded_count = 0
-        for image_id in tqdm(image_ids, desc=f"Downloading COCO {split}"):  # Download ALL images
+        for image_id in tqdm(image_ids, desc=f"Downloading COCO {split}"):
             # COCO image_id needs to be zero-padded to 12 digits
             try:
                 padded_id = f"{int(image_id):012d}"
@@ -960,10 +1008,15 @@ class MultimodalDatasetDownloader:
                                                 if oi_image_path.exists():
                                                     local_image_path = str(oi_image_path)
                                             elif 'coco' in dataset_id.lower():
-                                                # Check if COCO file exists (downloaded to coco_images directory)
-                                                coco_image_path = self.data_dir / "coco_images" / f"{image_id:012d}.jpg"
-                                                if coco_image_path.exists():
-                                                    local_image_path = str(coco_image_path)
+                                                # Check if COCO file exists (look in extracted train2017/val2017 directory first, then fallback)
+                                                split = "train2017" if "train" in dataset_id else "val2017"
+                                                coco_extracted_path = self.data_dir / "coco_images" / split / f"{int(image_id):012d}.jpg"
+                                                coco_flat_path = self.data_dir / "coco_images" / f"{int(image_id):012d}.jpg"
+                                                
+                                                if coco_extracted_path.exists():
+                                                    local_image_path = str(coco_extracted_path)
+                                                elif coco_flat_path.exists():
+                                                    local_image_path = str(coco_flat_path)
                                             elif 'flickr30k' in dataset_id.lower():
                                                 # Check if Flickr30k file exists
                                                 flickr_image_path = self.data_dir / "flickr30k" / f"{image_id}.jpg"
