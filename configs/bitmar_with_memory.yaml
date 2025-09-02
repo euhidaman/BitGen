@@ -100,9 +100,9 @@ data:
   hybrid_training: true # Enable hybrid multimodal + reasoning training
 
   # Vision processing options
-  extract_vision_features: false # Set to true for real DiNOv3 features (slower, but cached!)
-  use_dummy_vision: true # Set to false for real vision features
-  cache_vision_features: true # ENABLED: Cache vision features to disk (avoids recomputation!)
+  extract_vision_features: false # DISABLED: Features pre-cached during download
+  use_dummy_vision: false # Use pre-cached features (real or dummy from download)
+  cache_vision_features: true # ENABLED: Look for pre-cached features from download
   vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m" # DiNOv3 small (faster)
 
   # DataLoader settings

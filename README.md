@@ -1,6 +1,255 @@
-# BitGen: BitNet-Quantized Vision-Language Transformer with FIBER Fusion, Robot Reasoning, and Security
+# BitGen Training Instructions
 
-BitGen (BitMar) is an advanced multimodal transformer that combines BitNet 1.58-bit quantization, FIBER-style backbone fusion, episodic memory, **structured robot reasoning capabilities**, and **comprehensive security** for efficient vision-language understanding, generation, and robot task planning.
+## Prerequisites
+
+1. Install Python 3.8+## Step 4: Start Training
+
+**Important: Ensure vision cache exists before training (from Step 2)**
+
+### With episodic memory:
+
+```powershell
+python train_unified.py --config configs/bitmar_with_memory.yaml
+```
+
+### Without episodic memory:
+
+```powershell
+python train_unified.py --config configs/bitmar_without_memory.yaml
+```
+
+## Step 5: Verify Vision Cache (Optional)
+
+**Check data structure:**
+
+```powershell
+ls ./data/
+# Should show: train2017/, val2017/, annotations/, all_captions.json, vision_features_cache/
+```
+
+**Verify vision cache details:**
+
+```powershell
+ls ./data/vision_features_cache/
+# Should show: all_features.npy, cache_metadata.pkl, and individual .npy/.pkl files
+```
+
+```powershell
+python -c "import numpy as np; print('Vision cache shape:', np.load('./data/vision_features_cache/all_features.npy').shape)"
+# Should show: Vision cache shape: (N, 768) where N is number of images
+```
+
+## Step 6: Monitor TrainingCreate virtual environment:
+
+   ```powershell
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1
+   ```
+
+3. Install packages:
+
+   ```powershell
+   pip install torch torchvision transformers huggingface_hub wandb pyyaml tqdm llm-guard pyod codecarbon matplotlib seaborn pandas psutil
+   ```
+
+## Step 1: Clone Repository
+
+```powershell
+git clone https://github.com/euhidaman/BitGen.git
+cd BitGen
+pip install -r requirements.txt
+```
+
+## Step 2: Download Dataset and Cache Vision Features
+
+**IMPORTANT: Vision features are ONLY created during download, not during training!**
+
+**Benefits:**
+
+- Vision features created once during download, reused forever
+- Training starts immediately without any feature extraction
+- No GPU/model loading required during training
+- Choose dummy (fast) or real DiNOv3 (GPU-accelerated, better quality) features
+
+**Required: Must use `--cache_vision_features` for training to work**
+
+### Option A: Fast Setup (Dummy Features)
+
+```powershell
+# Both datasets with dummy vision features (fast, no GPU required)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
+```
+
+### Option B: High-Quality Setup (Real DiNOv3 Features)
+
+**Prerequisites for real features:**
+- CUDA-capable GPU
+- Additional dependencies: `pip install torch transformers pillow`
+
+```powershell
+# Both datasets with real DiNOv3 features (GPU-accelerated, better quality)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
+
+**GPU Usage:** When using `--real_vision_features`, the script will automatically detect and use your GPU for DiNOv3 feature extraction. You'll see output like:
+- `✅ DiNOv3 model loaded on GPU: [Your GPU Name]`
+- `GPU Memory Available: [X.X] GB`
+
+### Individual Datasets:
+
+```powershell
+# COCO only with vision feature caching
+python download_multimodal_data.py --dataset coco --data_dir ./data --cache_vision_features
+
+# Localized Narratives only with vision feature caching  
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features
+```
+
+## Step 3: Setup Robot Data
+
+Ensure robot selection data exists at: `D:\BabyLM\robot_selection_data\data`
+
+## Step 4: Start Training
+
+### With episodic memory:
+
+```powershell
+python train_unified.py --config configs/bitmar_with_memory.yaml --device cuda:0
+```
+
+### Without episodic memory:
+
+```powershell
+python train_unified.py --config configs/bitmar_without_memory.yaml --device cuda:0
+```
+
+## Step 5: Monitor Training
+
+1. Check Weights & Biases dashboard
+2. Monitor `training.log` file
+3. Check `./security_logs/` directory
+
+## Step 6: Vision Cache Management
+
+**Note: Vision features are now ONLY created during download step**
+
+### Check cache status:
+
+```powershell
+python manage_vision_cache.py --config configs/bitmar_with_memory.yaml info
+```
+
+### Use real vision features (recreate cache with real features):
+
+```powershell
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
+
+### Clear cache:
+
+```powershell
+python manage_vision_cache.py --config configs/bitmar_with_memory.yaml clear
+```
+
+## Step 7: Test Robot Reasoning
+
+```powershell
+python demo_robot_reasoning.py
+```
+
+## Additional Training Options
+
+### Rebuild dataset cache:
+
+```powershell
+python train_unified.py --config configs/bitmar_with_memory.yaml --rebuild_cache
+```
+
+### Rebuild vision cache:
+
+```powershell
+python train_unified.py --config configs/bitmar_with_memory.yaml --rebuild_vision_cache
+```
+
+## Troubleshooting
+
+### Training fails:
+
+1. Check if vision cache exists: `ls ./data/vision_features_cache/all_features.npy`
+2. If missing, run download with caching: `python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features`
+3. Check GPU memory - reduce batch_size in config file
+4. Ensure `./data/all_captions.json` exists
+5. Ensure robot selection data exists
+6. Run `pip install -r requirements.txt`
+
+### Downloads fail:
+
+1. Check internet connection
+2. Retry download command
+3. Check disk space (need ~10GB)
+
+### Vision cache issues:
+
+1. Vision cache missing: Re-run download with `--cache_vision_features`
+2. Check cache files: `ls ./data/vision_features_cache/`
+3. Recreate with real features: Re-run download with `--cache_vision_features --real_vision_features`
+
+## Complete Workflow Summary
+
+### For GPU-Accelerated Training (Recommended)
+
+1. **Install GPU dependencies:**
+   ```powershell
+   pip install torch transformers pillow
+   ```
+
+2. **Download data with real DiNOv3 features:**
+   ```powershell
+   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+   ```
+   - Uses your GPU to extract high-quality vision features
+   - Creates `all_features.npy` with 768-dimensional DiNOv3 embeddings
+   - One-time process, features cached permanently
+
+3. **Train model:**
+   ```powershell
+   python train_unified.py --config configs/bitmar_with_memory.yaml
+   ```
+   - Uses pre-cached features, no GPU needed for vision processing
+   - Training focuses purely on language model optimization
+
+### For Fast Development (CPU-Only)
+
+1. **Download data with dummy features:**
+   ```powershell
+   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
+   ```
+   - Uses dummy 768-dimensional features
+   - No GPU required, very fast
+
+2. **Train model:**
+   ```powershell
+   python train_unified.py --config configs/bitmar_with_memory.yaml
+   ```
+
+**Key Advantage:** Vision feature extraction happens ONLY during download, never during training!
+
+## Expected Directory Structure
+
+```
+BitGen/
+├── data/
+│   ├── all_captions.json
+│   ├── vision_features_cache/
+│   ├── localized_narratives/
+│   └── coco/
+├── checkpoints_with_memory/
+├── checkpoints_without_memory/
+├── logs_with_memory/
+├── logs_without_memory/
+├── security_logs/
+└── training.log
+```
 
 ## Key Features
 
@@ -254,13 +503,13 @@ else:
 
 ### Key Differences in Configurations
 
-| Feature | With Memory | Without Memory |
-|---------|-------------|----------------|
-| Episodic Memory | ✅ 32 slots | ❌ Disabled |
-| Memory Anomaly Detection | ✅ Enabled | ❌ Disabled |
-| Cross-modal Fusion | Enhanced with memory | Direct fusion |
-| Model Size | ~50MB | ~45MB |
-| Target Similarity | 0.75 | 0.70 |
+| Feature                  | With Memory          | Without Memory |
+| ------------------------ | -------------------- | -------------- |
+| Episodic Memory          | ✅ 32 slots           | ❌ Disabled     |
+| Memory Anomaly Detection | ✅ Enabled            | ❌ Disabled     |
+| Cross-modal Fusion       | Enhanced with memory | Direct fusion  |
+| Model Size               | ~50MB                | ~45MB          |
+| Target Similarity        | 0.75                 | 0.70           |
 
 ## Usage Examples
 
