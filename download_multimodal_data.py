@@ -55,7 +55,7 @@ class MultimodalDatasetDownloader:
                     self.Image = Image
                     self.io = io
 
-                    logger.info("Will extract real DiNOv3 features")
+                    logger.info("Will extract real DiNOv2 features")
                     self._load_vision_model()
                 except ImportError as e:
                     logger.error(
@@ -104,24 +104,24 @@ class MultimodalDatasetDownloader:
         }
 
     def _load_vision_model(self):
-        """Load DiNOv3 vision model for real feature extraction"""
+        """Load DiNOv2 vision model for real feature extraction"""
         try:
-            logger.info("Loading DiNOv3 vision model...")
-            self.vision_model = self.Dinov2Model.from_pretrained(
-                "facebook/dinov3-vits16-pretrain-lvd1689m")
-            self.vision_processor = self.AutoImageProcessor.from_pretrained(
-                "facebook/dinov3-vits16-pretrain-lvd1689m")
+            logger.info("Loading DiNOv2 vision model...")
+            # Use a working DiNOv2 model that exists and is compatible
+            model_name = "facebook/dinov2-base"
+            self.vision_model = self.Dinov2Model.from_pretrained(model_name)
+            self.vision_processor = self.AutoImageProcessor.from_pretrained(model_name)
 
             # Check for GPU availability and move model
             if self.torch.cuda.is_available():
                 device_name = self.torch.cuda.get_device_name(0)
                 self.vision_model = self.vision_model.cuda()
-                logger.info(f"✅ DiNOv3 model loaded on GPU: {device_name}")
+                logger.info(f"✅ DiNOv2 model loaded on GPU: {device_name}")
                 logger.info(
                     f"   GPU Memory Available: {self.torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
             else:
                 logger.warning(
-                    "⚠️  No GPU detected, using CPU for DiNOv3 feature extraction (will be slower)")
+                    "⚠️  No GPU detected, using CPU for DiNOv2 feature extraction (will be slower)")
 
             self.vision_model.eval()
 
@@ -163,7 +163,7 @@ class MultimodalDatasetDownloader:
                             image_url)
                         features_array = features.cpu().numpy()
                     else:
-                        # Generate dummy features (768-dimensional like DiNOv3) using numpy
+                        # Generate dummy features (768-dimensional like DiNOv2) using numpy
                         features_array = np.random.randn(
                             768).astype(np.float32)
 
@@ -173,7 +173,7 @@ class MultimodalDatasetDownloader:
                     metadata = {
                         'image_url': image_url,
                         'dataset_name': dataset_name,
-                        'feature_type': 'real_dinov3' if self.use_real_vision else 'dummy',
+                        'feature_type': 'real_dinov2' if self.use_real_vision else 'dummy',
                         'feature_shape': features_array.shape
                     }
 
@@ -193,13 +193,13 @@ class MultimodalDatasetDownloader:
         return cached_count
 
     def _extract_real_vision_features(self, image_url: str):
-        """Extract real DiNOv3 features from image URL using GPU if available"""
+        """Extract real DiNOv2 features from image URL using GPU if available"""
         try:
             # Download image
             response = requests.get(image_url, timeout=10)
             response.raise_for_status()
 
-            # Process with DiNOv3
+            # Process with DiNOv2
             image = self.Image.open(self.io.BytesIO(
                 response.content)).convert('RGB')
             inputs = self.vision_processor(images=image, return_tensors="pt")
@@ -661,7 +661,7 @@ def main():
     vision_group.add_argument("--cache_vision_features", action="store_true",
                               help="Enable vision features caching during download")
     vision_group.add_argument("--real_vision_features", action="store_true",
-                              help="Extract real DiNOv3 features (slower but better quality). Default uses dummy features")
+                              help="Extract real DiNOv2 features (slower but better quality). Default uses dummy features")
 
     args = parser.parse_args()
 
@@ -680,7 +680,7 @@ def main():
         logger.info(
             "  --cache_vision_features           : Pre-cache vision features during download")
         logger.info(
-            "  --real_vision_features            : Use real DiNOv3 features (requires GPU, slower)")
+            "  --real_vision_features            : Use real DiNOv2 features (requires GPU, slower)")
         parser.print_help()
         return 0
 
@@ -721,7 +721,7 @@ def main():
         if args.cache_vision_features:
             if args.real_vision_features:
                 logger.info(
-                    "🔄 Will extract and cache REAL DiNOv3 vision features (slower, better quality)")
+                    "🔄 Will extract and cache REAL DiNOv2 vision features (slower, better quality)")
                 logger.info(
                     "   ⚠️  This requires GPU and internet connection for each image")
             else:

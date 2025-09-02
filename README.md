@@ -1,6 +1,10 @@
 # BitGen Training Instructions
 
-Follow these steps in order to set up and train BitGen with GPU-accelerated DiNOv3 vision features.
+Follow these steps in order to set up and train BitGen with GPU-accelerat3. **For DiNOv2 model loading**: Ensure you have internet connection to download from HuggingFace
+4. **Model identifier**: Uses `facebook/dinov2-vits14` (working DiNOv2 model)
+5. Retry download command
+6. Check disk space (need ~10GB)
+7. For authentication issues: `huggingface-cli login`NOv2 vision features.
 
 ## Step 1: Prerequisites
 
@@ -21,7 +25,7 @@ cd BitGen
 # Install basic requirements
 pip install -r requirements.txt
 
-# For GPU-accelerated DiNOv3 vision features (recommended):
+# For GPU-accelerated DiNOv2 vision features (recommended):
 pip install torch transformers pillow
 
 # Optional: Login to HuggingFace (for private models or better download speed)
@@ -32,10 +36,10 @@ huggingface-cli login
 
 **IMPORTANT:** Vision features are ONLY created during download, not during training!
 
-### Option A: With Real DiNOv3 Features (Recommended)
+### Option A: With Real DiNOv2 Features (Recommended)
 
 ```powershell
-# Download both datasets with GPU-accelerated DiNOv3 features
+# Download both datasets with GPU-accelerated DiNOv2 features
 python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
 ```
 
