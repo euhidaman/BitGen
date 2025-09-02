@@ -20,6 +20,13 @@ import numpy as np
 import hashlib
 import pickle
 
+# HuggingFace datasets import
+try:
+    from datasets import load_dataset
+    HF_DATASETS_AVAILABLE = True
+except ImportError:
+    HF_DATASETS_AVAILABLE = False
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,9 +35,21 @@ logger = logging.getLogger(__name__)
 class MultimodalDatasetDownloader:
     """Download and prepare Localized Narratives and COCO datasets"""
 
-    def __init__(self, data_dir: str = "./data", cache_vision_features: bool = False, use_real_vision: bool = False):
+    def __init__(self, data_dir: str = "./data", cache_vision_features: bool = False, use_real_vision: bool = False, 
+                 use_hf_localized_narratives: bool = True, hf_dataset_config: str = "open_images"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
+
+        # HuggingFace options
+        self.use_hf_localized_narratives = use_hf_localized_narratives and HF_DATASETS_AVAILABLE
+        self.hf_dataset_config = hf_dataset_config
+        
+        if self.use_hf_localized_narratives:
+            logger.info(f"🤗 Will use HuggingFace LocalizedNarratives (config: {hf_dataset_config})")
+        else:
+            if not HF_DATASETS_AVAILABLE:
+                logger.warning("⚠️ HuggingFace datasets not available - install with: pip install datasets")
+            logger.info("📁 Will use local/downloaded LocalizedNarratives")
 
         # Vision caching options
         self.cache_vision_features = cache_vision_features
@@ -227,6 +246,84 @@ class MultimodalDatasetDownloader:
             # Return dummy features as fallback
             return self.torch.randn(768, dtype=self.torch.float32)
 
+    def _cache_hf_vision_features(self, images: List, dataset_name: str) -> int:
+        """Cache vision features for HuggingFace PIL images"""
+        if not self.cache_vision_features:
+            return 0
+
+        logger.info(f"Caching vision features for {len(images)} HuggingFace images from {dataset_name}")
+
+        # Save all features to a single file for HuggingFace data
+        all_features = []
+
+        with tqdm(total=len(images), desc=f"Caching {dataset_name} features") as pbar:
+            for i, image in enumerate(images):
+                try:
+                    if self.use_real_vision:
+                        # Extract real features from PIL image
+                        features = self._extract_real_vision_features_from_pil(image)
+                        features_array = features.cpu().numpy()
+                    else:
+                        # Generate dummy features (768-dimensional)
+                        features_array = np.random.randn(768).astype(np.float32)
+
+                    all_features.append(features_array)
+
+                except Exception as e:
+                    logger.warning(f"Failed to cache features for image {i}: {e}")
+                    # Add dummy features as fallback
+                    all_features.append(np.random.randn(768).astype(np.float32))
+
+                pbar.update(1)
+
+        # Save all features to cache
+        try:
+            all_features_array = np.array(all_features)
+            cache_file = self.vision_cache_dir / "all_features.npy"
+            metadata_file = self.vision_cache_dir / "cache_metadata.pkl"
+
+            np.save(cache_file, all_features_array)
+
+            metadata = {
+                'dataset_name': dataset_name,
+                'num_samples': len(all_features),
+                'feature_type': 'real_dinov2' if self.use_real_vision else 'dummy',
+                'feature_shape': all_features_array[0].shape,
+                'source': 'huggingface'
+            }
+
+            with open(metadata_file, 'wb') as f:
+                pickle.dump(metadata, f)
+
+            logger.info(f"✅ Cached {len(all_features)} HuggingFace vision features to {cache_file}")
+            return len(all_features)
+
+        except Exception as e:
+            logger.error(f"Failed to save HuggingFace vision features cache: {e}")
+            return 0
+
+    def _extract_real_vision_features_from_pil(self, image):
+        """Extract real DiNOv2 features from PIL image"""
+        try:
+            # Process with DiNOv2
+            inputs = self.vision_processor(images=image, return_tensors="pt")
+
+            # Move inputs to GPU if available
+            if self.torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+
+            # Extract features using GPU
+            with self.torch.no_grad():
+                outputs = self.vision_model(**inputs)
+                features = outputs.last_hidden_state.mean(dim=1).squeeze()  # Global average pooling
+
+            return features.cpu()
+
+        except Exception as e:
+            logger.error(f"Failed to extract features from PIL image: {e}")
+            # Return dummy features as fallback
+            return self.torch.randn(768)
+
     def download_file(self, url: str, filepath: Path, desc: str = None) -> bool:
         """Download a file with progress bar"""
         try:
@@ -276,7 +373,73 @@ class MultimodalDatasetDownloader:
             return False
 
     def download_localized_narratives(self) -> Dict[str, int]:
-        """Download Localized Narratives annotations"""
+        """Download Localized Narratives annotations or load from HuggingFace"""
+        if self.use_hf_localized_narratives:
+            return self._load_hf_localized_narratives()
+        else:
+            return self._download_local_localized_narratives()
+    
+    def _load_hf_localized_narratives(self) -> Dict[str, int]:
+        """Load LocalizedNarratives from HuggingFace and cache vision features"""
+        logger.info(f"🤗 Loading LocalizedNarratives from HuggingFace (config: {self.hf_dataset_config})...")
+        
+        try:
+            # Load the dataset from HuggingFace
+            dataset = load_dataset("HuggingFaceM4/LocalizedNarratives", self.hf_dataset_config)
+            
+            total_samples = 0
+            all_images = []
+            
+            # Process train split
+            if 'train' in dataset:
+                train_data = dataset['train']
+                max_samples = min(len(train_data), 15000)  # Limit for faster processing
+                
+                logger.info(f"📖 Processing {max_samples:,} train samples...")
+                
+                for i in tqdm(range(max_samples), desc="Loading train samples"):
+                    try:
+                        sample = train_data[i]
+                        image = sample.get('image')
+                        if image is not None:
+                            all_images.append(image)
+                            total_samples += 1
+                    except Exception as e:
+                        logger.debug(f"Error processing train sample {i}: {e}")
+                        continue
+            
+            # Process validation split if available
+            if 'validation' in dataset:
+                val_data = dataset['validation']
+                max_val_samples = min(len(val_data), 5000)
+                
+                logger.info(f"📖 Processing {max_val_samples:,} validation samples...")
+                
+                for i in tqdm(range(max_val_samples), desc="Loading validation samples"):
+                    try:
+                        sample = val_data[i]
+                        image = sample.get('image')
+                        if image is not None:
+                            all_images.append(image)
+                            total_samples += 1
+                    except Exception as e:
+                        logger.debug(f"Error processing validation sample {i}: {e}")
+                        continue
+            
+            # Cache vision features if requested
+            if self.cache_vision_features and all_images:
+                self._cache_hf_vision_features(all_images, f"localized_narratives_{self.hf_dataset_config}")
+            
+            logger.info(f"✅ HuggingFace LocalizedNarratives: {total_samples:,} samples loaded")
+            return {"hf_localized_narratives": total_samples}
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load HuggingFace LocalizedNarratives: {e}")
+            logger.info("🔄 Falling back to local download...")
+            return self._download_local_localized_narratives()
+    
+    def _download_local_localized_narratives(self) -> Dict[str, int]:
+        """Download Localized Narratives from original sources"""
         logger.info("📥 Downloading Localized Narratives...")
 
         ln_dir = self.data_dir / "localized_narratives"
@@ -654,6 +817,17 @@ def main():
         "Dataset Selection", "Choose which datasets to download")
     dataset_group.add_argument("--dataset", type=str, choices=['both', 'coco', 'localized_narratives'],
                                help="Which dataset(s) to download: 'both' (~1.78M samples), 'coco' (~615K samples), 'localized_narratives' (~1.16M samples)")
+    
+    # HuggingFace options
+    hf_group = parser.add_argument_group(
+        "HuggingFace Options", "Use HuggingFace LocalizedNarratives instead of downloading")
+    hf_group.add_argument("--use_hf_localized_narratives", action="store_true", default=True,
+                          help="Use HuggingFace LocalizedNarratives dataset (default: True)")
+    hf_group.add_argument("--no_hf_localized_narratives", action="store_true",
+                          help="Disable HuggingFace and download original LocalizedNarratives")
+    hf_group.add_argument("--hf_dataset_config", type=str, default="open_images",
+                          choices=["open_images", "ait", "flickr", "coco"],
+                          help="HuggingFace LocalizedNarratives config (default: open_images)")
 
     # Vision feature caching arguments
     vision_group = parser.add_argument_group(
@@ -676,6 +850,14 @@ def main():
         logger.info(
             "  --dataset localized_narratives    : ~1.16M samples (medium)")
         logger.info("")
+        logger.info("HuggingFace options (recommended):")
+        logger.info(
+            "  --use_hf_localized_narratives     : Use HuggingFace dataset (default: True)")
+        logger.info(
+            "  --no_hf_localized_narratives      : Download original LocalizedNarratives")
+        logger.info(
+            "  --hf_dataset_config open_images   : Use Open Images config (default)")
+        logger.info("")
         logger.info("Optional vision feature caching:")
         logger.info(
             "  --cache_vision_features           : Pre-cache vision features during download")
@@ -685,11 +867,16 @@ def main():
         return 0
 
     try:
+        # Handle HuggingFace options
+        use_hf = args.use_hf_localized_narratives and not args.no_hf_localized_narratives
+        
         # Create downloader with vision caching options
         downloader = MultimodalDatasetDownloader(
             data_dir=args.data_dir,
             cache_vision_features=args.cache_vision_features,
-            use_real_vision=args.real_vision_features
+            use_real_vision=args.real_vision_features,
+            use_hf_localized_narratives=use_hf,
+            hf_dataset_config=args.hf_dataset_config
         )
 
         # Determine which datasets to download
