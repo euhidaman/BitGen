@@ -41,7 +41,7 @@ langchain-experimental
 
 # Anomaly detection
 pyod
-isolation-forest
+IsolationForest
 scikit-learn
 
 # Security monitoring

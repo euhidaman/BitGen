@@ -58,8 +58,10 @@ class LocalizedNarrativesCOCODataset(Dataset):
         self.cache_key = hashlib.md5(
             f"{vision_model}_{extract_vision_features}_{use_dummy_vision}".encode()
         ).hexdigest()[:8]
-        self.training_cache_file = self.cache_dir / f"features_{self.cache_key}.npy"
-        self.training_metadata_file = self.cache_dir / f"metadata_{self.cache_key}.pkl"
+        self.training_cache_file = self.cache_dir / \
+            f"features_{self.cache_key}.npy"
+        self.training_metadata_file = self.cache_dir / \
+            f"metadata_{self.cache_key}.pkl"
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -67,11 +69,12 @@ class LocalizedNarrativesCOCODataset(Dataset):
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Vision model initialization - only if we're forced to rebuild and no download cache exists
-        if (force_rebuild_cache and not self.download_cache_file.exists() and 
-            extract_vision_features and not use_dummy_vision):
+        if (force_rebuild_cache and not self.download_cache_file.exists() and
+                extract_vision_features and not use_dummy_vision):
             try:
                 logger.info(f"Loading vision model: {vision_model}")
-                self.vision_processor = AutoImageProcessor.from_pretrained(vision_model)
+                self.vision_processor = AutoImageProcessor.from_pretrained(
+                    vision_model)
                 self.vision_model = AutoModel.from_pretrained(vision_model)
                 self.vision_model.eval()
                 logger.info("✅ Vision model loaded successfully")
@@ -133,59 +136,70 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
     def _load_or_create_vision_features(self):
         """Load cached vision features - prioritize download cache, never create during training"""
-        
+
         # Priority 1: Look for download cache (created by download_multimodal_data.py)
         if self.download_cache_file.exists() and self.download_metadata_file.exists():
             try:
-                logger.info(f"🚀 Loading pre-cached vision features from download step: {self.download_cache_file}")
-                
+                logger.info(
+                    f"🚀 Loading pre-cached vision features from download step: {self.download_cache_file}")
+
                 # Load metadata to verify compatibility
                 with open(self.download_metadata_file, 'rb') as f:
                     metadata = pickle.load(f)
-                
+
                 # Load cached features
                 self.all_features = np.load(self.download_cache_file)
-                logger.info(f"✅ Loaded {len(self.all_features):,} pre-cached vision features from download")
-                logger.info(f"   Feature type: {metadata.get('feature_type', 'unknown')}")
-                logger.info(f"   Feature shape per sample: {metadata.get('feature_shape', 'unknown')}")
+                logger.info(
+                    f"✅ Loaded {len(self.all_features):,} pre-cached vision features from download")
+                logger.info(
+                    f"   Feature type: {metadata.get('feature_type', 'unknown')}")
+                logger.info(
+                    f"   Feature shape per sample: {metadata.get('feature_shape', 'unknown')}")
                 return
-                
+
             except Exception as e:
                 logger.warning(f"Failed to load download cache: {e}")
-        
+
         # Priority 2: Look for training cache (legacy)
-        if (self.cache_vision_features and not self.force_rebuild_cache and 
-            self.training_cache_file.exists() and self.training_metadata_file.exists()):
+        if (self.cache_vision_features and not self.force_rebuild_cache and
+                self.training_cache_file.exists() and self.training_metadata_file.exists()):
             try:
-                logger.info(f"🚀 Loading cached vision features from training cache: {self.training_cache_file}")
-                
+                logger.info(
+                    f"🚀 Loading cached vision features from training cache: {self.training_cache_file}")
+
                 # Load metadata to verify compatibility
                 with open(self.training_metadata_file, 'rb') as f:
                     metadata = pickle.load(f)
-                
+
                 # Verify cache is compatible
                 if (metadata['num_samples'] == len(self.all_captions) and
                     metadata['use_dummy_vision'] == self.use_dummy_vision and
-                    metadata['extract_vision_features'] == self.extract_vision_features):
-                    
+                        metadata['extract_vision_features'] == self.extract_vision_features):
+
                     # Load cached features
                     self.all_features = np.load(self.training_cache_file)
-                    logger.info(f"✅ Loaded {len(self.all_features):,} cached vision features from training cache")
+                    logger.info(
+                        f"✅ Loaded {len(self.all_features):,} cached vision features from training cache")
                     return
                 else:
                     logger.info("⚠️  Training cache metadata mismatch")
             except Exception as e:
                 logger.warning(f"Failed to load training cache: {e}")
-        
+
         # Priority 3: Error - no cache available and we don't create features during training
         logger.error("❌ No pre-cached vision features found!")
-        logger.error("   Please run download script with --cache_vision_features first:")
-        logger.error("   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features")
-        logger.error("   Or use the manage_vision_cache.py script to create cache")
-        
+        logger.error(
+            "   Please run download script with --cache_vision_features first:")
+        logger.error(
+            "   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features")
+        logger.error(
+            "   Or use the manage_vision_cache.py script to create cache")
+
         # Create dummy features as absolute fallback to prevent crashes
-        logger.warning("⚠️  Creating dummy features as fallback - training may not work properly")
-        self.all_features = np.random.randn(len(self.all_captions), 768).astype(np.float32)
+        logger.warning(
+            "⚠️  Creating dummy features as fallback - training may not work properly")
+        self.all_features = np.random.randn(
+            len(self.all_captions), 768).astype(np.float32)
 
     def _save_vision_features_cache(self):
         """Save vision features to disk cache"""

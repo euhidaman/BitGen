@@ -106,9 +106,11 @@ class MultimodalDatasetDownloader:
                 device_name = self.torch.cuda.get_device_name(0)
                 self.vision_model = self.vision_model.cuda()
                 logger.info(f"✅ DiNOv3 model loaded on GPU: {device_name}")
-                logger.info(f"   GPU Memory Available: {self.torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+                logger.info(
+                    f"   GPU Memory Available: {self.torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
             else:
-                logger.warning("⚠️  No GPU detected, using CPU for DiNOv3 feature extraction (will be slower)")
+                logger.warning(
+                    "⚠️  No GPU detected, using CPU for DiNOv3 feature extraction (will be slower)")
 
             self.vision_model.eval()
 
@@ -469,8 +471,9 @@ class MultimodalDatasetDownloader:
 
         if self.cache_vision_features:
             unique_urls = len(set(all_image_urls))
-            logger.info(f"✅ Vision features processed for {unique_urls:,} unique images")
-            
+            logger.info(
+                f"✅ Vision features processed for {unique_urls:,} unique images")
+
             # Create unified cache file for training
             self._create_unified_vision_cache(all_image_urls)
 
@@ -479,11 +482,11 @@ class MultimodalDatasetDownloader:
     def _create_unified_vision_cache(self, all_image_urls: List[str]):
         """Create unified vision cache file that training can use directly"""
         logger.info("🔄 Creating unified vision cache for training...")
-        
+
         # Collect all cached features in the same order as captions
         unified_features = []
         feature_type = 'dummy'  # Default
-        
+
         for i, image_url in enumerate(all_image_urls):
             if image_url is None:
                 # No image URL available, use dummy
@@ -491,44 +494,47 @@ class MultimodalDatasetDownloader:
             else:
                 # Look for cached feature for this image
                 found_feature = False
-                
+
                 # Try different dataset cache keys
                 for dataset_name in ['coco', 'localized_narratives_coco', 'localized_narratives_open_images']:
-                    cache_key = self._generate_cache_key(image_url, dataset_name)
+                    cache_key = self._generate_cache_key(
+                        image_url, dataset_name)
                     cache_file = self.vision_cache_dir / f"{cache_key}.npy"
                     metadata_file = self.vision_cache_dir / f"{cache_key}.pkl"
-                    
+
                     if cache_file.exists():
                         try:
                             features = np.load(cache_file)
-                            
+
                             # Load metadata to get feature type
                             if metadata_file.exists():
                                 with open(metadata_file, 'rb') as f:
                                     metadata = pickle.load(f)
-                                feature_type = metadata.get('feature_type', 'unknown')
-                            
+                                feature_type = metadata.get(
+                                    'feature_type', 'unknown')
+
                             found_feature = True
                             break
                         except Exception as e:
-                            logger.debug(f"Failed to load cache {cache_file}: {e}")
+                            logger.debug(
+                                f"Failed to load cache {cache_file}: {e}")
                             continue
-                
+
                 if not found_feature:
                     # No cached feature found, create dummy
                     features = np.random.randn(768).astype(np.float32)
-            
+
             unified_features.append(features)
-        
+
         # Convert to numpy array
         unified_features_array = np.array(unified_features)
-        
+
         # Save unified cache
         unified_cache_file = self.vision_cache_dir / "all_features.npy"
         unified_metadata_file = self.vision_cache_dir / "cache_metadata.pkl"
-        
+
         np.save(unified_cache_file, unified_features_array)
-        
+
         # Save metadata
         metadata = {
             'num_samples': len(unified_features_array),
@@ -537,11 +543,12 @@ class MultimodalDatasetDownloader:
             'created_by': 'download_script',
             'use_real_vision': self.use_real_vision
         }
-        
+
         with open(unified_metadata_file, 'wb') as f:
             pickle.dump(metadata, f)
-        
-        logger.info(f"✅ Created unified vision cache: {len(unified_features_array):,} features")
+
+        logger.info(
+            f"✅ Created unified vision cache: {len(unified_features_array):,} features")
         logger.info(f"   Saved to: {unified_cache_file}")
         logger.info(f"   Feature type: {feature_type}")
 
