@@ -11,6 +11,18 @@ model:
   reasoning_format_validation: true # Validate XML reasoning format
   enable_multi_robot_coordination: true # Support multi-robot task decomposition
 
+  # GRPO Configuration (Group Relative Policy Optimization) for robot reasoning
+  enable_grpo_training: true # Enable policy optimization for robot selection
+  grpo_num_generations: 6 # Generate 6 completions per prompt for policy optimization
+  grpo_alpha: 0.01 # GRPO regularization strength
+  grpo_temperature: 0.8 # Generation temperature for policy sampling
+  grpo_reward_weights:
+    correctness: 0.30 # Robot selection correctness
+    validity: 0.20 # Robot choice validity  
+    format: 0.20 # XML format compliance
+    reasoning_quality: 0.15 # Quality of reasoning process
+    top_n_efficiency: 0.15 # Efficiency of robot number selection
+
   # Episodic Memory Control for Ablation Study
   use_episodic_memory: false # DISABLED for this config (ablation study)
 

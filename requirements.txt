@@ -6,6 +6,12 @@ transformers
 # Hugging Face ecosystem
 huggingface_hub
 
+# TRL for GRPO training (Group Relative Policy Optimization)
+trl
+accelerate
+datasets
+peft
+
 # Core scientific computing
 numpy
 scipy

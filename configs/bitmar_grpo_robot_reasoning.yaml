@@ -1,0 +1,197 @@
+# GRPO Robot Reasoning Training Configuration for BitGen
+# Implements Group Relative Policy Optimization for better robot selection reasoning
+
+# Model Configuration
+model:
+  base_model: "microsoft/DialoGPT-medium"  # Base model for GRPO training
+  max_position_embeddings: 1024
+  use_cache: true
+  
+  # Robot Reasoning Specific
+  enable_robot_reasoning: true
+  robot_data_dir: "D:/BabyLM/robot_selection_data/data"
+  num_robot_types: 5  # Drone, Underwater Robot, Humanoid, Robot with Wheels, Robot with Legs
+
+# Data Configuration
+data:
+  robot_data_dir: "D:/BabyLM/robot_selection_data/data"
+  robot_data_ratio: 1.0  # Use 100% robot data for GRPO training
+  max_seq_length: 512
+  include_multimodal_data: false  # Focus purely on robot reasoning
+  
+  # GRPO Specific Data Settings
+  max_prompt_length: 256
+  max_completion_length: 300
+  num_generations: 6  # Generate multiple completions for ranking
+  
+# GRPO Training Configuration
+training:
+  # Core GRPO Parameters
+  learning_rate: 5e-6
+  adam_beta1: 0.9
+  adam_beta2: 0.99
+  weight_decay: 0.1
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  optimizer: "adamw_torch"
+  
+  # Training Steps and Batching
+  max_steps: 1000
+  batch_size: 1  # Small batch size for GRPO
+  gradient_accumulation_steps: 8  # Effective batch size = 8
+  max_length: 512
+  
+  # GRPO Specific
+  num_generations: 6  # Multiple generations per sample for ranking
+  max_prompt_length: 256
+  max_completion_length: 300
+  max_grad_norm: 0.1
+  
+  # Logging and Evaluation
+  logging_steps: 10
+  eval_steps: 50
+  save_steps: 100
+  
+  # Policy Optimization Settings
+  temperature: 0.7
+  top_p: 0.9
+  do_sample: true
+  
+  # Reward Function Weights (for combining multiple rewards)
+  reward_weights:
+    xmlcount_reward: 0.15           # XML structure correctness
+    soft_format_reward: 0.15        # Basic format validation  
+    strict_format_reward: 0.15      # Strict format validation
+    robot_validity_reward: 0.20     # Valid robot selection
+    robot_correctness_reward: 0.25  # Correct robot selection (highest weight)
+    reasoning_quality_reward: 0.10  # Quality of reasoning content
+    top_n_selection_reward: 0.20    # Top-N selection efficiency (NEW)
+
+# Reward Function Configuration
+reward_functions:
+  # Enable specific reward functions
+  enable_correctness_reward: true
+  enable_validity_reward: true
+  enable_format_rewards: true
+  enable_reasoning_quality: true
+  enable_top_n_selection: true  # NEW: Top-N robot selection reward
+  
+  # Top-N Selection Parameters
+  max_robots_per_task: 3  # Maximum robots to select per task
+  diversity_bonus: 0.2    # Bonus for selecting diverse robot types
+  efficiency_penalty: 0.2 # Penalty for selecting too many robots
+  
+  # Format Validation Parameters
+  strict_xml_format: true
+  require_reasoning_section: true
+  require_answer_section: true
+  
+  # Correctness Reward Parameters
+  perfect_match_reward: 2.0
+  partial_match_scaling: true
+  overlap_threshold: 0.5
+
+# Output Configuration  
+output:
+  checkpoint_dir: "./checkpoints/grpo_robot_reasoning"
+  log_dir: "./logs/grpo_robot_reasoning"
+  reasoning_dir: "./outputs/grpo_robot_reasoning"
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "rewards/mean"
+  greater_is_better: true
+
+# Weights & Biases Configuration
+wandb:
+  project: "bitgen-grpo-robot-reasoning"
+  entity: null  # Set your wandb entity here
+  log_every_n_steps: 10
+  log_model: true
+  tags:
+    - "grpo"
+    - "robot-reasoning" 
+    - "policy-optimization"
+    - "deepseek-r1-style"
+    - "bitgen"
+    - "top-n-selection"
+
+# Robot Types Configuration
+robots:
+  available_types:
+    - "Drone"
+    - "Underwater Robot"
+    - "Humanoid" 
+    - "Robot with Wheels"
+    - "Robot with Legs"
+    
+  # Robot Capability Profiles (for reward computation)
+  capabilities:
+    "Drone":
+      primary: ["aerial_navigation", "surveillance", "lightweight_transport"]
+      environments: ["outdoor", "elevated", "aerial"]
+      limitations: ["payload_capacity", "weather_dependent"]
+      
+    "Underwater Robot":
+      primary: ["underwater_navigation", "marine_operations", "deep_sea_exploration"]
+      environments: ["underwater", "marine", "aquatic"]
+      limitations: ["surface_operations", "land_mobility"]
+      
+    "Humanoid":
+      primary: ["manipulation", "human_interaction", "complex_tasks", "tool_use"]
+      environments: ["indoor", "human_spaces", "structured"]
+      limitations: ["rough_terrain", "speed", "payload"]
+      
+    "Robot with Wheels":
+      primary: ["fast_movement", "efficient_transport", "flat_surface_navigation"]
+      environments: ["flat_surfaces", "roads", "warehouses", "indoor"]
+      limitations: ["stairs", "rough_terrain", "obstacles"]
+      
+    "Robot with Legs":
+      primary: ["rough_terrain", "stability", "climbing", "balance"]
+      environments: ["uneven_surfaces", "outdoor", "stairs", "obstacles"]
+      limitations: ["speed", "energy_efficiency", "maintenance"]
+
+# Testing Configuration
+testing:
+  num_test_examples: 15
+  test_tasks:
+    - "Inspect underwater pipelines for corrosion and damage"
+    - "Deliver medical supplies through a crowded urban area" 
+    - "Survey agricultural fields for crop health assessment"
+    - "Navigate rough mountain terrain to collect geological samples"
+    - "Perform precision assembly tasks in a manufacturing facility"
+    - "Monitor wildlife in a forest environment without disturbance"
+    - "Clean windows on a 50-story skyscraper"
+    - "Explore and map underground cave systems"
+    - "Provide assistance to elderly patients in a hospital"
+    - "Transport heavy equipment across a desert"
+    - "Inspect nuclear reactor components in hazardous environment"
+    - "Rescue operations in collapsed building scenarios"
+    - "Precision welding in aerospace manufacturing"
+    - "Agricultural harvesting in muddy field conditions"
+    - "Crowd control and security patrol in urban areas"
+    
+  # Test Evaluation Metrics
+  metrics:
+    - "format_validity"
+    - "robot_selection_accuracy" 
+    - "reasoning_quality_score"
+    - "top_n_efficiency"
+    - "diversity_score"
+    - "response_length"
+
+# Inference Configuration  
+inference:
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+  do_sample: true
+  max_new_tokens: 300
+  repetition_penalty: 1.1
+  length_penalty: 1.0
+  
+  # Post-processing
+  extract_reasoning: true
+  extract_selected_robots: true
+  validate_format: true
+  rank_by_confidence: true
