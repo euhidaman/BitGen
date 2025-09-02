@@ -157,12 +157,19 @@ class MultimodalDatasetDownloader:
         if not self.cache_vision_features:
             return 0
 
-        logger.info(f"Caching vision features for {len(image_sources)} images from {dataset_name}")
+        # Filter out None values (images not found locally)
+        valid_image_sources = [src for src in image_sources if src is not None]
+        
+        if not valid_image_sources:
+            logger.warning(f"No valid image sources found for {dataset_name}")
+            return 0
+
+        logger.info(f"Caching vision features for {len(valid_image_sources)} images from {dataset_name}")
 
         cached_count = 0
 
-        with tqdm(total=len(image_sources), desc=f"Caching {dataset_name} features") as pbar:
-            for image_source in image_sources:
+        with tqdm(total=len(valid_image_sources), desc=f"Caching {dataset_name} features") as pbar:
+            for image_source in valid_image_sources:
                 cache_key = self._generate_cache_key(str(image_source), dataset_name)
                 cache_file = self.vision_cache_dir / f"{cache_key}.npy"
                 metadata_file = self.vision_cache_dir / f"{cache_key}.pkl"
@@ -175,12 +182,15 @@ class MultimodalDatasetDownloader:
                 try:
                     if self.use_real_vision:
                         # Extract real features
-                        if os.path.exists(str(image_source)):
-                            # Local file
+                        if image_source and os.path.exists(str(image_source)):
+                            # Local file - use file extraction method
                             features = self._extract_real_vision_features_from_file(image_source)
-                        else:
+                        elif image_source and image_source.startswith('http'):
                             # URL - but handle 403 gracefully
                             features = self._extract_real_vision_features(image_source)
+                        else:
+                            # No valid source, use dummy
+                            features = self.torch.randn(768)
                         features_array = features.cpu().numpy()
                     else:
                         # Generate dummy features (768-dimensional like DiNOv2) using numpy
@@ -511,6 +521,13 @@ class MultimodalDatasetDownloader:
                                     try:
                                         data = json.loads(line)
                                         samples += 1
+                                        
+                                        # Debug: Log dataset_id for first few samples
+                                        if samples <= 3:
+                                            logger.info(f"🔍 Debug sample {samples} from {filename}:")
+                                            logger.info(f"  dataset_id: '{data.get('dataset_id', 'MISSING')}'")
+                                            logger.info(f"  image_id: '{data.get('image_id', 'MISSING')}'")
+                                        
                                         # Store image info for later downloading
                                         all_image_info.append({
                                             'dataset_id': data.get('dataset_id', ''),
@@ -547,10 +564,16 @@ class MultimodalDatasetDownloader:
                 datasets_to_download[dataset_id] = []
             datasets_to_download[dataset_id].append(info['image_id'])
         
+        # Debug: Show what dataset_ids we found
+        logger.info(f"🔍 Debug: Found dataset_ids: {list(datasets_to_download.keys())}")
+        for dataset_id, image_ids in datasets_to_download.items():
+            logger.info(f"🔍 Debug: {dataset_id}: {len(image_ids):,} images")
+        
         for dataset_id, image_ids in datasets_to_download.items():
             logger.info(f"📂 Downloading {len(image_ids):,} images from {dataset_id}")
             
-            if 'open_images' in dataset_id.lower():
+            if 'open_images' in dataset_id.lower() or dataset_id == '':
+                # Handle both explicit open_images and empty dataset_id (assume open_images)
                 self._download_open_images_by_ids(image_ids)
             elif 'coco' in dataset_id.lower():
                 self._download_coco_images_by_ids(image_ids, dataset_id)
@@ -559,7 +582,8 @@ class MultimodalDatasetDownloader:
             elif 'ade20k' in dataset_id.lower():
                 self._download_ade20k_images_by_ids(image_ids)
             else:
-                logger.warning(f"⚠️ Unknown dataset type: {dataset_id}")
+                logger.warning(f"⚠️ Unknown dataset type: {dataset_id} - treating as Open Images")
+                self._download_open_images_by_ids(image_ids)
 
     def _download_open_images_by_ids(self, image_ids: List[str]):
         """Download Open Images using image IDs"""
@@ -608,7 +632,7 @@ class MultimodalDatasetDownloader:
         
         # Download images based on IDs
         downloaded_count = 0
-        for image_id in tqdm(image_ids[:1000], desc="Downloading Open Images"):  # Limit to 1000 for testing
+        for image_id in tqdm(image_ids, desc="Downloading Open Images"):  # Download ALL images
             if image_id in id_to_url:
                 image_url = id_to_url[image_id]
                 image_file = oi_dir / f"{image_id}.jpg"
@@ -639,7 +663,7 @@ class MultimodalDatasetDownloader:
         split = "train2017" if "train" in dataset_id else "val2017"
         
         downloaded_count = 0
-        for image_id in tqdm(image_ids[:500], desc=f"Downloading COCO {split}"):  # Limit for testing
+        for image_id in tqdm(image_ids, desc=f"Downloading COCO {split}"):  # Download ALL images
             # COCO image_id needs to be zero-padded to 12 digits
             try:
                 padded_id = f"{int(image_id):012d}"
@@ -753,57 +777,41 @@ class MultimodalDatasetDownloader:
                                             all_captions.append(
                                                 data['narrative'])
 
-                                        # Extract image URL for caching - skip URL construction to avoid 403 errors
+                                        # Extract image path for caching using downloaded local images
                                         if self.cache_vision_features and 'image_id' in data:
-                                            # Don't construct URLs here - they cause 403 errors
-                                            # Instead, we'll use dummy features or download actual images properly
-                                            # using the source dataset downloaders above
-                                            pass
+                                            image_id = data['image_id']
+                                            dataset_id = data.get('dataset_id', '')
+                                            
+                                            # Check if we have this image downloaded locally
+                                            local_image_path = None
+                                            
+                                            if 'open_images' in dataset_id.lower():
+                                                # Check if Open Images file exists
+                                                oi_image_path = self.data_dir / "open_images" / f"{image_id}.jpg"
+                                                if oi_image_path.exists():
+                                                    local_image_path = str(oi_image_path)
+                                            elif 'coco' in dataset_id.lower():
+                                                # Check if COCO file exists (downloaded to coco_images directory)
+                                                coco_image_path = self.data_dir / "coco_images" / f"{image_id:012d}.jpg"
+                                                if coco_image_path.exists():
+                                                    local_image_path = str(coco_image_path)
+                                            
+                                            # Add local path or None if not found
+                                            all_image_urls.append(local_image_path)
+                                            dataset_image_urls.append(local_image_path)
 
                         except Exception as e:
                             logger.warning(
                                 f"Failed to process {jsonl_file}: {e}")
+                    
+                    # Cache vision features for this Localized Narratives dataset
+                    if self.cache_vision_features and dataset_image_urls:
+                        # Remove duplicates
+                        unique_dataset_urls = list(set(dataset_image_urls))
+                        self._cache_vision_features(unique_dataset_urls, f"localized_narratives_{dataset_name}")
 
-        # Process COCO captions
-        coco_dir = self.data_dir / "coco" / "annotations"
-        if coco_dir.exists():
-            coco_image_urls = []
-
-            for split in ['train2017', 'val2017']:
-                captions_file = coco_dir / f"captions_{split}.json"
-                if captions_file.exists():
-                    logger.info(f"Processing {captions_file}")
-                    try:
-                        with open(captions_file, 'r') as f:
-                            data = json.load(f)
-
-                        # Create image_id to filename mapping
-                        image_id_to_filename = {}
-                        for img_info in data['images']:
-                            image_id_to_filename[img_info['id']
-                                                 ] = img_info['file_name']
-
-                        for annotation in data['annotations']:
-                            all_captions.append(annotation['caption'])
-
-                            # Extract image URL for caching
-                            if self.cache_vision_features:
-                                image_id = annotation['image_id']
-                                if image_id in image_id_to_filename:
-                                    filename = image_id_to_filename[image_id]
-                                    image_url = f"http://images.cocodataset.org/{split}/{filename}"
-                                    coco_image_urls.append(image_url)
-                                    all_image_urls.append(image_url)
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to process {captions_file}: {e}")
-
-            # Cache vision features for COCO
-            if self.cache_vision_features and coco_image_urls:
-                # Remove duplicates
-                unique_coco_urls = list(set(coco_image_urls))
-                self._cache_vision_features(unique_coco_urls, "coco")
+        # Process COCO captions - REMOVED: Only use COCO from Localized Narratives
+        # The COCO data in Localized Narratives is sufficient and avoids duplication
 
         # Save unified captions
         captions_file = self.data_dir / "all_captions.json"
@@ -897,44 +905,32 @@ class MultimodalDatasetDownloader:
         logger.info(f"   Saved to: {unified_cache_file}")
         logger.info(f"   Feature type: {feature_type}")
 
-    def download_all(self, download_localized_narratives: bool = True, download_coco: bool = True) -> Dict[str, int]:
-        """Download selected datasets and return statistics"""
+    def download_all(self, download_localized_narratives: bool = True) -> Dict[str, int]:
+        """Download Localized Narratives dataset and return statistics"""
         logger.info("🚀 Starting multimodal dataset download...")
 
         total_stats = {}
 
-        # Download Localized Narratives (optional)
+        # Download Localized Narratives (contains both Open Images and COCO data)
         if download_localized_narratives:
             logger.info("📥 Downloading Localized Narratives...")
             ln_stats = self.download_localized_narratives()
             total_stats.update(ln_stats)
         else:
             logger.info("⏭️  Skipping Localized Narratives download")
-
-        # Download COCO annotations (optional)
-        if download_coco:
-            logger.info("📥 Downloading COCO...")
-            coco_stats = self.download_coco_annotations()
-            total_stats.update(coco_stats)
-        else:
-            logger.info("⏭️  Skipping COCO download")
-
-        # Only prepare unified dataset if we downloaded something
-        if download_localized_narratives or download_coco:
-            # Prepare unified dataset
-            all_captions, total_captions = self.prepare_unified_dataset()
-            total_stats['total_unified_captions'] = total_captions
-        else:
             logger.warning("⚠️  No datasets selected for download!")
             return {}
+
+        # Prepare unified dataset from Localized Narratives
+        all_captions, total_captions = self.prepare_unified_dataset()
+        total_stats['total_unified_captions'] = total_captions
 
         # Print summary
         logger.info("📊 Dataset Download Summary:")
         total_samples = 0
         for key, count in total_stats.items():
             logger.info(f"  • {key}: {count:,}")
-            if 'captions' in key or 'narratives' in key:
-                total_samples += count
+            total_samples += count
 
         logger.info(f"🎯 TOTAL IMAGE-CAPTION PAIRS: {total_samples:,}")
 
@@ -952,9 +948,9 @@ def main():
 
     # Dataset selection arguments
     dataset_group = parser.add_argument_group(
-        "Dataset Selection", "Choose which datasets to download")
-    dataset_group.add_argument("--dataset", type=str, choices=['both', 'coco', 'localized_narratives'],
-                               help="Which dataset(s) to download: 'both' (~1.78M samples), 'coco' (~615K samples), 'localized_narratives' (~1.16M samples)")
+        "Dataset Selection", "Localized Narratives dataset (includes Open Images and COCO)")
+    dataset_group.add_argument("--dataset", type=str, choices=['localized_narratives'], default='localized_narratives',
+                               help="Dataset to download: 'localized_narratives' (~1.16M samples with Open Images + COCO)")
     
     # HuggingFace options
     hf_group = parser.add_argument_group(
@@ -977,32 +973,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate dataset argument
-    if not args.dataset:
-        logger.info(
-            "Please specify which dataset(s) to download using --dataset:")
-        logger.info(
-            "  --dataset both                    : ~1.78M samples (largest)")
-        logger.info(
-            "  --dataset coco                    : ~615K samples (smallest)")
-        logger.info(
-            "  --dataset localized_narratives    : ~1.16M samples (medium)")
-        logger.info("")
-        logger.info("HuggingFace options (recommended):")
-        logger.info(
-            "  --use_hf_localized_narratives     : Use HuggingFace dataset (default: True)")
-        logger.info(
-            "  --no_hf_localized_narratives      : Download original LocalizedNarratives")
-        logger.info(
-            "  --hf_dataset_config open_images   : Use Open Images config (default)")
-        logger.info("")
-        logger.info("Optional vision feature caching:")
-        logger.info(
-            "  --cache_vision_features           : Pre-cache vision features during download")
-        logger.info(
-            "  --real_vision_features            : Use real DiNOv2 features (requires GPU, slower)")
-        parser.print_help()
-        return 0
+    # Dataset is required and defaults to localized_narratives
+    logger.info("📄 BitGen Localized Narratives Dataset Downloader")
+    logger.info("ℹ️  This will download Localized Narratives containing both Open Images and COCO data")
+    logger.info("")
 
     try:
         # Handle HuggingFace options
@@ -1025,28 +999,11 @@ def main():
         # Determine which datasets to download
         if args.dataset == 'localized_narratives':
             logger.info("🎯 Downloading ONLY Localized Narratives dataset")
-            download_localized_narratives = True
-            download_coco = False
-        elif args.dataset == 'coco':
-            logger.info("🎯 Downloading ONLY COCO dataset")
-            download_localized_narratives = False
-            download_coco = True
-        elif args.dataset == 'both':
-            logger.info(
-                "🎯 Downloading BOTH Localized Narratives and COCO datasets")
-            download_localized_narratives = True
-            download_coco = True
-
-        # Show estimated sizes and caching info
-        if download_localized_narratives and download_coco:
-            logger.info(
-                "📊 Estimated download: ~1.78M image-caption pairs (both datasets)")
-        elif download_localized_narratives:
-            logger.info(
-                "📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
-        elif download_coco:
-            logger.info(
-                "📊 Estimated download: ~615K image-caption pairs (COCO)")
+            logger.info("📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
+            logger.info("ℹ️  This includes both Open Images and COCO data from Localized Narratives")
+        else:
+            logger.error("❌ Only 'localized_narratives' dataset is supported in this version")
+            return 1
 
         if args.cache_vision_features:
             if args.real_vision_features:
@@ -1058,8 +1015,8 @@ def main():
                 logger.info(
                     "🔄 Will generate and cache DUMMY vision features (faster, for development)")
 
-        stats = downloader.download_all(
-            download_localized_narratives, download_coco)
+        # Download Localized Narratives dataset
+        stats = downloader.download_all()
 
         if stats:
             logger.info("✅ Download completed successfully!")
@@ -1067,10 +1024,7 @@ def main():
             logger.info(f"  📂 {args.data_dir}/")
             logger.info(
                 f"    📄 all_captions.json ({stats.get('total_unified_captions', 0):,} captions)")
-            if download_localized_narratives:
-                logger.info(f"    📂 localized_narratives/")
-            if download_coco:
-                logger.info(f"    📂 coco/")
+            logger.info(f"    📂 localized_narratives/")
             if args.cache_vision_features:
                 logger.info(f"    📂 vision_features_cache/ (cached features)")
 
