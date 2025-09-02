@@ -736,6 +736,14 @@ class UnifiedBitMarTrainer:
         self.data_module.setup(rebuild_cache=getattr(
             self, 'rebuild_cache', False))
 
+        # Clear vision cache if rebuild_vision_cache flag is set
+        if getattr(self, 'rebuild_vision_cache', False):
+            if hasattr(self.data_module, 'clear_vision_cache'):
+                logger.info("🔄 Forcing vision features cache rebuild...")
+                self.data_module.clear_vision_cache()
+            else:
+                logger.warning("⚠️  Data module does not support vision cache clearing")
+
         # Override train_dataloader to use custom collate function
         original_train_dataloader = self.data_module.train_dataloader
 
@@ -2128,6 +2136,8 @@ def main():
                         help="Device to use (cuda:0, cpu)")
     parser.add_argument("--rebuild_cache", action="store_true",
                         help="Rebuild dataset cache")
+    parser.add_argument("--rebuild_vision_cache", action="store_true",
+                        help="Force rebuild vision features cache (use when changing vision model)")
     parser.add_argument("--save_every_n_steps", type=int, default=None,
                         help="Save checkpoint every N training steps (optional)")
 
@@ -2137,6 +2147,7 @@ def main():
         # Initialize trainer
         trainer = UnifiedBitMarTrainer(args.config, device=args.device)
         trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
+        trainer.rebuild_vision_cache = args.rebuild_vision_cache  # Pass vision cache rebuild flag
         # Pass step-based saving option
         trainer.save_every_n_steps = args.save_every_n_steps
 

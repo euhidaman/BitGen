@@ -18,6 +18,8 @@ from PIL import Image
 import requests
 from io import BytesIO
 from tqdm import tqdm
+import pickle
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,27 @@ class LocalizedNarrativesCOCODataset(Dataset):
         max_seq_length: int = 256,
         vision_model: str = "facebook/dinov3-vits16-pretrain-lvd1689m",  # Updated to DiNOv3 small (faster)
         extract_vision_features: bool = True,
-        use_dummy_vision: bool = False
+        use_dummy_vision: bool = False,
+        cache_vision_features: bool = True,
+        force_rebuild_cache: bool = False
     ):
         self.dataset_dir = Path(dataset_dir)
         self.max_seq_length = max_seq_length
         self.extract_vision_features = extract_vision_features
         self.use_dummy_vision = use_dummy_vision
+        self.cache_vision_features = cache_vision_features
+        self.force_rebuild_cache = force_rebuild_cache
+
+        # Create cache directory
+        self.cache_dir = self.dataset_dir / "vision_features_cache"
+        self.cache_dir.mkdir(exist_ok=True, parents=True)
+
+        # Generate cache key based on vision model and settings
+        self.cache_key = hashlib.md5(
+            f"{vision_model}_{extract_vision_features}_{use_dummy_vision}".encode()
+        ).hexdigest()[:8]
+        self.cache_file = self.cache_dir / f"features_{self.cache_key}.npy"
+        self.metadata_file = self.cache_dir / f"metadata_{self.cache_key}.pkl"
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -64,6 +81,9 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         # Load all datasets
         self._load_datasets()
+
+        # Try to load cached features first
+        self._load_or_create_vision_features()
 
         # Create indices for dataset
         self.indices = list(range(len(self.all_captions)))
@@ -101,6 +121,73 @@ class LocalizedNarrativesCOCODataset(Dataset):
         self._load_coco_captions()
 
         logger.info(f"✅ Total loaded: {len(self.all_captions):,} image-caption pairs")
+
+    def _load_or_create_vision_features(self):
+        """Load cached vision features or create them if needed"""
+        # Check if we should use cached features
+        if self.cache_vision_features and not self.force_rebuild_cache:
+            if self.cache_file.exists() and self.metadata_file.exists():
+                try:
+                    logger.info(f"🚀 Loading cached vision features from {self.cache_file}")
+                    
+                    # Load metadata to verify compatibility
+                    with open(self.metadata_file, 'rb') as f:
+                        metadata = pickle.load(f)
+                    
+                    # Verify cache is compatible
+                    if (metadata['num_samples'] == len(self.all_captions) and 
+                        metadata['use_dummy_vision'] == self.use_dummy_vision and
+                        metadata['extract_vision_features'] == self.extract_vision_features):
+                        
+                        # Load cached features
+                        self.all_features = np.load(self.cache_file)
+                        logger.info(f"✅ Loaded {len(self.all_features):,} cached vision features")
+                        return
+                    else:
+                        logger.info("⚠️  Cache metadata mismatch, will rebuild cache")
+                except Exception as e:
+                    logger.warning(f"Failed to load cache: {e}, will rebuild")
+
+        # Cache miss or forced rebuild - create features
+        if self.use_dummy_vision:
+            logger.info("🎨 Creating dummy vision features (768-dim) for all samples")
+            self.all_features = np.random.randn(len(self.all_captions), 768).astype(np.float32)
+        elif self.extract_vision_features:
+            logger.info("🔄 Pre-computing real vision features from images...")
+            self._precompute_vision_features()
+        else:
+            # Fallback to dummy
+            logger.info("🎨 Creating dummy vision features (no extraction enabled)")
+            self.all_features = np.random.randn(len(self.all_captions), 768).astype(np.float32)
+
+        # Save to cache if enabled
+        if self.cache_vision_features:
+            self._save_vision_features_cache()
+
+    def _save_vision_features_cache(self):
+        """Save vision features to disk cache"""
+        try:
+            logger.info(f"💾 Saving vision features cache to {self.cache_file}")
+            
+            # Save features
+            np.save(self.cache_file, self.all_features)
+            
+            # Save metadata
+            metadata = {
+                'num_samples': len(self.all_captions),
+                'use_dummy_vision': self.use_dummy_vision,
+                'extract_vision_features': self.extract_vision_features,
+                'cache_key': self.cache_key,
+                'created_at': str(Path(__file__).stat().st_mtime)  # File modification time
+            }
+            
+            with open(self.metadata_file, 'wb') as f:
+                pickle.dump(metadata, f)
+                
+            logger.info("✅ Vision features cached successfully")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save vision features cache: {e}")
 
         # Pre-compute vision features if requested
         if self.extract_vision_features and not self.use_dummy_vision:
@@ -224,30 +311,14 @@ class LocalizedNarrativesCOCODataset(Dataset):
         logger.info(f"✅ Pre-computed {len(self.all_features)} vision features")
 
     def _get_vision_features(self, idx: int) -> np.ndarray:
-        """Get vision features for a sample (on-demand or pre-computed)"""
+        """Get vision features for a sample (always use cached/pre-computed now)"""
+        # Always use pre-computed/cached features now
         if hasattr(self, 'all_features'):
             return self.all_features[idx]
-
-        if self.use_dummy_vision or not self.extract_vision_features:
-            return np.random.randn(768).astype(np.float32)
-
-        # On-demand feature extraction
-        image_url = self.all_image_urls[idx]
-        if not image_url:
-            return np.random.randn(768).astype(np.float32)
-
-        try:
-            response = requests.get(image_url, timeout=10)
-            image = Image.open(BytesIO(response.content)).convert('RGB')
-
-            inputs = self.vision_processor(image, return_tensors="pt")
-            with torch.no_grad():
-                outputs = self.vision_model(**inputs)
-                return outputs.pooler_output.squeeze().numpy()
-
-        except Exception as e:
-            logger.debug(f"Failed to extract features for sample {idx}: {e}")
-            return np.random.randn(768).astype(np.float32)
+        
+        # Fallback to dummy if no features available (shouldn't happen)
+        logger.warning(f"No pre-computed features available for sample {idx}, using dummy")
+        return np.random.randn(768).astype(np.float32)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -332,9 +403,12 @@ class LocalizedNarrativesCOCODataModule:
         # Determine if we should extract real vision features or use dummy ones
         extract_vision = self.config.get('extract_vision_features', False)
         use_dummy = self.config.get('use_dummy_vision', True)  # Default to dummy for speed
+        cache_features = self.config.get('cache_vision_features', True)  # Default to caching
 
         if extract_vision and not use_dummy:
             logger.info("🎨 Real vision feature extraction enabled (slower but better quality)")
+            if cache_features:
+                logger.info("💾 Vision feature caching enabled - features will be computed once and cached")
         else:
             logger.info("⚡ Using dummy vision features (faster training)")
 
@@ -343,10 +417,87 @@ class LocalizedNarrativesCOCODataModule:
             tokenizer_name=self.config['text_encoder_name'],
             max_seq_length=self.config['max_seq_length'],
             extract_vision_features=extract_vision,
-            use_dummy_vision=use_dummy
+            use_dummy_vision=use_dummy,
+            cache_vision_features=cache_features,
+            force_rebuild_cache=rebuild_cache
         )
 
         logger.info(f"📊 Dataset ready with {len(self.dataset):,} samples")
+
+    def clear_vision_cache(self):
+        """Clear cached vision features"""
+        if hasattr(self, 'dataset') and self.dataset:
+            cache_dir = self.dataset.cache_dir
+            if cache_dir.exists():
+                logger.info(f"🗑️  Clearing vision features cache from {cache_dir}")
+                for cache_file in cache_dir.glob("*.npy"):
+                    cache_file.unlink()
+                    logger.info(f"   Deleted: {cache_file}")
+                for metadata_file in cache_dir.glob("*.pkl"):
+                    metadata_file.unlink()
+                    logger.info(f"   Deleted: {metadata_file}")
+                logger.info("✅ Vision features cache cleared")
+            else:
+                logger.info("ℹ️  No vision features cache to clear")
+def create_data_module(config: Dict) -> LocalizedNarrativesCOCODataModule:
+    """Create data module from config"""
+    return LocalizedNarrativesCOCODataModule(config)
+
+
+class LocalizedNarrativesCOCODataModule:
+    """Data module for Localized Narratives and COCO datasets with vision processing"""
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.dataset = None
+        self.train_loader = None
+
+    def setup(self, rebuild_cache: bool = False):
+        """Setup the dataset with vision feature extraction"""
+        logger.info("🔧 Setting up Localized Narratives + COCO data module with vision processing...")
+
+        # Determine if we should extract real vision features or use dummy ones
+        extract_vision = self.config.get('extract_vision_features', False)
+        use_dummy = self.config.get('use_dummy_vision', True)  # Default to dummy for speed
+        cache_features = self.config.get('cache_vision_features', True)  # Default to caching
+
+        if extract_vision and not use_dummy:
+            logger.info("🎨 Real vision feature extraction enabled (slower but better quality)")
+            if cache_features:
+                logger.info("💾 Vision feature caching enabled - features will be computed once and cached")
+        else:
+            logger.info("⚡ Using dummy vision features (faster training)")
+
+        self.dataset = LocalizedNarrativesCOCODataset(
+            dataset_dir=self.config['dataset_dir'],
+            tokenizer_name=self.config['text_encoder_name'],
+            max_seq_length=self.config['max_seq_length'],
+            extract_vision_features=extract_vision,
+            use_dummy_vision=use_dummy,
+            cache_vision_features=cache_features,
+            force_rebuild_cache=rebuild_cache
+        )
+
+        logger.info(f"📊 Dataset ready with {len(self.dataset):,} samples")
+
+    def clear_vision_cache(self):
+        """Clear cached vision features"""
+        if hasattr(self, 'dataset') and self.dataset:
+            cache_dir = self.dataset.cache_dir
+            if cache_dir.exists():
+                logger.info(f"🗑️  Clearing vision features cache from {cache_dir}")
+                for cache_file in cache_dir.glob("*.npy"):
+                    cache_file.unlink()
+                    logger.info(f"   Deleted: {cache_file}")
+                for metadata_file in cache_dir.glob("*.pkl"):
+                    metadata_file.unlink()
+                    logger.info(f"   Deleted: {metadata_file}")
+                logger.info("✅ Vision features cache cleared")
+            else:
+                logger.info("ℹ️  No vision features cache to clear")
+        else:
+            logger.warning("⚠️  No dataset loaded, cannot clear cache")
+
 
     def train_dataloader(self) -> DataLoader:
         """Create training dataloader"""
