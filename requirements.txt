@@ -32,6 +32,9 @@ wandb
 # Image processing
 pillow
 
+# Flickr API for Flickr30k dataset downloads
+flickrapi
+
 # Optional: Carbon footprint tracking
 codecarbon
 
