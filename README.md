@@ -1,10 +1,71 @@
 # BitGen Training Instructions
 
-## Prerequisites
+Follow these steps in order to set up and train BitGen with GPU-accelerated DiNOv3 vision features.
 
-1. Install Python 3.8+## Step 4: Start Training
+## Step 1: Prerequisites
 
-**Important: Ensure vision cache exists before training (from Step 2)**
+1. Python 3.8+
+2. CUDA-capable GPU (recommended for real vision features)
+3. ~10GB disk space
+
+## Step 2: Clone Repository
+
+```powershell
+git clone https://github.com/euhidaman/BitGen.git
+cd BitGen
+```
+
+## Step 3: Install Dependencies
+
+```powershell
+# Install basic requirements
+pip install -r requirements.txt
+
+# For GPU-accelerated DiNOv3 vision features (recommended):
+pip install torch transformers pillow
+```
+
+## Step 4: Download Data with Vision Caching
+
+**IMPORTANT:** Vision features are ONLY created during download, not during training!
+
+### Option A: With Real DiNOv3 Features (Recommended)
+
+```powershell
+# Download both datasets with GPU-accelerated DiNOv3 features
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
+
+### Option B: With Dummy Features (Fast Development)
+
+```powershell
+# Download both datasets with dummy features (no GPU required)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
+```
+
+### Download Robot Reasoning Data
+
+```powershell
+# Download robot selection data
+python download_multimodal_data.py --robot_data --data_dir ./data
+```
+
+## Step 5: Verify Setup
+
+```powershell
+# Check data structure
+ls ./data/
+# Should show: train2017/, val2017/, annotations/, all_captions.json, vision_features_cache/
+
+# Verify vision cache was created
+ls ./data/vision_features_cache/
+# Should show: all_features.npy, cache_metadata.pkl
+
+# Check vision cache size
+python -c "import numpy as np; print('Vision cache shape:', np.load('./data/vision_features_cache/all_features.npy').shape)"
+```
+
+## Step 6: Start Training
 
 ### With episodic memory:
 
@@ -18,162 +79,17 @@ python train_unified.py --config configs/bitmar_with_memory.yaml
 python train_unified.py --config configs/bitmar_without_memory.yaml
 ```
 
-## Step 5: Verify Vision Cache (Optional)
-
-**Check data structure:**
-
-```powershell
-ls ./data/
-# Should show: train2017/, val2017/, annotations/, all_captions.json, vision_features_cache/
-```
-
-**Verify vision cache details:**
-
-```powershell
-ls ./data/vision_features_cache/
-# Should show: all_features.npy, cache_metadata.pkl, and individual .npy/.pkl files
-```
-
-```powershell
-python -c "import numpy as np; print('Vision cache shape:', np.load('./data/vision_features_cache/all_features.npy').shape)"
-# Should show: Vision cache shape: (N, 768) where N is number of images
-```
-
-## Step 6: Monitor TrainingCreate virtual environment:
-
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
-
-3. Install packages:
-
-   ```powershell
-   pip install torch torchvision transformers huggingface_hub wandb pyyaml tqdm llm-guard pyod codecarbon matplotlib seaborn pandas psutil
-   ```
-
-## Step 1: Clone Repository
-
-```powershell
-git clone https://github.com/euhidaman/BitGen.git
-cd BitGen
-pip install -r requirements.txt
-```
-
-## Step 2: Download Dataset and Cache Vision Features
-
-**IMPORTANT: Vision features are ONLY created during download, not during training!**
-
-**Benefits:**
-
-- Vision features created once during download, reused forever
-- Training starts immediately without any feature extraction
-- No GPU/model loading required during training
-- Choose dummy (fast) or real DiNOv3 (GPU-accelerated, better quality) features
-
-**Required: Must use `--cache_vision_features` for training to work**
-
-### Option A: Fast Setup (Dummy Features)
-
-```powershell
-# Both datasets with dummy vision features (fast, no GPU required)
-python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
-```
-
-### Option B: High-Quality Setup (Real DiNOv3 Features)
-
-**Prerequisites for real features:**
-- CUDA-capable GPU
-- Additional dependencies: `pip install torch transformers pillow`
-
-```powershell
-# Both datasets with real DiNOv3 features (GPU-accelerated, better quality)
-python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
-```
-
-**GPU Usage:** When using `--real_vision_features`, the script will automatically detect and use your GPU for DiNOv3 feature extraction. You'll see output like:
-- `✅ DiNOv3 model loaded on GPU: [Your GPU Name]`
-- `GPU Memory Available: [X.X] GB`
-
-### Individual Datasets:
-
-```powershell
-# COCO only with vision feature caching
-python download_multimodal_data.py --dataset coco --data_dir ./data --cache_vision_features
-
-# Localized Narratives only with vision feature caching  
-python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features
-```
-
-## Step 3: Setup Robot Data
-
-Ensure robot selection data exists at: `D:\BabyLM\robot_selection_data\data`
-
-## Step 4: Start Training
-
-### With episodic memory:
-
-```powershell
-python train_unified.py --config configs/bitmar_with_memory.yaml --device cuda:0
-```
-
-### Without episodic memory:
-
-```powershell
-python train_unified.py --config configs/bitmar_without_memory.yaml --device cuda:0
-```
-
-## Step 5: Monitor Training
+## Step 7: Monitor Training
 
 1. Check Weights & Biases dashboard
 2. Monitor `training.log` file
 3. Check `./security_logs/` directory
 
-## Step 6: Vision Cache Management
-
-**Note: Vision features are now ONLY created during download step**
-
-### Check cache status:
-
-```powershell
-python manage_vision_cache.py --config configs/bitmar_with_memory.yaml info
-```
-
-### Use real vision features (recreate cache with real features):
-
-```powershell
-python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
-```
-
-### Clear cache:
-
-```powershell
-python manage_vision_cache.py --config configs/bitmar_with_memory.yaml clear
-```
-
-## Step 7: Test Robot Reasoning
-
-```powershell
-python demo_robot_reasoning.py
-```
-
-## Additional Training Options
-
-### Rebuild dataset cache:
-
-```powershell
-python train_unified.py --config configs/bitmar_with_memory.yaml --rebuild_cache
-```
-
-### Rebuild vision cache:
-
-```powershell
-python train_unified.py --config configs/bitmar_with_memory.yaml --rebuild_vision_cache
-```
+---
 
 ## Troubleshooting
 
-### Training fails:
+### Training fails
 
 1. Check if vision cache exists: `ls ./data/vision_features_cache/all_features.npy`
 2. If missing, run download with caching: `python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features`
@@ -182,59 +98,177 @@ python train_unified.py --config configs/bitmar_with_memory.yaml --rebuild_visio
 5. Ensure robot selection data exists
 6. Run `pip install -r requirements.txt`
 
-### Downloads fail:
+### Downloads fail
 
 1. Check internet connection
 2. Retry download command
 3. Check disk space (need ~10GB)
 
-### Vision cache issues:
+### Vision cache issues
 
 1. Vision cache missing: Re-run download with `--cache_vision_features`
 2. Check cache files: `ls ./data/vision_features_cache/`
 3. Recreate with real features: Re-run download with `--cache_vision_features --real_vision_features`
 
-## Complete Workflow Summary
+---
 
-### For GPU-Accelerated Training (Recommended)
+## Complete Download Command Reference
 
-1. **Install GPU dependencies:**
-   ```powershell
-   pip install torch transformers pillow
-   ```
+### Dataset Options
 
-2. **Download data with real DiNOv3 features:**
-   ```powershell
-   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
-   ```
-   - Uses your GPU to extract high-quality vision features
-   - Creates `all_features.npy` with 768-dimensional DiNOv3 embeddings
-   - One-time process, features cached permanently
+**Both datasets (Recommended - ~1.78M samples):**
+```powershell
+# With dummy vision features (fast)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
 
-3. **Train model:**
-   ```powershell
-   python train_unified.py --config configs/bitmar_with_memory.yaml
-   ```
-   - Uses pre-cached features, no GPU needed for vision processing
-   - Training focuses purely on language model optimization
+# With real DiNOv3 features (GPU-accelerated, better quality)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
 
-### For Fast Development (CPU-Only)
+**COCO only (~615K samples):**
+```powershell
+# With dummy vision features
+python download_multimodal_data.py --dataset coco --data_dir ./data --cache_vision_features
 
-1. **Download data with dummy features:**
-   ```powershell
-   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
-   ```
-   - Uses dummy 768-dimensional features
-   - No GPU required, very fast
+# With real DiNOv3 features
+python download_multimodal_data.py --dataset coco --data_dir ./data --cache_vision_features --real_vision_features
 
-2. **Train model:**
-   ```powershell
-   python train_unified.py --config configs/bitmar_with_memory.yaml
-   ```
+# Annotations only (no images or vision features)
+python download_multimodal_data.py --dataset coco --data_dir ./data --skip_images
+```
 
-**Key Advantage:** Vision feature extraction happens ONLY during download, never during training!
+**Localized Narratives only (~1.16M samples):**
+```powershell
+# With dummy vision features
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features
+
+# With real DiNOv3 features
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features --real_vision_features
+
+# Annotations only (no images or vision features)
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --skip_images
+```
+
+### Advanced Options
+
+**Custom data directory:**
+```powershell
+# Save to custom directory
+python download_multimodal_data.py --dataset both --data_dir ./my_custom_data --cache_vision_features
+```
+
+**Skip images (annotations only):**
+```powershell
+# Download only annotations/captions, no images
+python download_multimodal_data.py --dataset both --data_dir ./data --skip_images
+```
+
+**Vision caching combinations:**
+```powershell
+# No vision caching (training will fail without cache)
+python download_multimodal_data.py --dataset both --data_dir ./data
+
+# Dummy features only (fast, for development)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
+
+# Real DiNOv3 features (requires GPU, slower but better)
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
+
+### Command Flags Explained
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--dataset` | Choose: `both`, `coco`, `localized_narratives` | Required |
+| `--data_dir` | Directory to save data | `./data` |
+| `--cache_vision_features` | Pre-cache vision features during download | `False` |
+| `--real_vision_features` | Use real DiNOv3 (requires GPU) vs dummy features | `False` |
+| `--skip_images` | Download only annotations, skip images | `False` |
+
+### Recommended Workflows
+
+**For Production Training:**
+```powershell
+python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+```
+
+**For Development/Testing:**
+```powershell
+python download_multimodal_data.py --dataset coco --data_dir ./data --cache_vision_features
+```
+
+**For Minimal Setup (annotations only):**
+```powershell
+python download_multimodal_data.py --dataset both --data_dir ./data --skip_images
+```
+
+---
+
+## Additional Tools and Utilities
+
+### Vision Cache Management
+
+**Check vision cache status:**
+```powershell
+python manage_vision_cache.py --config configs/bitmar_with_memory.yaml info
+```
+
+**Clear vision cache:**
+```powershell
+python manage_vision_cache.py --config configs/bitmar_with_memory.yaml clear
+```
+
+**Rebuild vision cache:**
+```powershell
+python manage_vision_cache.py --config configs/bitmar_with_memory.yaml rebuild
+```
+
+### Demo Scripts
+
+**Test robot reasoning capabilities:**
+```powershell
+python demo_robot_reasoning.py
+```
+
+**Train with specific options:**
+```powershell
+# Train with 100M token limit
+python train_100M_tokens.py --config configs/bitmar_with_memory.yaml
+
+# Train robot reasoning only
+python train_robot_reasoning.py --config configs/bitmar_with_memory.yaml
+```
+
+### HuggingFace Integration
+
+**Export trained model to HuggingFace format:**
+```powershell
+python bitmar_hf_adapter.py --checkpoint ./checkpoints_with_memory/final_model.pt --output ./hf_model/
+```
+
+---
 
 ## Expected Directory Structure
+
+```
+BitGen/
+├── data/
+│   ├── train2017/           # COCO training images
+│   ├── val2017/             # COCO validation images  
+│   ├── annotations/         # COCO annotations
+│   ├── all_captions.json    # Combined captions
+│   └── vision_features_cache/
+│       ├── all_features.npy      # Unified vision features
+│       ├── cache_metadata.pkl    # Cache metadata
+│       └── *.npy/*.pkl          # Individual feature files
+├── configs/
+│   ├── bitmar_with_memory.yaml
+│   └── bitmar_without_memory.yaml
+├── src/
+├── requirements.txt
+├── train_unified.py
+└── download_multimodal_data.py
+```
 
 ```
 BitGen/
