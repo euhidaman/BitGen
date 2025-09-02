@@ -452,6 +452,12 @@ class MultimodalDatasetDownloader:
         all_image_info = []  # Store image_id and dataset info for downloading actual images
 
         for dataset_name, splits in self.datasets['localized_narratives'].items():
+            # Only process Open Images by default to keep downloads manageable
+            # Skip COCO and other datasets unless specifically needed
+            if dataset_name != 'open_images':
+                logger.info(f"⏭️ Skipping {dataset_name} dataset (only using Open Images)")
+                continue
+                
             dataset_dir = ln_dir / dataset_name
             dataset_dir.mkdir(exist_ok=True)
 
