@@ -95,10 +95,15 @@ vision_feature_reduction:
   preserve_spatial_info: true # Keep spatial relationships
 
 data:
-  # Dataset configuration - Localized Narratives + COCO + Robot Reasoning (hybrid training)
+  # Dataset configuration - HuggingFace LocalizedNarratives + COCO + Robot Reasoning (hybrid training)
   dataset_dir: "./data" # Dataset directory
   text_encoder_name: "gpt2"
   max_seq_length: 256 # Balanced sequence length
+
+  # HuggingFace LocalizedNarratives configuration
+  use_hf_localized_narratives: true # Use HuggingFace dataset instead of local files
+  hf_dataset_config: "open_images" # Options: open_images, ait, flickr, coco
+  max_samples_per_split: 15000 # Limit samples for faster loading (15k train + 7.5k val)
 
   # Robot reasoning data integration (after multimodal training)
   include_robot_data: true # Include robot selection examples for reasoning grounding

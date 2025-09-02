@@ -1,6 +1,6 @@
 """
 Dataset processing for BitMar
-Handles Localized Narratives and COCO datasets with vision feature extraction
+Handles HuggingFace LocalizedNarratives and COCO datasets with vision feature extraction
 Loads image-caption pairs and processes images into 768-dim features
 """
 
@@ -21,11 +21,20 @@ from tqdm import tqdm
 import pickle
 import hashlib
 
+# HuggingFace datasets import
+try:
+    from datasets import load_dataset
+    HF_DATASETS_AVAILABLE = True
+    logger.info("✅ HuggingFace datasets available")
+except ImportError:
+    HF_DATASETS_AVAILABLE = False
+    logger.warning("⚠️ HuggingFace datasets not available - install with: pip install datasets")
+
 logger = logging.getLogger(__name__)
 
 
 class LocalizedNarrativesCOCODataset(Dataset):
-    """Dataset for Localized Narratives and COCO with vision feature extraction"""
+    """Dataset for HuggingFace LocalizedNarratives and COCO with vision feature extraction"""
 
     def __init__(
         self,
@@ -37,7 +46,10 @@ class LocalizedNarrativesCOCODataset(Dataset):
         extract_vision_features: bool = True,
         use_dummy_vision: bool = False,
         cache_vision_features: bool = True,
-        force_rebuild_cache: bool = False
+        force_rebuild_cache: bool = False,
+        use_hf_localized_narratives: bool = True,
+        hf_dataset_config: str = "open_images",  # open_images, ait, flickr, coco
+        max_samples_per_split: int = 10000  # Limit samples for faster loading
     ):
         self.dataset_dir = Path(dataset_dir)
         self.max_seq_length = max_seq_length
@@ -45,6 +57,9 @@ class LocalizedNarrativesCOCODataset(Dataset):
         self.use_dummy_vision = use_dummy_vision
         self.cache_vision_features = cache_vision_features
         self.force_rebuild_cache = force_rebuild_cache
+        self.use_hf_localized_narratives = use_hf_localized_narratives and HF_DATASETS_AVAILABLE
+        self.hf_dataset_config = hf_dataset_config
+        self.max_samples_per_split = max_samples_per_split
 
         # Create cache directory
         self.cache_dir = self.dataset_dir / "vision_features_cache"
@@ -101,8 +116,8 @@ class LocalizedNarrativesCOCODataset(Dataset):
             f"✅ Loaded {len(self.indices):,} image-caption pairs from Localized Narratives + COCO")
 
     def _load_datasets(self):
-        """Load Localized Narratives and COCO datasets"""
-        logger.info("📥 Loading Localized Narratives and COCO datasets...")
+        """Load HuggingFace LocalizedNarratives and COCO datasets"""
+        logger.info("📥 Loading datasets from HuggingFace and local files...")
 
         self.all_captions = []
         self.all_image_ids = []
@@ -125,8 +140,12 @@ class LocalizedNarrativesCOCODataset(Dataset):
                 f"✅ Loaded {len(self.all_captions):,} captions from unified file")
             return
 
-        # Load Localized Narratives with image URLs
-        self._load_localized_narratives()
+        # Load HuggingFace LocalizedNarratives if enabled
+        if self.use_hf_localized_narratives:
+            self._load_hf_localized_narratives()
+        else:
+            # Fallback to local Localized Narratives
+            self._load_localized_narratives()
 
         # Load COCO captions with image URLs
         self._load_coco_captions()
@@ -276,6 +295,98 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         logger.info(f"✅ Localized Narratives: {ln_count:,} samples loaded")
 
+    def _load_hf_localized_narratives(self):
+        """Load LocalizedNarratives from HuggingFace datasets"""
+        if not HF_DATASETS_AVAILABLE:
+            logger.warning("⚠️ HuggingFace datasets not available, falling back to local loading")
+            self._load_localized_narratives()
+            return
+            
+        try:
+            logger.info(f"🤗 Loading LocalizedNarratives from HuggingFace (config: {self.hf_dataset_config})...")
+            
+            # Load the dataset from HuggingFace
+            dataset = load_dataset("HuggingFaceM4/LocalizedNarratives", self.hf_dataset_config)
+            
+            ln_count = 0
+            
+            # Process train split
+            if 'train' in dataset:
+                train_data = dataset['train']
+                max_train_samples = min(len(train_data), self.max_samples_per_split)
+                
+                logger.info(f"📖 Processing {max_train_samples:,} train samples...")
+                
+                for i in tqdm(range(max_train_samples), desc="Loading train samples"):
+                    try:
+                        sample = train_data[i]
+                        
+                        # Extract caption
+                        caption = sample.get('caption', '')
+                        if caption and len(caption.strip()) > 0:
+                            self.all_captions.append(caption.strip())
+                            
+                            # Extract image information
+                            image_id = sample.get('image_id', f"hf_train_{i}")
+                            self.all_image_ids.append(image_id)
+                            
+                            # Handle image - it's a PIL Image object from HuggingFace
+                            image = sample.get('image')
+                            if image is not None:
+                                # Store the PIL image directly for later processing
+                                self.all_image_urls.append(image)
+                            else:
+                                self.all_image_urls.append(None)
+                                
+                            self.dataset_sources.append(f"hf_localized_narratives_{self.hf_dataset_config}_train")
+                            ln_count += 1
+                            
+                    except Exception as e:
+                        logger.debug(f"Error processing train sample {i}: {e}")
+                        continue
+                        
+            # Process validation split if available
+            if 'validation' in dataset:
+                val_data = dataset['validation']
+                max_val_samples = min(len(val_data), self.max_samples_per_split // 2)
+                
+                logger.info(f"📖 Processing {max_val_samples:,} validation samples...")
+                
+                for i in tqdm(range(max_val_samples), desc="Loading validation samples"):
+                    try:
+                        sample = val_data[i]
+                        
+                        # Extract caption
+                        caption = sample.get('caption', '')
+                        if caption and len(caption.strip()) > 0:
+                            self.all_captions.append(caption.strip())
+                            
+                            # Extract image information
+                            image_id = sample.get('image_id', f"hf_val_{i}")
+                            self.all_image_ids.append(image_id)
+                            
+                            # Handle image - it's a PIL Image object from HuggingFace
+                            image = sample.get('image')
+                            if image is not None:
+                                # Store the PIL image directly for later processing
+                                self.all_image_urls.append(image)
+                            else:
+                                self.all_image_urls.append(None)
+                                
+                            self.dataset_sources.append(f"hf_localized_narratives_{self.hf_dataset_config}_val")
+                            ln_count += 1
+                            
+                    except Exception as e:
+                        logger.debug(f"Error processing validation sample {i}: {e}")
+                        continue
+                        
+            logger.info(f"✅ HuggingFace LocalizedNarratives: {ln_count:,} samples loaded")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load HuggingFace LocalizedNarratives: {e}")
+            logger.info("🔄 Falling back to local loading...")
+            self._load_localized_narratives()
+
     def _load_coco_captions(self):
         """Load COCO captions from annotation files with image URLs"""
         coco_dir = self.dataset_dir / "coco" / "annotations"
@@ -327,18 +438,26 @@ class LocalizedNarrativesCOCODataset(Dataset):
         logger.info(f"✅ COCO: {coco_count:,} samples loaded")
 
     def _precompute_vision_features(self):
-        """Pre-compute vision features for all images"""
+        """Pre-compute vision features for all images (supports both URLs and PIL images)"""
         logger.info("🔄 Pre-computing vision features from images...")
 
         self.all_features = []
 
-        for idx, image_url in enumerate(tqdm(self.all_image_urls, desc="Processing images")):
+        for idx, image_source in enumerate(tqdm(self.all_image_urls, desc="Processing images")):
             try:
-                if image_url:
-                    # Download and process image
-                    response = requests.get(image_url, timeout=10)
-                    image = Image.open(
-                        BytesIO(response.content)).convert('RGB')
+                if image_source:
+                    # Handle PIL Image objects from HuggingFace
+                    if isinstance(image_source, Image.Image):
+                        image = image_source.convert('RGB')
+                    elif isinstance(image_source, str):
+                        # Download and process image from URL
+                        response = requests.get(image_source, timeout=10)
+                        image = Image.open(BytesIO(response.content)).convert('RGB')
+                    else:
+                        # Unknown image source type
+                        logger.debug(f"Unknown image source type for idx {idx}: {type(image_source)}")
+                        self.all_features.append(np.random.randn(768).astype(np.float32))
+                        continue
 
                     # Process with vision model
                     inputs = self.vision_processor(image, return_tensors="pt")
@@ -348,7 +467,7 @@ class LocalizedNarrativesCOCODataset(Dataset):
                         features = outputs.pooler_output.squeeze().numpy()
                         self.all_features.append(features)
                 else:
-                    # No image URL, use dummy features
+                    # No image source, use dummy features
                     self.all_features.append(
                         np.random.randn(768).astype(np.float32))
 
