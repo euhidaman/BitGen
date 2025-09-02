@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 try:
     from trl import GRPOConfig, GRPOTrainer
     from src.grpo_robot_reasoning import (
-        GRPORobotReasoningIntegration, 
+        GRPORobotReasoningIntegration,
         PolicyOptimizedRobotHead,
         GRPORobotRewardFunctions
     )
@@ -728,7 +728,8 @@ class UnifiedBitMarTrainer:
 
             # Check if GRPO training is enabled
             if self.enable_grpo_training and GRPO_AVAILABLE:
-                logger.info("🎯 GRPO policy optimization enabled for robot reasoning")
+                logger.info(
+                    "🎯 GRPO policy optimization enabled for robot reasoning")
                 self.grpo_config = {
                     'num_generations': self.config['model'].get('grpo_num_generations', 6),
                     'alpha': self.config['model'].get('grpo_alpha', 0.01),
@@ -742,7 +743,8 @@ class UnifiedBitMarTrainer:
                     })
                 }
             elif self.enable_grpo_training and not GRPO_AVAILABLE:
-                logger.warning("⚠️ GRPO requested but not available - falling back to supervised training")
+                logger.warning(
+                    "⚠️ GRPO requested but not available - falling back to supervised training")
                 self.enable_grpo_training = False
                 self.grpo_config = None
             else:
@@ -869,14 +871,17 @@ class UnifiedBitMarTrainer:
         if self.enable_robot_reasoning and self.enable_grpo_training and GRPO_AVAILABLE:
             logger.info("🎯 Setting up GRPO robot reasoning integration...")
             try:
-                robot_data_dir = self.config['model'].get('robot_data_dir', "D:/BabyLM/robot_selection_data/data")
+                robot_data_dir = self.config['model'].get(
+                    'robot_data_dir', "D:/BabyLM/robot_selection_data/data")
                 self.grpo_integration = GRPORobotReasoningIntegration(
                     self.model, robot_data_dir, self.grpo_config
                 )
-                logger.info("✅ GRPO robot reasoning integration setup complete")
+                logger.info(
+                    "✅ GRPO robot reasoning integration setup complete")
             except Exception as e:
                 logger.error(f"❌ Failed to setup GRPO integration: {e}")
-                logger.warning("⚠️ Falling back to supervised robot reasoning training")
+                logger.warning(
+                    "⚠️ Falling back to supervised robot reasoning training")
                 self.enable_grpo_training = False
                 self.grpo_integration = None
 
@@ -946,7 +951,8 @@ class UnifiedBitMarTrainer:
         self.model.to(self.device)
 
         # Initialize FIBER-style cross-modal temperature parameter
-        self.cross_modal_temp = nn.Parameter(torch.tensor(0.07, device=self.device))  # FIBER-style temperature
+        self.cross_modal_temp = nn.Parameter(torch.tensor(
+            0.07, device=self.device))  # FIBER-style temperature
 
         # Verify model is on correct device
         logger.info(f"🎮 Device Verification:")
@@ -1374,12 +1380,13 @@ class UnifiedBitMarTrainer:
                     # GRPO policy optimization for robot reasoning
                     try:
                         # Prepare data for GRPO
-                        prompts = batch.get('prompts', batch.get('input_text', []))
+                        prompts = batch.get(
+                            'prompts', batch.get('input_text', []))
                         if not prompts:
                             # Extract prompts from input_ids if needed
-                            prompts = [self.model.tokenizer.decode(ids, skip_special_tokens=True) 
-                                     for ids in batch['input_ids']]
-                        
+                            prompts = [self.model.tokenizer.decode(ids, skip_special_tokens=True)
+                                       for ids in batch['input_ids']]
+
                         # Generate multiple completions for policy optimization
                         with torch.no_grad():
                             generations = []
@@ -1393,33 +1400,40 @@ class UnifiedBitMarTrainer:
                                     temperature=self.grpo_config['temperature'],
                                     pad_token_id=self.model.tokenizer.eos_token_id
                                 )
-                                
+
                                 # Decode generations
-                                gen_texts = [self.model.tokenizer.decode(gen, skip_special_tokens=True) 
-                                           for gen in gen_outputs]
-                                generations.append([{"content": text} for text in gen_texts])
-                        
+                                gen_texts = [self.model.tokenizer.decode(gen, skip_special_tokens=True)
+                                             for gen in gen_outputs]
+                                generations.append(
+                                    [{"content": text} for text in gen_texts])
+
                         # Compute GRPO rewards
-                        ground_truth = batch.get('robot_labels', prompts)  # Fallback to prompts
+                        ground_truth = batch.get(
+                            'robot_labels', prompts)  # Fallback to prompts
                         rewards = self.grpo_integration.compute_grpo_rewards(
                             prompts, generations, ground_truth
                         )
-                        
+
                         # Use total reward for GRPO optimization
-                        grpo_rewards = torch.tensor(rewards['total'], device=self.device)
-                        
+                        grpo_rewards = torch.tensor(
+                            rewards['total'], device=self.device)
+
                         # Compute policy loss (simplified GRPO-style)
-                        policy_loss = -torch.mean(grpo_rewards)  # Maximize rewards
+                        # Maximize rewards
+                        policy_loss = -torch.mean(grpo_rewards)
                         loss = policy_loss
-                        
+
                         # Track GRPO metrics
-                        epoch_metrics['grpo_avg_reward'] = torch.mean(grpo_rewards).item()
+                        epoch_metrics['grpo_avg_reward'] = torch.mean(
+                            grpo_rewards).item()
                         epoch_metrics['grpo_policy_loss'] = policy_loss.item()
-                        
-                        logger.debug(f"GRPO step - avg reward: {epoch_metrics['grpo_avg_reward']:.4f}")
-                        
+
+                        logger.debug(
+                            f"GRPO step - avg reward: {epoch_metrics['grpo_avg_reward']:.4f}")
+
                     except Exception as e:
-                        logger.warning(f"GRPO training failed, using standard loss: {e}")
+                        logger.warning(
+                            f"GRPO training failed, using standard loss: {e}")
                         loss = outputs['loss']
                 else:
                     # Standard supervised learning
@@ -1757,11 +1771,13 @@ class UnifiedBitMarTrainer:
                 f"  • Robot reasoning accuracy: {epoch_metrics['robot_reasoning_accuracy']:.4f}")
             logger.info(
                 f"  • Reasoning format accuracy: {epoch_metrics['reasoning_format_accuracy']:.4f}")
-            
+
             # Log GRPO metrics if enabled
             if self.enable_grpo_training:
-                logger.info(f"  • GRPO average reward: {epoch_metrics['grpo_avg_reward']:.4f}")
-                logger.info(f"  • GRPO policy loss: {epoch_metrics['grpo_policy_loss']:.4f}")
+                logger.info(
+                    f"  • GRPO average reward: {epoch_metrics['grpo_avg_reward']:.4f}")
+                logger.info(
+                    f"  • GRPO policy loss: {epoch_metrics['grpo_policy_loss']:.4f}")
 
         return epoch_metrics
 
@@ -1783,40 +1799,46 @@ class UnifiedBitMarTrainer:
             # FIBER-style contrastive similarity computation
             # Normalize features (as done in FIBER)
             text_pooled = text_pooled / text_pooled.norm(dim=-1, keepdim=True)
-            vision_features = vision_features / vision_features.norm(dim=-1, keepdim=True)
-            
+            vision_features = vision_features / \
+                vision_features.norm(dim=-1, keepdim=True)
+
             # Use learnable temperature (initialize if not exists)
             if not hasattr(self, 'cross_modal_temp'):
-                self.cross_modal_temp = nn.Parameter(torch.tensor(0.07))  # FIBER-style temperature
-                
+                self.cross_modal_temp = nn.Parameter(
+                    torch.tensor(0.07))  # FIBER-style temperature
+
             # Clamp temperature to reasonable range (as in FIBER)
             with torch.no_grad():
                 self.cross_modal_temp.clamp_(0.001, 1.0)
-            
+
             # Compute similarity matrix (FIBER InfoNCE style)
             batch_size = text_pooled.size(0)
             sim_i2t = text_pooled @ vision_features.t() / self.cross_modal_temp
             sim_t2i = vision_features @ text_pooled.t() / self.cross_modal_temp
-            
+
             # Create target matrix (diagonal should be 1 for positive pairs)
             sim_targets = torch.eye(batch_size, device=text_pooled.device)
-            
+
             # Compute InfoNCE loss (as in FIBER)
-            loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1) * sim_targets, dim=1).mean()
-            loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1) * sim_targets, dim=1).mean()
-            
+            loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1)
+                                  * sim_targets, dim=1).mean()
+            loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1)
+                                  * sim_targets, dim=1).mean()
+
             # FIBER-style average contrastive loss
             contrastive_loss = (loss_i2t + loss_t2i) / 2.0
-            
+
             # Convert loss to similarity score (lower loss = higher similarity)
             similarity_score = torch.exp(-contrastive_loss).item()
-            
+
             return similarity_score
-            
+
         except Exception as e:
-            logger.warning(f"FIBER-style cross-modal similarity computation failed: {e}")
+            logger.warning(
+                f"FIBER-style cross-modal similarity computation failed: {e}")
             # Fallback to simple cosine similarity
-            cos_sim = torch.cosine_similarity(text_pooled, vision_features, dim=1)
+            cos_sim = torch.cosine_similarity(
+                text_pooled, vision_features, dim=1)
             return cos_sim.mean().item()
 
     def save_checkpoint(self):
@@ -2154,7 +2176,7 @@ class UnifiedBitMarTrainer:
                                 epoch_log['epoch/robot_reasoning_accuracy'] = epoch_metrics['robot_reasoning_accuracy']
                                 epoch_log['epoch/reasoning_format_accuracy'] = epoch_metrics['reasoning_format_accuracy']
                                 epoch_log['epoch/reasoning_quality_score'] = epoch_metrics['reasoning_quality_score']
-                                
+
                                 # Add GRPO metrics if enabled
                                 if self.enable_grpo_training:
                                     epoch_log['epoch/grpo_avg_reward'] = epoch_metrics['grpo_avg_reward']

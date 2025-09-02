@@ -18,7 +18,7 @@ model:
   grpo_temperature: 0.8 # Generation temperature for policy sampling
   grpo_reward_weights:
     correctness: 0.30 # Robot selection correctness
-    validity: 0.20 # Robot choice validity  
+    validity: 0.20 # Robot choice validity
     format: 0.20 # XML format compliance
     reasoning_quality: 0.15 # Quality of reasoning process
     top_n_efficiency: 0.15 # Efficiency of robot number selection

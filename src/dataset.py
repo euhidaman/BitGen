@@ -28,7 +28,8 @@ try:
     logger.info("✅ HuggingFace datasets available")
 except ImportError:
     HF_DATASETS_AVAILABLE = False
-    logger.warning("⚠️ HuggingFace datasets not available - install with: pip install datasets")
+    logger.warning(
+        "⚠️ HuggingFace datasets not available - install with: pip install datasets")
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,8 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         # Load HuggingFace LocalizedNarratives if enabled
         if self.use_hf_localized_narratives:
-            logger.warning("⚠️ HuggingFace LocalizedNarratives disabled due to deprecated scripts")
+            logger.warning(
+                "⚠️ HuggingFace LocalizedNarratives disabled due to deprecated scripts")
             self._load_localized_narratives()
         else:
             # Use local Localized Narratives
@@ -298,38 +300,43 @@ class LocalizedNarrativesCOCODataset(Dataset):
     def _load_hf_localized_narratives(self):
         """Load LocalizedNarratives from HuggingFace datasets"""
         if not HF_DATASETS_AVAILABLE:
-            logger.warning("⚠️ HuggingFace datasets not available, falling back to local loading")
+            logger.warning(
+                "⚠️ HuggingFace datasets not available, falling back to local loading")
             self._load_localized_narratives()
             return
-            
+
         try:
-            logger.info(f"🤗 Loading LocalizedNarratives from HuggingFace (config: {self.hf_dataset_config})...")
-            
+            logger.info(
+                f"🤗 Loading LocalizedNarratives from HuggingFace (config: {self.hf_dataset_config})...")
+
             # Load the dataset from HuggingFace
-            dataset = load_dataset("HuggingFaceM4/LocalizedNarratives", self.hf_dataset_config)
-            
+            dataset = load_dataset(
+                "HuggingFaceM4/LocalizedNarratives", self.hf_dataset_config)
+
             ln_count = 0
-            
+
             # Process train split
             if 'train' in dataset:
                 train_data = dataset['train']
-                max_train_samples = min(len(train_data), self.max_samples_per_split)
-                
-                logger.info(f"📖 Processing {max_train_samples:,} train samples...")
-                
+                max_train_samples = min(
+                    len(train_data), self.max_samples_per_split)
+
+                logger.info(
+                    f"📖 Processing {max_train_samples:,} train samples...")
+
                 for i in tqdm(range(max_train_samples), desc="Loading train samples"):
                     try:
                         sample = train_data[i]
-                        
+
                         # Extract caption
                         caption = sample.get('caption', '')
                         if caption and len(caption.strip()) > 0:
                             self.all_captions.append(caption.strip())
-                            
+
                             # Extract image information
                             image_id = sample.get('image_id', f"hf_train_{i}")
                             self.all_image_ids.append(image_id)
-                            
+
                             # Handle image - it's a PIL Image object from HuggingFace
                             image = sample.get('image')
                             if image is not None:
@@ -337,34 +344,37 @@ class LocalizedNarrativesCOCODataset(Dataset):
                                 self.all_image_urls.append(image)
                             else:
                                 self.all_image_urls.append(None)
-                                
-                            self.dataset_sources.append(f"hf_localized_narratives_{self.hf_dataset_config}_train")
+
+                            self.dataset_sources.append(
+                                f"hf_localized_narratives_{self.hf_dataset_config}_train")
                             ln_count += 1
-                            
+
                     except Exception as e:
                         logger.debug(f"Error processing train sample {i}: {e}")
                         continue
-                        
+
             # Process validation split if available
             if 'validation' in dataset:
                 val_data = dataset['validation']
-                max_val_samples = min(len(val_data), self.max_samples_per_split // 2)
-                
-                logger.info(f"📖 Processing {max_val_samples:,} validation samples...")
-                
+                max_val_samples = min(
+                    len(val_data), self.max_samples_per_split // 2)
+
+                logger.info(
+                    f"📖 Processing {max_val_samples:,} validation samples...")
+
                 for i in tqdm(range(max_val_samples), desc="Loading validation samples"):
                     try:
                         sample = val_data[i]
-                        
+
                         # Extract caption
                         caption = sample.get('caption', '')
                         if caption and len(caption.strip()) > 0:
                             self.all_captions.append(caption.strip())
-                            
+
                             # Extract image information
                             image_id = sample.get('image_id', f"hf_val_{i}")
                             self.all_image_ids.append(image_id)
-                            
+
                             # Handle image - it's a PIL Image object from HuggingFace
                             image = sample.get('image')
                             if image is not None:
@@ -372,18 +382,22 @@ class LocalizedNarrativesCOCODataset(Dataset):
                                 self.all_image_urls.append(image)
                             else:
                                 self.all_image_urls.append(None)
-                                
-                            self.dataset_sources.append(f"hf_localized_narratives_{self.hf_dataset_config}_val")
+
+                            self.dataset_sources.append(
+                                f"hf_localized_narratives_{self.hf_dataset_config}_val")
                             ln_count += 1
-                            
+
                     except Exception as e:
-                        logger.debug(f"Error processing validation sample {i}: {e}")
+                        logger.debug(
+                            f"Error processing validation sample {i}: {e}")
                         continue
-                        
-            logger.info(f"✅ HuggingFace LocalizedNarratives: {ln_count:,} samples loaded")
-            
+
+            logger.info(
+                f"✅ HuggingFace LocalizedNarratives: {ln_count:,} samples loaded")
+
         except Exception as e:
-            logger.error(f"❌ Failed to load HuggingFace LocalizedNarratives: {e}")
+            logger.error(
+                f"❌ Failed to load HuggingFace LocalizedNarratives: {e}")
             logger.info("🔄 Falling back to local loading...")
             self._load_localized_narratives()
 
@@ -452,11 +466,14 @@ class LocalizedNarrativesCOCODataset(Dataset):
                     elif isinstance(image_source, str):
                         # Download and process image from URL
                         response = requests.get(image_source, timeout=10)
-                        image = Image.open(BytesIO(response.content)).convert('RGB')
+                        image = Image.open(
+                            BytesIO(response.content)).convert('RGB')
                     else:
                         # Unknown image source type
-                        logger.debug(f"Unknown image source type for idx {idx}: {type(image_source)}")
-                        self.all_features.append(np.random.randn(768).astype(np.float32))
+                        logger.debug(
+                            f"Unknown image source type for idx {idx}: {type(image_source)}")
+                        self.all_features.append(
+                            np.random.randn(768).astype(np.float32))
                         continue
 
                     # Process with vision model

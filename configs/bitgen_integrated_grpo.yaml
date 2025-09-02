@@ -3,13 +3,13 @@
 
 # Model Configuration
 model:
-  name: "microsoft/DialoGPT-small"  # Base model for robot reasoning
+  name: "microsoft/DialoGPT-small" # Base model for robot reasoning
   hidden_size: 768
   fusion_hidden_size: 128
   num_attention_heads: 12
   num_hidden_layers: 6
   dropout: 0.1
-  
+
   # Robot-specific model parameters
   robot_head_hidden_size: 256
   robot_head_dropout: 0.1
@@ -26,18 +26,18 @@ training:
   weight_decay: 0.01
   max_length: 1024
   gradient_accumulation_steps: 4
-  
+
   # Evaluation and logging
   eval_frequency: 2
   eval_steps: 100
   logging_steps: 50
   save_frequency: 3
   save_steps: 250
-  
+
   # Learning rate scheduling
   lr_scheduler_type: "linear"
   warmup_ratio: 0.1
-  
+
   # Optimization
   optimizer: "adamw_torch"
   adam_beta1: 0.9
@@ -48,10 +48,10 @@ training:
 # GRPO Configuration (Group Relative Policy Optimization)
 grpo:
   # Core GRPO parameters
-  num_generations: 8          # Generate 8 completions per prompt
-  alpha: 0.01                 # GRPO regularization strength
-  temperature: 0.8            # Generation temperature
-  
+  num_generations: 8 # Generate 8 completions per prompt
+  alpha: 0.01 # GRPO regularization strength
+  temperature: 0.8 # Generation temperature
+
   # Policy optimization parameters
   policy_learning_rate: 1e-5
   value_learning_rate: 5e-5
@@ -59,14 +59,14 @@ grpo:
   clip_range_value: 0.2
   entropy_coef: 0.01
   value_loss_coef: 0.5
-  
+
   # Generation parameters
   max_new_tokens: 256
   do_sample: true
   top_k: 50
   top_p: 0.95
   repetition_penalty: 1.1
-  
+
   # Reward parameters
   reward_clip_range: [-5.0, 5.0]
   normalize_rewards: true
@@ -76,86 +76,116 @@ grpo:
 # Data Configuration
 data:
   # Robot reasoning data
-  robot_data_ratio: 0.7       # 70% robot reasoning, 30% other data
-  
+  robot_data_ratio: 0.7 # 70% robot reasoning, 30% other data
+
   # Multimodal data (optional)
   multimodal_data_dir: "./test_data/multimodal"
   include_vision_features: false
-  
+
   # Data preprocessing
   max_prompt_length: 512
   max_response_length: 512
   remove_duplicates: true
-  
+
 # Robot Reasoning Configuration
 robot_reasoning:
   data_dir: "./robot_selection_data"
-  
+
   # Robot types and capabilities
   robot_types:
     Drone:
-      capabilities: ["aerial_surveillance", "rapid_deployment", "GPS_navigation", "camera_systems"]
-      max_payload: 2.0  # kg
-      operational_range: 50.0  # km
-      battery_life: 45  # minutes
-      
+      capabilities:
+        [
+          "aerial_surveillance",
+          "rapid_deployment",
+          "GPS_navigation",
+          "camera_systems",
+        ]
+      max_payload: 2.0 # kg
+      operational_range: 50.0 # km
+      battery_life: 45 # minutes
+
     Underwater_Robot:
-      capabilities: ["underwater_navigation", "waterproof_systems", "sonar_mapping", "sample_collection"]
-      max_depth: 500.0  # meters
-      operational_range: 20.0  # km
-      battery_life: 180  # minutes
-      
+      capabilities:
+        [
+          "underwater_navigation",
+          "waterproof_systems",
+          "sonar_mapping",
+          "sample_collection",
+        ]
+      max_depth: 500.0 # meters
+      operational_range: 20.0 # km
+      battery_life: 180 # minutes
+
     Humanoid:
-      capabilities: ["bipedal_locomotion", "dexterous_manipulation", "human_interaction", "complex_tasks"]
-      max_payload: 5.0  # kg
-      operational_range: 10.0  # km  
-      battery_life: 120  # minutes
-      
+      capabilities:
+        [
+          "bipedal_locomotion",
+          "dexterous_manipulation",
+          "human_interaction",
+          "complex_tasks",
+        ]
+      max_payload: 5.0 # kg
+      operational_range: 10.0 # km
+      battery_life: 120 # minutes
+
     Robot_with_Wheels:
-      capabilities: ["wheeled_locomotion", "high_speed_travel", "heavy_payload", "smooth_surface_navigation"]
-      max_payload: 50.0  # kg
-      operational_range: 100.0  # km
-      battery_life: 300  # minutes
-      
+      capabilities:
+        [
+          "wheeled_locomotion",
+          "high_speed_travel",
+          "heavy_payload",
+          "smooth_surface_navigation",
+        ]
+      max_payload: 50.0 # kg
+      operational_range: 100.0 # km
+      battery_life: 300 # minutes
+
     Robot_with_Legs:
-      capabilities: ["legged_locomotion", "rough_terrain_navigation", "adaptive_balance", "climbing"]
-      max_payload: 10.0  # kg
-      operational_range: 25.0  # km
-      battery_life: 180  # minutes
+      capabilities:
+        [
+          "legged_locomotion",
+          "rough_terrain_navigation",
+          "adaptive_balance",
+          "climbing",
+        ]
+      max_payload: 10.0 # kg
+      operational_range: 25.0 # km
+      battery_life: 180 # minutes
 
 # Reward Function Configuration
 reward_functions:
   # Reward weights (must sum to 1.0)
   weights:
-    correctness: 0.30          # Robot selection correctness
-    validity: 0.20             # Robot choice validity
-    format: 0.20               # XML format compliance
-    reasoning_quality: 0.15    # Quality of reasoning process
-    top_n_efficiency: 0.15     # Efficiency of robot number selection
-    
+    correctness: 0.30 # Robot selection correctness
+    validity: 0.20 # Robot choice validity
+    format: 0.20 # XML format compliance
+    reasoning_quality: 0.15 # Quality of reasoning process
+    top_n_efficiency: 0.15 # Efficiency of robot number selection
+
   # Individual reward parameters
   correctness:
     exact_match_bonus: 1.0
     partial_match_bonus: 0.5
     capability_match_bonus: 0.3
-    
+
   validity:
     valid_robot_bonus: 1.0
     invalid_robot_penalty: -0.5
     non_existent_robot_penalty: -1.0
-    
+
   format:
     strict_format_bonus: 1.0
     soft_format_bonus: 0.7
     xml_structure_bonus: 0.5
     missing_tags_penalty: -0.5
-    
+
   reasoning_quality:
     detailed_reasoning_bonus: 1.0
     logical_flow_bonus: 0.8
     capability_analysis_bonus: 0.6
     environment_consideration_bonus: 0.4
-    
+
   top_n_efficiency:
     optimal_n_bonus: 1.0
     under_selection_penalty: -0.3
@@ -168,7 +198,7 @@ vision:
   model_name: "clip-vit-base-patch32"
   feature_dim: 512
   image_size: 224
-  
+
 # Testing Configuration
 testing:
   num_test_scenarios: 20
@@ -193,29 +223,29 @@ testing:
     - "Provide disaster relief coordination in hurricane-affected coastal areas"
     - "Conduct environmental cleanup operations in contaminated water bodies"
     - "Support space habitat maintenance and astronaut assistance tasks"
-    
+
   # Testing parameters
-  temperature: 0.1            # Low temperature for consistent testing
+  temperature: 0.1 # Low temperature for consistent testing
   max_new_tokens: 300
   num_generations_per_scenario: 5
-  
+
 # Hardware Configuration
 hardware:
   use_mixed_precision: true
   gradient_checkpointing: true
   dataloader_num_workers: 4
   pin_memory: true
-  
+
 # Monitoring and Logging
 monitoring:
   use_wandb: false
   wandb_project: "bitgen-grpo-robot-reasoning"
   log_level: "INFO"
-  
+
   # Metrics to track
   track_metrics:
     - "train_loss"
-    - "train_policy_loss" 
+    - "train_policy_loss"
     - "train_value_loss"
     - "train_avg_reward"
     - "eval_loss"
@@ -223,22 +253,22 @@ monitoring:
     - "robot_selection_accuracy"
     - "reasoning_quality_score"
     - "top_n_efficiency_score"
-    
+
 # Advanced Configuration
 advanced:
   # Policy optimization
   use_advantage_normalization: true
   gae_lambda: 0.95
   discount_factor: 0.99
-  
+
   # Exploration
   exploration_bonus: 0.02
   diversity_bonus: 0.01
-  
+
   # Stability
   value_clipping: true
   reward_scaling: 1.0
-  
+
   # Early stopping
   early_stopping_patience: 3
   early_stopping_threshold: 0.001
