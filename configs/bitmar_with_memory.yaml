@@ -2,7 +2,7 @@
 # For ablation study comparison - this is the full model with episodic memory
 
 model:
-  # NEW: Robot Reasoning Configuration (similar to deepseek-r1's structured reasoning)
+  # Robot Reasoning Configuration (similar to deepseek-r1's structured reasoning)
   enable_robot_reasoning: true # Enable robot selection reasoning capabilities
   robot_data_dir: "D:/BabyLM/robot_selection_data/data" # Path to robot selection data
 
@@ -11,8 +11,8 @@ model:
   reasoning_format_validation: true # Validate XML reasoning format
   enable_multi_robot_coordination: true # Support multi-robot task decomposition
 
-  # Episodic Memory Control
-  use_episodic_memory: true # Keep episodic memory for robot task memory
+  # Episodic Memory Control for Ablation Study
+  use_episodic_memory: true # ENABLED for this config (full model)
 
   # BitNet Text Encoder
   vocab_size: 50257 # GPT-2 vocabulary
@@ -391,3 +391,32 @@ attention_sinks:
   preserve_episodic_memory: true # Ensure episodic memory functionality is preserved
   preserve_quantization: true # Ensure BitNet quantization is preserved
   preserve_cross_modal_fusion: true # Ensure cross-modal fusion is preserved
+
+# Security Configuration
+security:
+  # Input validation settings
+  max_input_length: 2048 # Maximum input text length
+  max_robot_task_length: 512 # Maximum robot task description length
+  enable_prompt_injection_detection: true # Detect prompt injection attempts
+  enable_toxicity_detection: true # Detect toxic content
+  enable_secrets_detection: true # Detect secrets/credentials in input
+
+  # Output validation settings
+  max_output_length: 4096 # Maximum output text length
+  enable_bias_detection: true # Detect biased outputs
+  enable_malicious_url_detection: true # Detect malicious URLs in output
+  enable_relevance_check: true # Check output relevance to input
+
+  # Memory anomaly detection settings
+  enable_memory_anomaly_detection: true # Enable episodic memory anomaly detection
+  memory_anomaly_threshold: 0.15 # Threshold for memory anomaly detection
+  memory_window_size: 1000 # Number of memory states to track for baseline
+
+  # Rate limiting settings
+  rate_limit_requests_per_minute: 60 # Max requests per minute
+  rate_limit_tokens_per_minute: 10000 # Max tokens per minute
+
+  # Logging and monitoring
+  log_security_events: true # Log all security events
+  save_security_logs: true # Save security logs to files
+  security_log_dir: "./security_logs" # Directory for security logs

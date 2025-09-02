@@ -55,6 +55,12 @@ from src.memory_visualization_integration import setup_memory_visualization
 from src.robot_reasoning_dataset import create_robot_reasoning_data_module, create_robot_reasoning_trainer_integration
 from src.robot_reasoning import ReasoningFormatValidator, create_robot_reasoning_integration
 
+# Security imports
+from src.security_guard import (
+    BitGenSecurityGuard, SecurityConfig, SecurityIntegration,
+    create_security_guard, test_security_components
+)
+
 # Try to import FLOPS tracker
 try:
     from src.flops_tracker import FLOPsTracker, FLOPsEstimator
@@ -846,6 +852,9 @@ class SimpleTrainer:
 
         # Setup FLOPS tracking
         self.setup_flops_tracking()
+
+        # Setup security guard
+        self.setup_security_guard()
 
     def setup_optimizer(self):
         """Setup optimizer and scheduler"""

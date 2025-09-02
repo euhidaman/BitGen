@@ -34,3 +34,20 @@ pandas
 
 # System utilities
 psutil
+
+# Security and safety
+llm-guard
+langchain-experimental
+
+# Anomaly detection
+pyod
+isolation-forest
+scikit-learn
+
+# Security monitoring
+cryptography
+hashlib
+
+# Rate limiting and security
+slowapi
+python-multipart

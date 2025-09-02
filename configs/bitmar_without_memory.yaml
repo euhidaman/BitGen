@@ -385,3 +385,32 @@ attention_sinks:
   preserve_episodic_memory: false # No episodic memory to preserve
   preserve_quantization: true # Ensure BitNet quantization is preserved
   preserve_cross_modal_fusion: true # Ensure cross-modal fusion is preserved
+
+# Security Configuration
+security:
+  # Input validation settings
+  max_input_length: 2048 # Maximum input text length
+  max_robot_task_length: 512 # Maximum robot task description length
+  enable_prompt_injection_detection: true # Detect prompt injection attempts
+  enable_toxicity_detection: true # Detect toxic content
+  enable_secrets_detection: true # Detect secrets/credentials in input
+
+  # Output validation settings
+  max_output_length: 4096 # Maximum output text length
+  enable_bias_detection: true # Detect biased outputs
+  enable_malicious_url_detection: true # Detect malicious URLs in output
+  enable_relevance_check: true # Check output relevance to input
+
+  # Memory anomaly detection settings (disabled for no-memory ablation)
+  enable_memory_anomaly_detection: false # Disabled since no episodic memory
+  memory_anomaly_threshold: 0.15 # Not used but kept for consistency
+  memory_window_size: 1000 # Not used but kept for consistency
+
+  # Rate limiting settings
+  rate_limit_requests_per_minute: 60 # Max requests per minute
+  rate_limit_tokens_per_minute: 10000 # Max tokens per minute
+
+  # Logging and monitoring
+  log_security_events: true # Log all security events
+  save_security_logs: true # Save security logs to files
+  security_log_dir: "./security_logs" # Directory for security logs
