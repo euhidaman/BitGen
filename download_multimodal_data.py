@@ -72,9 +72,20 @@ class MultimodalDatasetDownloader:
         self.datasets = {
             'localized_narratives': {
                 'open_images': {
-                    'train': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_openimages_train.jsonl',
-                    'validation': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_openimages_validation.jsonl',
-                    'test': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_openimages_test.jsonl'
+                    'train': [
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00002-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00003-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00004-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00005-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00006-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00007-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00008-of-00010.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00009-of-00010.jsonl'
+                    ],
+                    'validation': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_validation_localized_narratives.jsonl',
+                    'test': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_test_localized_narratives.jsonl'
                 },
                 'coco': {
                     'train': 'https://storage.googleapis.com/localized-narratives/annotations/localized_narratives_coco_train.jsonl',
@@ -280,28 +291,61 @@ class MultimodalDatasetDownloader:
 
             dataset_samples = 0
 
-            for split, url in splits.items():
-                filename = f"{dataset_name}_{split}.jsonl"
-                filepath = dataset_dir / filename
+            for split, urls in splits.items():
+                # Handle sharded URLs (list) or single URL (string)
+                if isinstance(urls, list):
+                    # Sharded files (like Open Images train)
+                    dataset_samples_split = 0
+                    for i, url in enumerate(urls):
+                        filename = f"{dataset_name}_{split}_shard_{i:02d}.jsonl"
+                        filepath = dataset_dir / filename
 
-                if filepath.exists():
+                        if filepath.exists():
+                            logger.info(
+                                f"✅ {filename} already exists, skipping download")
+                        else:
+                            success = self.download_file(
+                                url, filepath, f"Localized Narratives {dataset_name} {split} shard {i}")
+                            if not success:
+                                continue
+
+                        # Count samples in the shard
+                        try:
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                samples = sum(1 for line in f if line.strip())
+                            dataset_samples_split += samples
+                            logger.info(
+                                f"    ◦ shard {i}: {samples:,} samples")
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to count samples in {filename}: {e}")
+
+                    dataset_samples += dataset_samples_split
                     logger.info(
-                        f"✅ {filename} already exists, skipping download")
+                        f"  • {split}: {dataset_samples_split:,} samples total")
                 else:
-                    success = self.download_file(
-                        url, filepath, f"Localized Narratives {dataset_name} {split}")
-                    if not success:
-                        continue
+                    # Single file
+                    filename = f"{dataset_name}_{split}.jsonl"
+                    filepath = dataset_dir / filename
 
-                # Count samples in the file
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        samples = sum(1 for line in f if line.strip())
-                    dataset_samples += samples
-                    logger.info(f"  • {split}: {samples:,} samples")
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to count samples in {filename}: {e}")
+                    if filepath.exists():
+                        logger.info(
+                            f"✅ {filename} already exists, skipping download")
+                    else:
+                        success = self.download_file(
+                            urls, filepath, f"Localized Narratives {dataset_name} {split}")
+                        if not success:
+                            continue
+
+                    # Count samples in the file
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            samples = sum(1 for line in f if line.strip())
+                        dataset_samples += samples
+                        logger.info(f"  • {split}: {samples:,} samples")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to count samples in {filename}: {e}")
 
             dataset_info[f"localized_narratives_{dataset_name}"] = dataset_samples
             total_samples += dataset_samples

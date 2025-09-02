@@ -23,6 +23,9 @@ pip install -r requirements.txt
 
 # For GPU-accelerated DiNOv3 vision features (recommended):
 pip install torch transformers pillow
+
+# Optional: Login to HuggingFace (for private models or better download speed)
+huggingface-cli login
 ```
 
 ## Step 4: Download Data with Vision Caching
@@ -101,14 +104,19 @@ python train_unified.py --config configs/bitmar_without_memory.yaml
 ### Downloads fail
 
 1. Check internet connection
-2. Retry download command
-3. Check disk space (need ~10GB)
+2. **For Localized Narratives 404 errors**: URLs have been updated to use correct sharded format
+3. **For DiNOv3 model loading**: Ensure you have internet connection to download from HuggingFace
+4. Retry download command
+5. Check disk space (need ~10GB)
+6. For authentication issues: `huggingface-cli login`
 
 ### Vision cache issues
 
 1. Vision cache missing: Re-run download with `--cache_vision_features`
 2. Check cache files: `ls ./data/vision_features_cache/`
 3. Recreate with real features: Re-run download with `--cache_vision_features --real_vision_features`
+4. **DiNOv3 model not found**: Check internet connection, model downloads from HuggingFace
+5. **GPU not detected**: Install proper CUDA PyTorch version
 
 ---
 
@@ -177,13 +185,13 @@ python download_multimodal_data.py --dataset both --data_dir ./data --cache_visi
 
 ### Command Flags Explained
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--dataset` | Choose: `both`, `coco`, `localized_narratives` | Required |
-| `--data_dir` | Directory to save data | `./data` |
-| `--cache_vision_features` | Pre-cache vision features during download | `False` |
-| `--real_vision_features` | Use real DiNOv3 (requires GPU) vs dummy features | `False` |
-| `--skip_images` | Download only annotations, skip images | `False` |
+| Flag                      | Description                                      | Default  |
+| ------------------------- | ------------------------------------------------ | -------- |
+| `--dataset`               | Choose: `both`, `coco`, `localized_narratives`   | Required |
+| `--data_dir`              | Directory to save data                           | `./data` |
+| `--cache_vision_features` | Pre-cache vision features during download        | `False`  |
+| `--real_vision_features`  | Use real DiNOv3 (requires GPU) vs dummy features | `False`  |
+| `--skip_images`           | Download only annotations, skip images           | `False`  |
 
 ### Recommended Workflows
 
