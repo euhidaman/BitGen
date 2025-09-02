@@ -457,7 +457,9 @@ class MultimodalDatasetDownloader:
 
             dataset_samples = 0
 
-            for split, urls in splits.items():
+            # Only process training split to reduce dataset size
+            train_splits = {k: v for k, v in splits.items() if 'train' in k.lower()}
+            for split, urls in train_splits.items():
                 # Handle sharded URLs (list) or single URL (string)
                 if isinstance(urls, list):
                     # Sharded files (like Open Images train)
@@ -602,12 +604,11 @@ class MultimodalDatasetDownloader:
         logger.info("📄 First need to download Open Images CSV files to get image URLs...")
         
         # Download image URLs CSV (this contains the mapping from image_id to actual URL)
+        # Only use training set to keep it manageable
         train_csv_url = "https://storage.googleapis.com/openimages/2018_04/train/train-images-boxable-with-rotation.csv"
-        val_csv_url = "https://storage.googleapis.com/openimages/2018_04/validation/validation-images-with-rotation.csv"
-        test_csv_url = "https://storage.googleapis.com/openimages/2018_04/test/test-images-with-rotation.csv"
         
-        # Download CSV files to get image URLs
-        for csv_name, csv_url in [("train", train_csv_url), ("validation", val_csv_url), ("test", test_csv_url)]:
+        # Download only training CSV file to get image URLs
+        for csv_name, csv_url in [("train", train_csv_url)]:
             csv_file = oi_dir / f"{csv_name}_images.csv"
             if not csv_file.exists():
                 logger.info(f"📥 Downloading {csv_name} CSV...")
@@ -615,24 +616,24 @@ class MultimodalDatasetDownloader:
                     continue
         
         # Parse CSV files to build image_id -> URL mapping
-        logger.info("🔗 Building image_id to URL mapping from CSV files...")
+        logger.info("🔗 Building image_id to URL mapping from training CSV...")
         id_to_url = {}
         
-        for csv_name in ["train", "validation", "test"]:
-            csv_file = oi_dir / f"{csv_name}_images.csv"
-            if csv_file.exists():
-                try:
-                    import csv
-                    with open(csv_file, 'r') as f:
-                        reader = csv.DictReader(f)
-                        for row in reader:
-                            image_id = row.get('ImageID', '')
-                            original_url = row.get('OriginalURL', '')
-                            if image_id and original_url:
-                                id_to_url[image_id] = original_url
-                    logger.info(f"✅ Loaded {len(id_to_url)} image URLs from {csv_name} CSV")
-                except Exception as e:
-                    logger.warning(f"Failed to parse {csv_file}: {e}")
+        # Only process training CSV
+        csv_file = oi_dir / "train_images.csv"
+        if csv_file.exists():
+            try:
+                import csv
+                with open(csv_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        image_id = row.get('ImageID', '')
+                        original_url = row.get('OriginalURL', '')
+                        if image_id and original_url:
+                            id_to_url[image_id] = original_url
+                logger.info(f"✅ Loaded {len(id_to_url)} image URLs from training CSV")
+            except Exception as e:
+                logger.warning(f"Failed to parse {csv_file}: {e}")
         
         # Download images based on IDs
         downloaded_count = 0
