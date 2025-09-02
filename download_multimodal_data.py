@@ -105,7 +105,12 @@ class MultimodalDatasetDownloader:
                     'test': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_test_localized_narratives.jsonl'
                 },
                 'coco': {
-                    'train': 'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives.jsonl',
+                    'train': [
+                        'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00000-of-00004.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00001-of-00004.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00002-of-00004.jsonl',
+                        'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00003-of-00004.jsonl'
+                    ],
                     'validation': 'https://storage.googleapis.com/localized-narratives/annotations/coco_val_localized_narratives.jsonl'
                 }
             },
@@ -450,12 +455,16 @@ class MultimodalDatasetDownloader:
         total_samples = 0
         dataset_info = {}
         all_image_info = []  # Store image_id and dataset info for downloading actual images
+        
+        # Limit to first 50k samples for faster downloads
+        MAX_SAMPLES = 80000
+        samples_collected = 0
 
         for dataset_name, splits in self.datasets['localized_narratives'].items():
-            # Only process COCO by default to keep downloads manageable (~118k images vs 1.7M Open Images)
-            # Skip Open Images and other datasets unless specifically needed
-            if dataset_name != 'coco':
-                logger.info(f"⏭️ Skipping {dataset_name} dataset (only using COCO for faster downloads)")
+            # Only process Open Images (revert back to original working approach)
+            # But limit to first 50k samples for faster downloads
+            if dataset_name != 'open_images':
+                logger.info(f"⏭️ Skipping {dataset_name} dataset (only using Open Images subset)")
                 continue
                 
             dataset_dir = ln_dir / dataset_name
@@ -488,20 +497,31 @@ class MultimodalDatasetDownloader:
                             with open(filepath, 'r', encoding='utf-8') as f:
                                 samples = 0
                                 for line in f:
-                                    if line.strip():
+                                    if line.strip() and samples_collected < MAX_SAMPLES:
                                         try:
                                             data = json.loads(line)
                                             samples += 1
+                                            samples_collected += 1
                                             # Store image info for later downloading
                                             all_image_info.append({
                                                 'dataset_id': data.get('dataset_id', ''),
                                                 'image_id': data.get('image_id', ''),
                                                 'source_file': filepath
                                             })
+                                            
+                                            # Stop if we've collected enough samples
+                                            if samples_collected >= MAX_SAMPLES:
+                                                logger.info(f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                                break
                                         except json.JSONDecodeError:
                                             continue
                             dataset_samples_split += samples
                             logger.info(f"    ◦ shard {i}: {samples:,} samples")
+                            
+                            # Break shard loop if we've hit the limit
+                            if samples_collected >= MAX_SAMPLES:
+                                break
+                                
                         except Exception as e:
                             logger.warning(f"Failed to parse {filename}: {e}")
 
@@ -525,10 +545,11 @@ class MultimodalDatasetDownloader:
                         with open(filepath, 'r', encoding='utf-8') as f:
                             samples = 0
                             for line in f:
-                                if line.strip():
+                                if line.strip() and samples_collected < MAX_SAMPLES:
                                     try:
                                         data = json.loads(line)
                                         samples += 1
+                                        samples_collected += 1
                                         
                                         # Debug: Log dataset_id for first few samples
                                         if samples <= 3:
@@ -542,15 +563,30 @@ class MultimodalDatasetDownloader:
                                             'image_id': data.get('image_id', ''),
                                             'source_file': filepath
                                         })
+                                        
+                                        # Stop if we've collected enough samples
+                                        if samples_collected >= MAX_SAMPLES:
+                                            logger.info(f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                            break
                                     except json.JSONDecodeError:
                                         continue
                         dataset_samples += samples
                         logger.info(f"  • {split}: {samples:,} samples")
+                        
+                        # Break outer loop if we've hit the limit
+                        if samples_collected >= MAX_SAMPLES:
+                            break
+                            
                     except Exception as e:
                         logger.warning(f"Failed to parse {filename}: {e}")
 
             dataset_info[dataset_name] = dataset_samples
             total_samples += dataset_samples
+            
+            # Break dataset loop if we've hit the limit
+            if samples_collected >= MAX_SAMPLES:
+                logger.info(f"🛑 Sample limit reached, stopping dataset processing...")
+                break
 
         logger.info(f"✅ Localized Narratives: {total_samples:,} samples loaded")
 
