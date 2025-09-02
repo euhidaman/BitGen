@@ -47,7 +47,7 @@ class LocalizedNarrativesCOCODataset(Dataset):
         use_dummy_vision: bool = False,
         cache_vision_features: bool = True,
         force_rebuild_cache: bool = False,
-        use_hf_localized_narratives: bool = True,
+        use_hf_localized_narratives: bool = False,  # Disabled due to deprecated scripts
         hf_dataset_config: str = "open_images",  # open_images, ait, flickr, coco
         max_samples_per_split: int = 10000  # Limit samples for faster loading
     ):
@@ -142,11 +142,10 @@ class LocalizedNarrativesCOCODataset(Dataset):
 
         # Load HuggingFace LocalizedNarratives if enabled
         if self.use_hf_localized_narratives:
-            self._load_hf_localized_narratives()
-            # Skip COCO when using HuggingFace - HF dataset has enough data
-            logger.info("🤗 Using HuggingFace LocalizedNarratives - skipping COCO to avoid URL issues")
+            logger.warning("⚠️ HuggingFace LocalizedNarratives disabled due to deprecated scripts")
+            self._load_localized_narratives()
         else:
-            # Fallback to local Localized Narratives
+            # Use local Localized Narratives
             self._load_localized_narratives()
             # Load COCO captions with image URLs (only when not using HuggingFace)
             self._load_coco_captions()

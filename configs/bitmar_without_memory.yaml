@@ -101,7 +101,7 @@ data:
   max_seq_length: 256 # Balanced sequence length
 
   # HuggingFace LocalizedNarratives configuration
-  use_hf_localized_narratives: true # Use HuggingFace dataset instead of local files
+  use_hf_localized_narratives: false # Disabled - HuggingFace scripts deprecated
   hf_dataset_config: "open_images" # Options: open_images, ait, flickr, coco
   max_samples_per_split: 15000 # Limit samples for faster loading (15k train + 7.5k val)
 
