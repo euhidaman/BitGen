@@ -41,12 +41,12 @@ langchain-experimental
 
 # Anomaly detection
 pyod
-IsolationForest
-scikit-learn
 
 # Security monitoring
 cryptography
-hashlib
+
+# JSON handling
+json5
 
 # Rate limiting and security
 slowapi
