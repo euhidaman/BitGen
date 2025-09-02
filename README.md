@@ -106,9 +106,10 @@ python train_unified.py --config configs/bitmar_without_memory.yaml
 1. Check internet connection
 2. **For Localized Narratives 404 errors**: URLs have been updated to use correct sharded format
 3. **For DiNOv3 model loading**: Ensure you have internet connection to download from HuggingFace
-4. Retry download command
-5. Check disk space (need ~10GB)
-6. For authentication issues: `huggingface-cli login`
+4. **Model identifier**: Uses `facebook/dinov3-vits16-pretrain-lvd1689m`
+5. Retry download command
+6. Check disk space (need ~10GB)
+7. For authentication issues: `huggingface-cli login`
 
 ### Vision cache issues
 

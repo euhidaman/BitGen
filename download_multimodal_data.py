@@ -108,9 +108,9 @@ class MultimodalDatasetDownloader:
         try:
             logger.info("Loading DiNOv3 vision model...")
             self.vision_model = self.Dinov2Model.from_pretrained(
-                "facebook/dinov2-vits14")
+                "facebook/dinov3-vits16-pretrain-lvd1689m")
             self.vision_processor = self.AutoImageProcessor.from_pretrained(
-                "facebook/dinov2-vits14")
+                "facebook/dinov3-vits16-pretrain-lvd1689m")
 
             # Check for GPU availability and move model
             if self.torch.cuda.is_available():
