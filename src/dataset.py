@@ -143,12 +143,13 @@ class LocalizedNarrativesCOCODataset(Dataset):
         # Load HuggingFace LocalizedNarratives if enabled
         if self.use_hf_localized_narratives:
             self._load_hf_localized_narratives()
+            # Skip COCO when using HuggingFace - HF dataset has enough data
+            logger.info("🤗 Using HuggingFace LocalizedNarratives - skipping COCO to avoid URL issues")
         else:
             # Fallback to local Localized Narratives
             self._load_localized_narratives()
-
-        # Load COCO captions with image URLs
-        self._load_coco_captions()
+            # Load COCO captions with image URLs (only when not using HuggingFace)
+            self._load_coco_captions()
 
         logger.info(
             f"✅ Total loaded: {len(self.all_captions):,} image-caption pairs")
