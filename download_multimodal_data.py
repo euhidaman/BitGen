@@ -47,7 +47,7 @@ class MultimodalDatasetDownloader:
         if self.use_hf_localized_narratives:
             logger.warning(f"⚠️ HuggingFace LocalizedNarratives uses deprecated scripts - may not work")
         else:
-            logger.info("📁 Will use local/downloaded LocalizedNarratives with dummy vision features")
+            logger.info("📁 Will download LocalizedNarratives from original sources")
 
         # Vision caching options
         self.cache_vision_features = cache_vision_features
@@ -414,9 +414,14 @@ class MultimodalDatasetDownloader:
 
     def download_localized_narratives(self) -> Dict[str, int]:
         """Download Localized Narratives annotations or load from HuggingFace"""
+        logger.info(f"🔧 Debug: use_hf_localized_narratives = {self.use_hf_localized_narratives}")
+        logger.info(f"🔧 Debug: HF_DATASETS_AVAILABLE = {HF_DATASETS_AVAILABLE}")
+        
         if self.use_hf_localized_narratives:
+            logger.info("🤗 Attempting HuggingFace LocalizedNarratives...")
             return self._load_hf_localized_narratives()
         else:
+            logger.info("📁 Using local LocalizedNarratives download...")
             return self._download_local_localized_narratives()
     
     def _load_hf_localized_narratives(self) -> Dict[str, int]:
