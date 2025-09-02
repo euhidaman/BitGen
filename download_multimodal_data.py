@@ -516,7 +516,7 @@ class MultimodalDatasetDownloader:
                         logger.info(f"✅ {filename} already exists, skipping download")
                     else:
                         success = self.download_file(
-                            url, filepath, f"Localized Narratives {dataset_name} {split}")
+                            urls, filepath, f"Localized Narratives {dataset_name} {split}")
                         if not success:
                             continue
 
