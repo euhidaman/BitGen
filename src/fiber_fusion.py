@@ -227,8 +227,21 @@ class FIBERTransformerBlock(nn.Module):
 
         # Self-attention for vision
         vision_normed = self.vision_norm1(vision_hidden_states)
-        # Convert attention mask: True = valid tokens, but MultiheadAttention expects True = ignore
-        vision_key_padding_mask = ~vision_attention_mask if vision_attention_mask is not None else None
+        
+        # Handle vision attention mask - ensure it matches vision sequence length
+        vision_key_padding_mask = None
+        if vision_attention_mask is not None:
+            # Ensure vision_attention_mask has the right shape for vision sequence
+            vision_seq_len = vision_hidden_states.shape[1]
+            if vision_attention_mask.shape[1] != vision_seq_len:
+                # Create appropriate mask for vision sequence length
+                vision_key_padding_mask = torch.zeros(
+                    vision_hidden_states.shape[0], vision_seq_len,
+                    dtype=torch.bool, device=vision_hidden_states.device
+                )
+            else:
+                vision_key_padding_mask = ~vision_attention_mask
+        
         vision_self_output, vision_self_weights = self.vision_attention(
             vision_normed, vision_normed, vision_normed,
             key_padding_mask=vision_key_padding_mask,
@@ -240,8 +253,15 @@ class FIBERTransformerBlock(nn.Module):
 
         # Self-attention for text
         text_normed = self.text_norm1(text_hidden_states)
-        # Convert attention mask: True = valid tokens, but MultiheadAttention expects True = ignore
-        text_key_padding_mask = ~text_attention_mask if text_attention_mask is not None else None
+        
+        # Handle text attention mask - ensure dimensions are correct
+        text_key_padding_mask = None
+        if text_attention_mask is not None:
+            # text_attention_mask should be [batch_size, seq_len]
+            if text_attention_mask.shape != text_hidden_states.shape[:2]:
+                raise ValueError(f"Text attention mask shape {text_attention_mask.shape} doesn't match text features {text_hidden_states.shape[:2]}")
+            text_key_padding_mask = ~text_attention_mask
+            
         text_self_output, text_self_weights = self.text_attention(
             text_normed, text_normed, text_normed,
             key_padding_mask=text_key_padding_mask,
