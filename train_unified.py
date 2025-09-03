@@ -9,9 +9,9 @@ from src.security_guard import (
 )
 from src.robot_reasoning import ReasoningFormatValidator, create_robot_reasoning_integration
 from src.robot_reasoning_dataset import create_robot_reasoning_data_module, create_robot_reasoning_trainer_integration
-from src.memory_visualization_integration import setup_memory_visualization
-from src.attention_visualizer import AttentionHeadAnalyzer
-from src.wandb_logger import BitMarWandbLogger
+# from src.memory_visualization_integration import setup_memory_visualization
+# from src.attention_visualizer import AttentionHeadAnalyzer  # Temporarily disabled
+# from src.wandb_logger import BitMarWandbLogger
 from src.model import create_bitmar_model, count_parameters
 from src.dataset import create_data_module
 import os
@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import wandb
+# import wandb  # Temporarily disabled
 from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
@@ -226,16 +226,17 @@ class UnifiedBitMarTrainer:
         if wandb_config.get('project'):
             try:
                 # Standard run name without token info
-                run_name = f"bitmar-unified-{wandb.util.generate_id()[:8]}"
+                run_name = f"bitmar-unified-{1234567890123456:08x}"
 
-                self.wandb_logger = BitMarWandbLogger(
-                    project_name=wandb_config['project'],
-                    config=self.config,
-                    entity=wandb_config.get('entity'),
-                    run_name=run_name
-                )
-                self.use_wandb = True
-                logger.info("✅ Weights & Biases initialized")
+                # self.wandb_logger = BitMarWandbLogger(  # Temporarily disabled
+                #     project_name=wandb_config['project'],
+                #     config=self.config,
+                #     entity=wandb_config.get('entity'),
+                #     run_name=run_name
+                # )
+                self.use_wandb = False  # Temporarily disabled
+                self.wandb_logger = None
+                logger.info("✅ Weights & Biases temporarily disabled")
             except Exception as e:
                 logger.warning(f"Failed to initialize wandb: {e}")
                 self.use_wandb = False
@@ -993,7 +994,7 @@ class UnifiedBitMarTrainer:
 
         # Setup optional components
         self.setup_attention_analyzer()
-        self.setup_memory_visualization()
+        # self.setup_memory_visualization()  # Temporarily disabled
         self.setup_flops_tracking()
         self.setup_adaptive_training()
 

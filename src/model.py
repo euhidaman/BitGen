@@ -694,12 +694,25 @@ class EpisodicMemory(nn.Module):
     def _compute_episode_quality(self, episode: torch.Tensor, retrieved: torch.Tensor) -> torch.Tensor:
         """Compute quality score for memory episodes"""
         # Quality based on diversity and relevance
+        # episode: [batch_size, episode_dim], memory: [memory_size, episode_dim]
+        # We want to compute similarity between each episode and all memory slots
+        
+        batch_size = episode.size(0)
+        
+        # Expand dimensions for broadcasting: [batch_size, 1, episode_dim] vs [1, memory_size, episode_dim]
+        episode_expanded = episode.unsqueeze(1)  # [batch_size, 1, episode_dim]
+        memory_expanded = self.memory.unsqueeze(0)  # [1, memory_size, episode_dim]
+        
+        # Compute cosine similarity across all combinations
         similarity_to_memory = torch.cosine_similarity(
-            episode.unsqueeze(1), self.memory.unsqueeze(0), dim=-1
-        ).max(dim=1)[0]
+            episode_expanded, memory_expanded, dim=-1  # [batch_size, memory_size]
+        )
+        
+        # Get maximum similarity for each episode (most similar memory slot)
+        max_similarity = similarity_to_memory.max(dim=-1)[0]  # [batch_size]
 
         # Encourage diversity - lower similarity = higher quality
-        diversity_score = 1.0 - similarity_to_memory
+        diversity_score = 1.0 - max_similarity
 
         # Relevance score based on retrieval quality
         retrieval_quality = torch.cosine_similarity(episode, retrieved, dim=-1)
