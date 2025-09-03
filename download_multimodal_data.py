@@ -486,7 +486,7 @@ class MultimodalDatasetDownloader:
         all_image_info = []  # Store image_id and dataset info for downloading actual images
 
         # Limit to first 50k samples for faster downloads
-        MAX_SAMPLES = 80000
+        MAX_SAMPLES = 50000
         samples_collected = 0
 
         for dataset_name, splits in self.datasets['localized_narratives'].items():
@@ -691,13 +691,15 @@ class MultimodalDatasetDownloader:
         logger.info("🔍 Quick check: scanning existing images...")
         existing_files = list(oi_dir.glob("*.jpg"))
         existing_ids = {f.stem for f in existing_files if f.stat().st_size > 0}
-        needed_ids = [img_id for img_id in image_ids if img_id not in existing_ids]
-        
+        needed_ids = [
+            img_id for img_id in image_ids if img_id not in existing_ids]
+
         logger.info(f"📊 Found {len(existing_ids)} existing images in folder")
         logger.info(f"📊 Need to check {len(needed_ids)} more images")
-        
+
         if len(needed_ids) == 0:
-            logger.info("✅ All requested images already exist! Skipping download entirely.")
+            logger.info(
+                "✅ All requested images already exist! Skipping download entirely.")
             logger.info(f"📁 All {len(image_ids)} images found in {oi_dir}")
             return len(existing_ids)
 
@@ -742,9 +744,10 @@ class MultimodalDatasetDownloader:
         # Download images based on IDs (only the needed ones)
         downloaded_count = 0
         existing_count = 0
-        
-        logger.info(f"🔍 Now downloading the {len(needed_ids)} missing images...")
-        
+
+        logger.info(
+            f"🔍 Now downloading the {len(needed_ids)} missing images...")
+
         for image_id in tqdm(needed_ids, desc="Downloading missing Open Images"):
             if image_id in id_to_url:
                 image_url = id_to_url[image_id]
@@ -769,9 +772,11 @@ class MultimodalDatasetDownloader:
                     logger.debug(f"Error downloading {image_url}: {e}")
 
         total_existing = len(existing_ids)  # From pre-check
-        logger.info(f"✅ Found {total_existing} existing images, downloaded {downloaded_count} new images")
-        logger.info(f"📊 Total images available: {total_existing + downloaded_count}")
-        
+        logger.info(
+            f"✅ Found {total_existing} existing images, downloaded {downloaded_count} new images")
+        logger.info(
+            f"📊 Total images available: {total_existing + downloaded_count}")
+
         return total_existing + downloaded_count
 
     def _download_coco_images_by_ids(self, image_ids: List[str], dataset_id: str):
