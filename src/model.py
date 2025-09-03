@@ -1541,19 +1541,31 @@ class BitMarModel(nn.Module):
         self.freeze_encoders_conditionally(step)
 
         # 1. Encode text using BitNet encoder
+        logger.debug(f"🔍 Debug: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
         text_features, text_attention_patterns = self.encode_text(input_ids, attention_mask)
+        logger.debug(f"🔍 Debug: Text features shape: {text_features.shape}")
 
         # 2. Encode vision using quantized vision encoder
+        logger.debug(f"🔍 Debug: Vision input shape: {vision_features.shape}")
         vision_latent = self.encode_vision(vision_features)
+        logger.debug(f"🔍 Debug: Vision latent shape: {vision_latent.shape}")
 
         # 3. FIBER-enhanced cross-modal fusion
-        logger.debug(f"��� Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
+        logger.debug(f"🔄 Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
-        fused_features, fiber_attention_weights = self.fusion(
-            text_features=text_features,
-            vision_features=vision_latent,
-            text_attention_mask=attention_mask
-        )
+        try:
+            fused_features, fiber_attention_weights = self.fusion(
+                text_features=text_features,
+                vision_features=vision_latent,
+                text_attention_mask=attention_mask
+            )
+            logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
+        except Exception as e:
+            logger.error(f"❌ FIBER fusion failed: {e}")
+            logger.error(f"   Text features: {text_features.shape}")
+            logger.error(f"   Vision latent: {vision_latent.shape}")
+            logger.error(f"   Attention mask: {attention_mask.shape}")
+            raise e
 
         # Log FIBER fusion results
         logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")

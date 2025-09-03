@@ -392,6 +392,15 @@ class FIBERFusion(nn.Module):
         Returns:
             Enhanced text features, enhanced vision features, attention patterns
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"🔍 FIBER Forward - Input shapes:")
+        logger.debug(f"   text_features: {text_features.shape}")
+        logger.debug(f"   vision_features: {vision_features.shape}")
+        logger.debug(f"   text_attention_mask: {text_attention_mask.shape if text_attention_mask is not None else None}")
+        logger.debug(f"   vision_attention_mask: {vision_attention_mask.shape if vision_attention_mask is not None else None}")
+        
         batch_size = text_features.shape[0]
         text_seq_len = text_features.shape[1]
 
@@ -399,12 +408,24 @@ class FIBERFusion(nn.Module):
         if vision_features.dim() == 2:  # [batch_size, vision_dim]
             vision_features = vision_features.unsqueeze(1)  # [batch_size, 1, vision_dim]
             vision_seq_len = 1
+            logger.debug(f"🔍 FIBER - Converted vision to sequence format: {vision_features.shape}")
         else:  # [batch_size, vision_seq_len, vision_dim]
             vision_seq_len = vision_features.shape[1]
 
         # Project to common hidden dimension
-        text_hidden = self.text_projection(text_features)
-        vision_hidden = self.vision_projection(vision_features)
+        try:
+            text_hidden = self.text_projection(text_features)
+            logger.debug(f"🔍 FIBER - Text projection: {text_hidden.shape}")
+        except Exception as e:
+            logger.error(f"❌ FIBER text projection failed: {e}")
+            raise e
+            
+        try:
+            vision_hidden = self.vision_projection(vision_features)
+            logger.debug(f"🔍 FIBER - Vision projection: {vision_hidden.shape}")
+        except Exception as e:
+            logger.error(f"❌ FIBER vision projection failed: {e}")
+            raise e
 
         # Store attention patterns
         all_attention_patterns = {
@@ -416,13 +437,23 @@ class FIBERFusion(nn.Module):
 
         # Pass through FIBER transformer layers
         for layer_idx, layer in enumerate(self.layers):
-            vision_hidden, text_hidden, attention_patterns = layer(
-                vision_hidden_states=vision_hidden,
-                text_hidden_states=text_hidden,
-                vision_attention_mask=vision_attention_mask,
-                text_attention_mask=text_attention_mask,
-                output_attentions=output_attentions
-            )
+            logger.debug(f"🔍 FIBER Layer {layer_idx} - Input shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+            try:
+                vision_hidden, text_hidden, attention_patterns = layer(
+                    vision_hidden_states=vision_hidden,
+                    text_hidden_states=text_hidden,
+                    vision_attention_mask=vision_attention_mask,
+                    text_attention_mask=text_attention_mask,
+                    output_attentions=output_attentions
+                )
+                logger.debug(f"🔍 FIBER Layer {layer_idx} - Output shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+            except Exception as e:
+                logger.error(f"❌ FIBER Layer {layer_idx} failed: {e}")
+                logger.error(f"   Vision input shape: {vision_hidden.shape}")
+                logger.error(f"   Text input shape: {text_hidden.shape}")
+                logger.error(f"   Vision mask: {vision_attention_mask.shape if vision_attention_mask is not None else None}")
+                logger.error(f"   Text mask: {text_attention_mask.shape if text_attention_mask is not None else None}")
+                raise e
 
             if output_attentions:
                 for key, value in attention_patterns.items():
