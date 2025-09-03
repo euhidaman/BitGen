@@ -1,0 +1,127 @@
+# Test Configuration - WITH EPISODIC MEMORY (20 samples)
+# Quick test to verify training pipeline works
+
+model:
+  # Robot Reasoning Configuration (minimal for testing)
+  enable_robot_reasoning: false # DISABLED for quick testing
+  
+  # GRPO Configuration (disabled for testing)
+  enable_grpo_training: false # DISABLED for quick testing
+  
+  # Episodic Memory Control for Ablation Study
+  use_episodic_memory: true # ENABLED for this config (full model)
+
+  # BitNet Text Encoder (smaller for testing)
+  vocab_size: 50257 # GPT-2 vocabulary
+  text_encoder_dim: 64 # Smaller for testing
+  text_encoder_layers: 2 # Fewer layers for testing
+  text_encoder_heads: 2 # Fewer heads for testing
+
+  # BitNet Text Decoder (smaller for testing)
+  text_decoder_dim: 64 # Match encoder dimension
+  text_decoder_layers: 2 # Fewer layers for testing
+  text_decoder_heads: 2 # Fewer heads for testing
+
+  # Vision processing (simplified)
+  vision_encoder_dim: 768 # Generic vision feature dimension
+  vision_latent_size: 64 # Match text encoder dim for consistency
+  vision_hidden_size: 32 # Smaller for testing
+  vision_compression_method: "learned_compression"
+  vision_spatial_pooling: true
+  vision_pool_size: 2
+
+  # Cross-modal fusion (simplified)
+  fusion_hidden_size: 64 # Match text encoder dim for consistency
+  fusion_num_heads: 2 # Fewer heads for testing
+  fusion_num_layers: 1 # Single layer for testing
+
+  # FIBER-specific configuration (simplified)
+  num_fiber_fusion_layers: 2 # Fewer layers for testing
+  fiber_learnable_alpha: true
+  fiber_bidirectional_fusion: true
+  fiber_text_fusion_layers: 2
+  fiber_vision_fusion_layers: 1
+  fiber_backbone_integration: true
+  fiber_attention_temperature: 1.0
+  fiber_residual_connection: true
+  fiber_layer_norm_eps: 1e-6
+  fiber_mlp_ratio: 2.0 # Smaller ratio for testing
+
+  # FIBER fusion strategy
+  fiber_fusion_strategy: "deep_backbone"
+  fiber_cross_attention_dropout: 0.1
+  fiber_enable_gradient_checkpointing: false # Disabled for testing
+
+  # Episodic Memory (ENABLED - simplified)
+  memory_size: 8 # Smaller for testing
+  episode_dim: 64 # Match fusion dimension for consistency
+  memory_alpha: 0.2
+  direct_writing: true
+  memory_compression: true
+  enable_adaptive_training: true
+
+  # Model configuration (simplified)
+  max_seq_len: 128 # Shorter sequences for testing
+  dropout: 0.1
+
+# Vision feature configuration (simplified)
+vision_feature_reduction:
+  enabled: true
+  method: "learned_compression"
+  target_dim: 32 # Smaller for testing
+  spatial_pooling: true
+  pool_method: "attention"
+  hidden_dim: 64 # Smaller for testing
+  learnable: true
+  preserve_spatial_info: true
+
+data:
+  # TEST DATASET CONFIGURATION
+  dataset_dir: "./test_data" # USE TEST DATA
+  text_encoder_name: "gpt2"
+  vision_feature_cache_dir: "./data/vision_features_cache" # Use real cached features
+  
+  # Vision feature configuration
+  extract_vision_features: false # Already extracted
+  use_dummy_vision: false # Use real cached features
+  cache_vision_features: true # Enable cache loading
+  
+  # Batch sizes (small for testing)
+  train_batch_size: 2 # Very small for testing
+  eval_batch_size: 2
+  
+  # Dataset paths
+  localized_narratives_dir: "./test_data/localized_narratives"
+  open_images_dir: "./test_data/open_images"
+  all_captions_file: "./test_data/all_captions.json"
+
+training:
+  # Training configuration (minimal for testing)
+  max_epochs: 2 # Just 2 epochs for testing
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 5 # Minimal warmup for testing
+  
+  # Logging (frequent for testing)
+  log_every: 1 # Log every step for testing
+  save_every: 10 # Save frequently for testing
+  eval_every: 5 # Evaluate frequently for testing
+  
+  # Output directory
+  output_dir: "./test_outputs"
+  checkpoint_dir: "./test_checkpoints"
+  
+  # Early stopping (aggressive for testing)
+  patience: 5
+  min_delta: 0.001
+
+# Logging configuration
+logging:
+  use_wandb: false # Disabled for testing
+  project_name: "bitgen_test"
+  run_name: "test_with_memory"
+  log_dir: "./test_logs"
+
+# GPU configuration
+device: "auto" # Auto-detect GPU/CPU
+mixed_precision: false # Disabled for testing to avoid issues
