@@ -681,16 +681,30 @@ class MultimodalDatasetDownloader:
 
     def _download_open_images_by_ids(self, image_ids: List[str]):
         """Download Open Images using image IDs"""
-        logger.info(f"🖼️ Downloading {len(image_ids)} Open Images...")
+        logger.info(f"🖼️ Processing {len(image_ids)} Open Images...")
 
         # Create Open Images download directory
         oi_dir = self.data_dir / "open_images"
         oi_dir.mkdir(exist_ok=True)
 
+        # Quick pre-check: count existing images first (BEFORE CSV download)
+        logger.info("🔍 Quick check: scanning existing images...")
+        existing_files = list(oi_dir.glob("*.jpg"))
+        existing_ids = {f.stem for f in existing_files if f.stat().st_size > 0}
+        needed_ids = [img_id for img_id in image_ids if img_id not in existing_ids]
+        
+        logger.info(f"📊 Found {len(existing_ids)} existing images in folder")
+        logger.info(f"📊 Need to check {len(needed_ids)} more images")
+        
+        if len(needed_ids) == 0:
+            logger.info("✅ All requested images already exist! Skipping download entirely.")
+            logger.info(f"📁 All {len(image_ids)} images found in {oi_dir}")
+            return len(existing_ids)
+
         # Open Images URLs follow pattern: https://c{bucket}.staticflickr.com/{server}/{id}_{secret}_{size}.jpg
         # But we need the CSV files to get the actual URLs
         logger.info(
-            "📄 First need to download Open Images CSV files to get image URLs...")
+            f"📄 Only {len(needed_ids)} images missing - downloading CSV to get URLs...")
 
         # Download image URLs CSV (this contains the mapping from image_id to actual URL)
         # Only use training set to keep it manageable
@@ -725,23 +739,23 @@ class MultimodalDatasetDownloader:
             except Exception as e:
                 logger.warning(f"Failed to parse {csv_file}: {e}")
 
-        # Download images based on IDs
+        # Download images based on IDs (only the needed ones)
         downloaded_count = 0
         existing_count = 0
         
-        logger.info(f"🔍 Checking which of {len(image_ids)} images already exist...")
+        logger.info(f"🔍 Now downloading the {len(needed_ids)} missing images...")
         
-        for image_id in tqdm(image_ids, desc="Downloading Open Images"):
+        for image_id in tqdm(needed_ids, desc="Downloading missing Open Images"):
             if image_id in id_to_url:
                 image_url = id_to_url[image_id]
                 image_file = oi_dir / f"{image_id}.jpg"
 
+                # Since we pre-filtered, this should not exist, but double-check anyway
                 if image_file.exists() and image_file.stat().st_size > 0:
-                    # Image already exists and has content
                     existing_count += 1
                     continue
 
-                # Image doesn't exist or is empty, download it
+                # Download the missing image
                 try:
                     response = requests.get(image_url, timeout=10)
                     if response.status_code == 200:
@@ -754,8 +768,11 @@ class MultimodalDatasetDownloader:
                 except Exception as e:
                     logger.debug(f"Error downloading {image_url}: {e}")
 
-        logger.info(f"✅ Found {existing_count} existing images, downloaded {downloaded_count} new images")
-        logger.info(f"📊 Total images available: {existing_count + downloaded_count}")
+        total_existing = len(existing_ids)  # From pre-check
+        logger.info(f"✅ Found {total_existing} existing images, downloaded {downloaded_count} new images")
+        logger.info(f"📊 Total images available: {total_existing + downloaded_count}")
+        
+        return total_existing + downloaded_count
 
     def _download_coco_images_by_ids(self, image_ids: List[str], dataset_id: str):
         """Download COCO images using bulk zip download for much faster downloads"""
