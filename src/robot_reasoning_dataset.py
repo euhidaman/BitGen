@@ -287,7 +287,7 @@ Selected robot(s): [Robot Name(s)]
 
         return {
             'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0).bool(),  # Convert to boolean
             'labels': encoding['input_ids'].squeeze(0).clone(),  # For language modeling loss
             'vision_features': vision_features,
             'robot_labels': example['robot_labels'],

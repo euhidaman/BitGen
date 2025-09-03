@@ -227,9 +227,11 @@ class FIBERTransformerBlock(nn.Module):
 
         # Self-attention for vision
         vision_normed = self.vision_norm1(vision_hidden_states)
+        # Convert attention mask: True = valid tokens, but MultiheadAttention expects True = ignore
+        vision_key_padding_mask = ~vision_attention_mask if vision_attention_mask is not None else None
         vision_self_output, vision_self_weights = self.vision_attention(
             vision_normed, vision_normed, vision_normed,
-            attn_mask=vision_attention_mask,
+            key_padding_mask=vision_key_padding_mask,
             need_weights=output_attentions
         )
         vision_hidden_states = vision_hidden_states + vision_self_output
@@ -238,9 +240,11 @@ class FIBERTransformerBlock(nn.Module):
 
         # Self-attention for text
         text_normed = self.text_norm1(text_hidden_states)
+        # Convert attention mask: True = valid tokens, but MultiheadAttention expects True = ignore
+        text_key_padding_mask = ~text_attention_mask if text_attention_mask is not None else None
         text_self_output, text_self_weights = self.text_attention(
             text_normed, text_normed, text_normed,
-            attn_mask=text_attention_mask,
+            key_padding_mask=text_key_padding_mask,
             need_weights=output_attentions
         )
         text_hidden_states = text_hidden_states + text_self_output
@@ -439,6 +443,7 @@ class FIBERIntegration(nn.Module):
         self.text_encoder_dim = text_encoder_dim
         self.vision_encoder_dim = vision_encoder_dim
         self.fusion_hidden_size = fusion_hidden_size
+        self.hidden_dim = fusion_hidden_size  # Alias for compatibility
 
         # Apply FIBER-specific configuration if provided
         if fiber_config:

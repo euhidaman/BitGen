@@ -532,6 +532,9 @@ class LocalizedNarrativesCOCODataset(Dataset):
         input_ids = encoded['input_ids'].squeeze(0)
         attention_mask = encoded['attention_mask'].squeeze(0)
 
+        # Convert attention mask to boolean for PyTorch compatibility
+        attention_mask = attention_mask.bool()
+
         # Create labels for text generation
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
