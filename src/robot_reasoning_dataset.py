@@ -377,7 +377,7 @@ def create_robot_reasoning_data_module(config: Dict):
             self.robot_dataset = None
             self.hybrid_dataset = None
 
-        def setup(self):
+        def setup(self, stage=None, rebuild_cache=False):
             """Setup datasets with robot reasoning integration"""
             from transformers import AutoTokenizer
 
