@@ -21,6 +21,9 @@ from tqdm import tqdm
 import pickle
 import hashlib
 
+# Setup logger first
+logger = logging.getLogger(__name__)
+
 # HuggingFace datasets import
 try:
     from datasets import load_dataset
@@ -30,8 +33,6 @@ except ImportError:
     HF_DATASETS_AVAILABLE = False
     logger.warning(
         "⚠️ HuggingFace datasets not available - install with: pip install datasets")
-
-logger = logging.getLogger(__name__)
 
 
 class LocalizedNarrativesCOCODataset(Dataset):
