@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class MultimodalDatasetDownloader:
     """Download and prepare Localized Narratives and COCO datasets"""
 
-    def __init__(self, data_dir: str = "./data", cache_vision_features: bool = False, use_real_vision: bool = False, 
+    def __init__(self, data_dir: str = "./data", cache_vision_features: bool = False, use_real_vision: bool = False,
                  use_hf_localized_narratives: bool = False, hf_dataset_config: str = "open_images"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
@@ -43,11 +43,13 @@ class MultimodalDatasetDownloader:
         # HuggingFace options (disabled by default due to deprecated scripts)
         self.use_hf_localized_narratives = use_hf_localized_narratives and HF_DATASETS_AVAILABLE
         self.hf_dataset_config = hf_dataset_config
-        
+
         if self.use_hf_localized_narratives:
-            logger.warning(f"⚠️ HuggingFace LocalizedNarratives uses deprecated scripts - may not work")
+            logger.warning(
+                f"⚠️ HuggingFace LocalizedNarratives uses deprecated scripts - may not work")
         else:
-            logger.info("📁 Will download LocalizedNarratives from original sources")
+            logger.info(
+                "📁 Will download LocalizedNarratives from original sources")
 
         # Vision caching options
         self.cache_vision_features = cache_vision_features
@@ -132,7 +134,8 @@ class MultimodalDatasetDownloader:
             # Use a working DiNOv2 model that exists and is compatible
             model_name = "facebook/dinov2-base"
             self.vision_model = self.Dinov2Model.from_pretrained(model_name)
-            self.vision_processor = self.AutoImageProcessor.from_pretrained(model_name)
+            self.vision_processor = self.AutoImageProcessor.from_pretrained(
+                model_name)
 
             # Check for GPU availability and move model
             if self.torch.cuda.is_available():
@@ -164,18 +167,20 @@ class MultimodalDatasetDownloader:
 
         # Filter out None values (images not found locally)
         valid_image_sources = [src for src in image_sources if src is not None]
-        
+
         if not valid_image_sources:
             logger.warning(f"No valid image sources found for {dataset_name}")
             return 0
 
-        logger.info(f"Caching vision features for {len(valid_image_sources)} images from {dataset_name}")
+        logger.info(
+            f"Caching vision features for {len(valid_image_sources)} images from {dataset_name}")
 
         cached_count = 0
 
         with tqdm(total=len(valid_image_sources), desc=f"Caching {dataset_name} features") as pbar:
             for image_source in valid_image_sources:
-                cache_key = self._generate_cache_key(str(image_source), dataset_name)
+                cache_key = self._generate_cache_key(
+                    str(image_source), dataset_name)
                 cache_file = self.vision_cache_dir / f"{cache_key}.npy"
                 metadata_file = self.vision_cache_dir / f"{cache_key}.pkl"
 
@@ -189,17 +194,20 @@ class MultimodalDatasetDownloader:
                         # Extract real features
                         if image_source and os.path.exists(str(image_source)):
                             # Local file - use file extraction method
-                            features = self._extract_real_vision_features_from_file(image_source)
+                            features = self._extract_real_vision_features_from_file(
+                                image_source)
                         elif image_source and image_source.startswith('http'):
                             # URL - but handle 403 gracefully
-                            features = self._extract_real_vision_features(image_source)
+                            features = self._extract_real_vision_features(
+                                image_source)
                         else:
                             # No valid source, use dummy
                             features = self.torch.randn(768)
                         features_array = features.cpu().numpy()
                     else:
                         # Generate dummy features (768-dimensional like DiNOv2) using numpy
-                        features_array = np.random.randn(768).astype(np.float32)
+                        features_array = np.random.randn(
+                            768).astype(np.float32)
 
                     # Save features and metadata
                     np.save(cache_file, features_array)
@@ -217,10 +225,11 @@ class MultimodalDatasetDownloader:
                     cached_count += 1
 
                 except Exception as e:
-                    logger.debug(f"Failed to cache features for {image_source}: {e}")
+                    logger.debug(
+                        f"Failed to cache features for {image_source}: {e}")
                     # Create dummy features as fallback
                     features_array = np.random.randn(768).astype(np.float32)
-                    
+
                     try:
                         np.save(cache_file, features_array)
                         metadata = {
@@ -233,13 +242,15 @@ class MultimodalDatasetDownloader:
                             pickle.dump(metadata, f)
                         cached_count += 1
                     except Exception as e2:
-                        logger.warning(f"Failed to save fallback features: {e2}")
+                        logger.warning(
+                            f"Failed to save fallback features: {e2}")
 
                 pbar.update(1)
 
-        logger.info(f"✅ Cached {cached_count} new vision features for {dataset_name}")
+        logger.info(
+            f"✅ Cached {cached_count} new vision features for {dataset_name}")
         return cached_count
-    
+
     def _extract_real_vision_features_from_file(self, image_path: str):
         """Extract real DiNOv2 features from local image file"""
         try:
@@ -254,12 +265,14 @@ class MultimodalDatasetDownloader:
             # Extract features using GPU
             with self.torch.no_grad():
                 outputs = self.vision_model(**inputs)
-                features = outputs.last_hidden_state.mean(dim=1).squeeze()  # Global average pooling
+                features = outputs.last_hidden_state.mean(
+                    dim=1).squeeze()  # Global average pooling
 
             return features.cpu()
 
         except Exception as e:
-            logger.warning(f"Failed to extract features from local file {image_path}: {e}")
+            logger.warning(
+                f"Failed to extract features from local file {image_path}: {e}")
             # Return dummy features as fallback
             return self.torch.randn(768)
 
@@ -269,7 +282,8 @@ class MultimodalDatasetDownloader:
             # Download image with timeout and handle errors gracefully
             response = requests.get(image_url, timeout=10)
             if response.status_code == 403:
-                logger.debug(f"403 Forbidden for {image_url} - using dummy features")
+                logger.debug(
+                    f"403 Forbidden for {image_url} - using dummy features")
                 return self.torch.randn(768)
             response.raise_for_status()
 
@@ -292,12 +306,15 @@ class MultimodalDatasetDownloader:
 
         except requests.exceptions.RequestException as e:
             if "403" in str(e) or "Forbidden" in str(e):
-                logger.debug(f"Image forbidden/inaccessible: {image_url} - using dummy features")
+                logger.debug(
+                    f"Image forbidden/inaccessible: {image_url} - using dummy features")
             else:
-                logger.debug(f"Failed to download {image_url}: {e} - using dummy features")
+                logger.debug(
+                    f"Failed to download {image_url}: {e} - using dummy features")
             return self.torch.randn(768)
         except Exception as e:
-            logger.debug(f"Failed to extract features from {image_url}: {e} - using dummy features")
+            logger.debug(
+                f"Failed to extract features from {image_url}: {e} - using dummy features")
             # Return dummy features as fallback
             return self.torch.randn(768)
 
@@ -306,7 +323,8 @@ class MultimodalDatasetDownloader:
         if not self.cache_vision_features:
             return 0
 
-        logger.info(f"Caching vision features for {len(images)} HuggingFace images from {dataset_name}")
+        logger.info(
+            f"Caching vision features for {len(images)} HuggingFace images from {dataset_name}")
 
         # Save all features to a single file for HuggingFace data
         all_features = []
@@ -316,18 +334,22 @@ class MultimodalDatasetDownloader:
                 try:
                     if self.use_real_vision:
                         # Extract real features from PIL image
-                        features = self._extract_real_vision_features_from_pil(image)
+                        features = self._extract_real_vision_features_from_pil(
+                            image)
                         features_array = features.cpu().numpy()
                     else:
                         # Generate dummy features (768-dimensional)
-                        features_array = np.random.randn(768).astype(np.float32)
+                        features_array = np.random.randn(
+                            768).astype(np.float32)
 
                     all_features.append(features_array)
 
                 except Exception as e:
-                    logger.warning(f"Failed to cache features for image {i}: {e}")
+                    logger.warning(
+                        f"Failed to cache features for image {i}: {e}")
                     # Add dummy features as fallback
-                    all_features.append(np.random.randn(768).astype(np.float32))
+                    all_features.append(
+                        np.random.randn(768).astype(np.float32))
 
                 pbar.update(1)
 
@@ -350,11 +372,13 @@ class MultimodalDatasetDownloader:
             with open(metadata_file, 'wb') as f:
                 pickle.dump(metadata, f)
 
-            logger.info(f"✅ Cached {len(all_features)} HuggingFace vision features to {cache_file}")
+            logger.info(
+                f"✅ Cached {len(all_features)} HuggingFace vision features to {cache_file}")
             return len(all_features)
 
         except Exception as e:
-            logger.error(f"Failed to save HuggingFace vision features cache: {e}")
+            logger.error(
+                f"Failed to save HuggingFace vision features cache: {e}")
             return 0
 
     def _extract_real_vision_features_from_pil(self, image):
@@ -370,7 +394,8 @@ class MultimodalDatasetDownloader:
             # Extract features using GPU
             with self.torch.no_grad():
                 outputs = self.vision_model(**inputs)
-                features = outputs.last_hidden_state.mean(dim=1).squeeze()  # Global average pooling
+                features = outputs.last_hidden_state.mean(
+                    dim=1).squeeze()  # Global average pooling
 
             return features.cpu()
 
@@ -429,22 +454,26 @@ class MultimodalDatasetDownloader:
 
     def download_localized_narratives(self) -> Dict[str, int]:
         """Download Localized Narratives annotations or load from HuggingFace"""
-        logger.info(f"🔧 Debug: use_hf_localized_narratives = {self.use_hf_localized_narratives}")
-        logger.info(f"🔧 Debug: HF_DATASETS_AVAILABLE = {HF_DATASETS_AVAILABLE}")
-        
+        logger.info(
+            f"🔧 Debug: use_hf_localized_narratives = {self.use_hf_localized_narratives}")
+        logger.info(
+            f"🔧 Debug: HF_DATASETS_AVAILABLE = {HF_DATASETS_AVAILABLE}")
+
         if self.use_hf_localized_narratives:
             logger.info("🤗 Attempting HuggingFace LocalizedNarratives...")
             return self._load_hf_localized_narratives()
         else:
             logger.info("📁 Using local LocalizedNarratives download...")
             return self._download_local_localized_narratives()
-    
+
     def _load_hf_localized_narratives(self) -> Dict[str, int]:
         """Load LocalizedNarratives from HuggingFace and cache vision features"""
-        logger.warning("⚠️ HuggingFace LocalizedNarratives has deprecated dataset scripts")
-        logger.info("� Falling back to local processing with dummy vision features...")
+        logger.warning(
+            "⚠️ HuggingFace LocalizedNarratives has deprecated dataset scripts")
+        logger.info(
+            "� Falling back to local processing with dummy vision features...")
         return self._download_local_localized_narratives()
-    
+
     def _download_local_localized_narratives(self) -> Dict[str, int]:
         """Download Localized Narratives from original sources and get images from source datasets"""
         logger.info("📥 Downloading Localized Narratives...")
@@ -455,7 +484,7 @@ class MultimodalDatasetDownloader:
         total_samples = 0
         dataset_info = {}
         all_image_info = []  # Store image_id and dataset info for downloading actual images
-        
+
         # Limit to first 50k samples for faster downloads
         MAX_SAMPLES = 80000
         samples_collected = 0
@@ -464,16 +493,18 @@ class MultimodalDatasetDownloader:
             # Only process Open Images (revert back to original working approach)
             # But limit to first 50k samples for faster downloads
             if dataset_name != 'open_images':
-                logger.info(f"⏭️ Skipping {dataset_name} dataset (only using Open Images subset)")
+                logger.info(
+                    f"⏭️ Skipping {dataset_name} dataset (only using Open Images subset)")
                 continue
-                
+
             dataset_dir = ln_dir / dataset_name
             dataset_dir.mkdir(exist_ok=True)
 
             dataset_samples = 0
 
             # Only process training split to reduce dataset size
-            train_splits = {k: v for k, v in splits.items() if 'train' in k.lower()}
+            train_splits = {k: v for k,
+                            v in splits.items() if 'train' in k.lower()}
             for split, urls in train_splits.items():
                 # Handle sharded URLs (list) or single URL (string)
                 if isinstance(urls, list):
@@ -508,32 +539,36 @@ class MultimodalDatasetDownloader:
                                                 'image_id': data.get('image_id', ''),
                                                 'source_file': filepath
                                             })
-                                            
+
                                             # Stop if we've collected enough samples
                                             if samples_collected >= MAX_SAMPLES:
-                                                logger.info(f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                                logger.info(
+                                                    f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
                                                 break
                                         except json.JSONDecodeError:
                                             continue
                             dataset_samples_split += samples
-                            logger.info(f"    ◦ shard {i}: {samples:,} samples")
-                            
+                            logger.info(
+                                f"    ◦ shard {i}: {samples:,} samples")
+
                             # Break shard loop if we've hit the limit
                             if samples_collected >= MAX_SAMPLES:
                                 break
-                                
+
                         except Exception as e:
                             logger.warning(f"Failed to parse {filename}: {e}")
 
                     dataset_samples += dataset_samples_split
-                    logger.info(f"  • {split}: {dataset_samples_split:,} samples total")
+                    logger.info(
+                        f"  • {split}: {dataset_samples_split:,} samples total")
                 else:
                     # Single file
                     filename = f"{dataset_name}_{split}.jsonl"
                     filepath = dataset_dir / filename
 
                     if filepath.exists():
-                        logger.info(f"✅ {filename} already exists, skipping download")
+                        logger.info(
+                            f"✅ {filename} already exists, skipping download")
                     else:
                         success = self.download_file(
                             urls, filepath, f"Localized Narratives {dataset_name} {split}")
@@ -550,45 +585,51 @@ class MultimodalDatasetDownloader:
                                         data = json.loads(line)
                                         samples += 1
                                         samples_collected += 1
-                                        
+
                                         # Debug: Log dataset_id for first few samples
                                         if samples <= 3:
-                                            logger.info(f"🔍 Debug sample {samples} from {filename}:")
-                                            logger.info(f"  dataset_id: '{data.get('dataset_id', 'MISSING')}'")
-                                            logger.info(f"  image_id: '{data.get('image_id', 'MISSING')}'")
-                                        
+                                            logger.info(
+                                                f"🔍 Debug sample {samples} from {filename}:")
+                                            logger.info(
+                                                f"  dataset_id: '{data.get('dataset_id', 'MISSING')}'")
+                                            logger.info(
+                                                f"  image_id: '{data.get('image_id', 'MISSING')}'")
+
                                         # Store image info for later downloading
                                         all_image_info.append({
                                             'dataset_id': data.get('dataset_id', ''),
                                             'image_id': data.get('image_id', ''),
                                             'source_file': filepath
                                         })
-                                        
+
                                         # Stop if we've collected enough samples
                                         if samples_collected >= MAX_SAMPLES:
-                                            logger.info(f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                            logger.info(
+                                                f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
                                             break
                                     except json.JSONDecodeError:
                                         continue
                         dataset_samples += samples
                         logger.info(f"  • {split}: {samples:,} samples")
-                        
+
                         # Break outer loop if we've hit the limit
                         if samples_collected >= MAX_SAMPLES:
                             break
-                            
+
                     except Exception as e:
                         logger.warning(f"Failed to parse {filename}: {e}")
 
             dataset_info[dataset_name] = dataset_samples
             total_samples += dataset_samples
-            
+
             # Break dataset loop if we've hit the limit
             if samples_collected >= MAX_SAMPLES:
-                logger.info(f"🛑 Sample limit reached, stopping dataset processing...")
+                logger.info(
+                    f"🛑 Sample limit reached, stopping dataset processing...")
                 break
 
-        logger.info(f"✅ Localized Narratives: {total_samples:,} samples loaded")
+        logger.info(
+            f"✅ Localized Narratives: {total_samples:,} samples loaded")
 
         # Now download actual images from source datasets based on image_ids
         if all_image_info:
@@ -598,8 +639,9 @@ class MultimodalDatasetDownloader:
 
     def _download_source_images(self, image_info_list: List[Dict]):
         """Download actual images from source datasets (Open Images, COCO, etc.) based on image_ids"""
-        logger.info(f"📥 Downloading {len(image_info_list):,} images from source datasets...")
-        
+        logger.info(
+            f"📥 Downloading {len(image_info_list):,} images from source datasets...")
+
         # Group by dataset for efficient downloading
         datasets_to_download = {}
         for info in image_info_list:
@@ -607,15 +649,17 @@ class MultimodalDatasetDownloader:
             if dataset_id not in datasets_to_download:
                 datasets_to_download[dataset_id] = []
             datasets_to_download[dataset_id].append(info['image_id'])
-        
+
         # Debug: Show what dataset_ids we found
-        logger.info(f"🔍 Debug: Found dataset_ids: {list(datasets_to_download.keys())}")
+        logger.info(
+            f"🔍 Debug: Found dataset_ids: {list(datasets_to_download.keys())}")
         for dataset_id, image_ids in datasets_to_download.items():
             logger.info(f"🔍 Debug: {dataset_id}: {len(image_ids):,} images")
-        
+
         for dataset_id, image_ids in datasets_to_download.items():
-            logger.info(f"📂 Downloading {len(image_ids):,} images from {dataset_id}")
-            
+            logger.info(
+                f"📂 Downloading {len(image_ids):,} images from {dataset_id}")
+
             if 'open_images' in dataset_id.lower() or dataset_id == '':
                 # Handle both explicit open_images and empty dataset_id (assume open_images)
                 self._download_open_images_by_ids(image_ids)
@@ -624,31 +668,34 @@ class MultimodalDatasetDownloader:
             elif 'flickr30k' in dataset_id.lower():
                 flickr30k_dir = self.data_dir / "flickr30k"
                 flickr30k_dir.mkdir(exist_ok=True)
-                self._download_flickr30k_images_by_ids(image_ids, flickr30k_dir)
+                self._download_flickr30k_images_by_ids(
+                    image_ids, flickr30k_dir)
             elif 'ade20k' in dataset_id.lower():
                 ade20k_dir = self.data_dir / "ade20k"
                 ade20k_dir.mkdir(exist_ok=True)
                 self._download_ade20k_images_by_ids(image_ids, ade20k_dir)
             else:
-                logger.warning(f"⚠️ Unknown dataset type: {dataset_id} - treating as Open Images")
+                logger.warning(
+                    f"⚠️ Unknown dataset type: {dataset_id} - treating as Open Images")
                 self._download_open_images_by_ids(image_ids)
 
     def _download_open_images_by_ids(self, image_ids: List[str]):
         """Download Open Images using image IDs"""
         logger.info(f"🖼️ Downloading {len(image_ids)} Open Images...")
-        
+
         # Create Open Images download directory
         oi_dir = self.data_dir / "open_images"
         oi_dir.mkdir(exist_ok=True)
-        
+
         # Open Images URLs follow pattern: https://c{bucket}.staticflickr.com/{server}/{id}_{secret}_{size}.jpg
         # But we need the CSV files to get the actual URLs
-        logger.info("📄 First need to download Open Images CSV files to get image URLs...")
-        
+        logger.info(
+            "📄 First need to download Open Images CSV files to get image URLs...")
+
         # Download image URLs CSV (this contains the mapping from image_id to actual URL)
         # Only use training set to keep it manageable
         train_csv_url = "https://storage.googleapis.com/openimages/2018_04/train/train-images-boxable-with-rotation.csv"
-        
+
         # Download only training CSV file to get image URLs
         for csv_name, csv_url in [("train", train_csv_url)]:
             csv_file = oi_dir / f"{csv_name}_images.csv"
@@ -656,11 +703,11 @@ class MultimodalDatasetDownloader:
                 logger.info(f"📥 Downloading {csv_name} CSV...")
                 if not self.download_file(csv_url, csv_file, f"Open Images {csv_name} CSV"):
                     continue
-        
+
         # Parse CSV files to build image_id -> URL mapping
         logger.info("🔗 Building image_id to URL mapping from training CSV...")
         id_to_url = {}
-        
+
         # Only process training CSV
         csv_file = oi_dir / "train_images.csv"
         if csv_file.exists():
@@ -673,50 +720,64 @@ class MultimodalDatasetDownloader:
                         original_url = row.get('OriginalURL', '')
                         if image_id and original_url:
                             id_to_url[image_id] = original_url
-                logger.info(f"✅ Loaded {len(id_to_url)} image URLs from training CSV")
+                logger.info(
+                    f"✅ Loaded {len(id_to_url)} image URLs from training CSV")
             except Exception as e:
                 logger.warning(f"Failed to parse {csv_file}: {e}")
-        
+
         # Download images based on IDs
         downloaded_count = 0
-        for image_id in tqdm(image_ids, desc="Downloading Open Images"):  # Download ALL images
+        existing_count = 0
+        
+        logger.info(f"🔍 Checking which of {len(image_ids)} images already exist...")
+        
+        for image_id in tqdm(image_ids, desc="Downloading Open Images"):
             if image_id in id_to_url:
                 image_url = id_to_url[image_id]
                 image_file = oi_dir / f"{image_id}.jpg"
-                
-                if not image_file.exists():
-                    try:
-                        response = requests.get(image_url, timeout=10)
-                        if response.status_code == 200:
-                            with open(image_file, 'wb') as f:
-                                f.write(response.content)
-                            downloaded_count += 1
-                        else:
-                            logger.debug(f"Failed to download {image_url}: {response.status_code}")
-                    except Exception as e:
-                        logger.debug(f"Error downloading {image_url}: {e}")
-        
-        logger.info(f"✅ Downloaded {downloaded_count} Open Images")
+
+                if image_file.exists() and image_file.stat().st_size > 0:
+                    # Image already exists and has content
+                    existing_count += 1
+                    continue
+
+                # Image doesn't exist or is empty, download it
+                try:
+                    response = requests.get(image_url, timeout=10)
+                    if response.status_code == 200:
+                        with open(image_file, 'wb') as f:
+                            f.write(response.content)
+                        downloaded_count += 1
+                    else:
+                        logger.debug(
+                            f"Failed to download {image_url}: {response.status_code}")
+                except Exception as e:
+                    logger.debug(f"Error downloading {image_url}: {e}")
+
+        logger.info(f"✅ Found {existing_count} existing images, downloaded {downloaded_count} new images")
+        logger.info(f"📊 Total images available: {existing_count + downloaded_count}")
 
     def _download_coco_images_by_ids(self, image_ids: List[str], dataset_id: str):
         """Download COCO images using bulk zip download for much faster downloads"""
-        logger.info(f"🖼️ Downloading {len(image_ids)} COCO images for {dataset_id}...")
-        
+        logger.info(
+            f"🖼️ Downloading {len(image_ids)} COCO images for {dataset_id}...")
+
         coco_dir = self.data_dir / "coco_images"
         coco_dir.mkdir(exist_ok=True)
-        
+
         # Determine split from dataset_id
         split = "train2017" if "train" in dataset_id else "val2017"
-        
+
         # Try bulk download first - much faster than individual downloads
         zip_url = f"http://images.cocodataset.org/zips/{split}.zip"
         zip_file = coco_dir / f"{split}.zip"
         extract_dir = coco_dir / split
-        
+
         if not extract_dir.exists():
-            logger.info(f"🗜️ Attempting bulk download of COCO {split} (~20GB zip file)...")
+            logger.info(
+                f"🗜️ Attempting bulk download of COCO {split} (~20GB zip file)...")
             logger.info("This is MUCH faster than individual image downloads!")
-            
+
             # Download the entire COCO split as zip
             if self.download_file(zip_url, zip_file, f"COCO {split} bulk download"):
                 logger.info(f"📦 Extracting COCO {split} zip file...")
@@ -729,11 +790,13 @@ class MultimodalDatasetDownloader:
                     # Fall back to individual downloads
                     return self._download_coco_images_individually(image_ids, dataset_id)
             else:
-                logger.warning("❌ Bulk download failed, falling back to individual image downloads...")
+                logger.warning(
+                    "❌ Bulk download failed, falling back to individual image downloads...")
                 return self._download_coco_images_individually(image_ids, dataset_id)
         else:
-            logger.info(f"✅ COCO {split} directory already exists, skipping bulk download")
-        
+            logger.info(
+                f"✅ COCO {split} directory already exists, skipping bulk download")
+
         # Count how many of our needed images are present
         downloaded_count = 0
         for image_id in image_ids:
@@ -744,19 +807,21 @@ class MultimodalDatasetDownloader:
                     downloaded_count += 1
             except Exception:
                 continue
-                
-        logger.info(f"✅ Found {downloaded_count}/{len(image_ids)} COCO images in bulk download")
+
+        logger.info(
+            f"✅ Found {downloaded_count}/{len(image_ids)} COCO images in bulk download")
 
     def _download_coco_images_individually(self, image_ids: List[str], dataset_id: str):
         """Fallback: Download COCO images individually (slower method)"""
-        logger.info(f"🐌 Fallback: Downloading {len(image_ids)} COCO images individually...")
-        
+        logger.info(
+            f"🐌 Fallback: Downloading {len(image_ids)} COCO images individually...")
+
         coco_dir = self.data_dir / "coco_images"
         coco_dir.mkdir(exist_ok=True)
-        
+
         # Determine split from dataset_id
         split = "train2017" if "train" in dataset_id else "val2017"
-        
+
         downloaded_count = 0
         for image_id in tqdm(image_ids, desc=f"Downloading COCO {split}"):
             # COCO image_id needs to be zero-padded to 12 digits
@@ -764,7 +829,7 @@ class MultimodalDatasetDownloader:
                 padded_id = f"{int(image_id):012d}"
                 image_url = f"http://images.cocodataset.org/{split}/{padded_id}.jpg"
                 image_file = coco_dir / f"{padded_id}.jpg"
-                
+
                 if not image_file.exists():
                     response = requests.get(image_url, timeout=10)
                     if response.status_code == 200:
@@ -772,86 +837,97 @@ class MultimodalDatasetDownloader:
                             f.write(response.content)
                         downloaded_count += 1
                     else:
-                        logger.debug(f"Failed to download {image_url}: {response.status_code}")
+                        logger.debug(
+                            f"Failed to download {image_url}: {response.status_code}")
             except Exception as e:
                 logger.debug(f"Error downloading COCO image {image_id}: {e}")
-        
+
         logger.info(f"✅ Downloaded {downloaded_count} COCO images")
 
     def _download_flickr30k_images_by_ids(self, image_ids: List[str], download_dir):
         """Download Flickr30k images using Flickr API"""
-        logger.info(f"🖼️ Downloading {len(image_ids)} Flickr30k images using Flickr API...")
-        
+        logger.info(
+            f"🖼️ Downloading {len(image_ids)} Flickr30k images using Flickr API...")
+
         flickr30k_dir = self.data_dir / "flickr30k"
         flickr30k_dir.mkdir(exist_ok=True)
-        
+
         try:
             import flickrapi
-            
+
             # You need to get your own API key from https://www.flickr.com/services/apps/create/apply
             api_key = os.environ.get('FLICKR_API_KEY', '')
             api_secret = os.environ.get('FLICKR_API_SECRET', '')
-            
+
             if not api_key or not api_secret:
-                logger.info("FLICKR_API_KEY and FLICKR_API_SECRET environment variables not set.")
+                logger.info(
+                    "FLICKR_API_KEY and FLICKR_API_SECRET environment variables not set.")
                 logger.info("Please set them to enable Flickr30k downloading.")
-                logger.info("Get your API keys from: https://www.flickr.com/services/apps/create/apply")
-                
+                logger.info(
+                    "Get your API keys from: https://www.flickr.com/services/apps/create/apply")
+
                 # Create placeholder files for now
                 for image_id in image_ids:
                     placeholder_path = download_dir / f"{image_id}.jpg"
                     if not placeholder_path.exists():
                         placeholder_path.write_text("")
                 return len(image_ids)
-            
+
             flickr = flickrapi.FlickrAPI(api_key, api_secret, cache=True)
             success_count = 0
-            
+
             for i, image_id in enumerate(image_ids):
                 try:
                     if i % 100 == 0:
-                        logger.info(f"Progress: {i}/{len(image_ids)} Flickr30k images")
-                    
+                        logger.info(
+                            f"Progress: {i}/{len(image_ids)} Flickr30k images")
+
                     image_path = download_dir / f"{image_id}.jpg"
                     if image_path.exists() and image_path.stat().st_size > 0:
                         success_count += 1
                         continue
-                    
+
                     # Get photo sizes to find the image URL
-                    sizes = flickr.photos.getSizes(photo_id=image_id, format='etree')
-                    
+                    sizes = flickr.photos.getSizes(
+                        photo_id=image_id, format='etree')
+
                     # Find the largest size
                     size_elements = sizes.findall('.//size')
                     if not size_elements:
-                        logger.debug(f"No sizes found for Flickr image {image_id}")
+                        logger.debug(
+                            f"No sizes found for Flickr image {image_id}")
                         continue
-                    
+
                     # Get the URL for the largest size
-                    largest_size = max(size_elements, key=lambda x: int(x.get('width', 0)) * int(x.get('height', 0)))
+                    largest_size = max(size_elements, key=lambda x: int(
+                        x.get('width', 0)) * int(x.get('height', 0)))
                     image_url = largest_size.get('source')
-                    
+
                     if image_url:
                         response = requests.get(image_url, timeout=30)
                         response.raise_for_status()
-                        
+
                         with open(image_path, 'wb') as f:
                             f.write(response.content)
                         success_count += 1
-                    
+
                 except Exception as e:
-                    logger.debug(f"Failed to download Flickr30k image {image_id}: {e}")
+                    logger.debug(
+                        f"Failed to download Flickr30k image {image_id}: {e}")
                     # Create placeholder for failed downloads
                     placeholder_path = download_dir / f"{image_id}.jpg"
                     if not placeholder_path.exists():
                         placeholder_path.write_text("")
-            
-            logger.info(f"✅ Successfully downloaded {success_count}/{len(image_ids)} Flickr30k images")
+
+            logger.info(
+                f"✅ Successfully downloaded {success_count}/{len(image_ids)} Flickr30k images")
             return success_count
-            
+
         except ImportError:
-            logger.info("flickrapi library not installed. Install with: pip install flickrapi")
+            logger.info(
+                "flickrapi library not installed. Install with: pip install flickrapi")
             logger.info("Creating placeholder files for Flickr30k images...")
-            
+
             # Create placeholder files
             for image_id in image_ids:
                 placeholder_path = download_dir / f"{image_id}.jpg"
@@ -861,24 +937,25 @@ class MultimodalDatasetDownloader:
 
     def _download_ade20k_images_by_ids(self, image_ids: List[str], download_dir):
         """Download ADE20K images using direct URLs and API endpoints"""
-        logger.info(f"🖼️ Attempting to download {len(image_ids)} ADE20K images...")
-        
+        logger.info(
+            f"🖼️ Attempting to download {len(image_ids)} ADE20K images...")
+
         # ADE20K images are often available through multiple mirrors and patterns
         base_urls = [
             "http://data.csail.mit.edu/places/ADE20K/images/training/",
-            "http://data.csail.mit.edu/places/ADE20K/images/validation/", 
+            "http://data.csail.mit.edu/places/ADE20K/images/validation/",
             "https://data.csail.mit.edu/places/ADE20K/images/training/",
             "https://data.csail.mit.edu/places/ADE20K/images/validation/",
             "http://groups.csail.mit.edu/vision/datasets/ADE20K/images/training/",
             "http://groups.csail.mit.edu/vision/datasets/ADE20K/images/validation/",
         ]
-        
+
         # Common folder structures in ADE20K
         folder_patterns = [
             "",  # Direct in base
             "urban/street/",
             "urban/bridge/",
-            "urban/highway/", 
+            "urban/highway/",
             "rural/forest/",
             "rural/field/",
             "indoor/office/",
@@ -889,61 +966,68 @@ class MultimodalDatasetDownloader:
             "outdoor/park/",
             "outdoor/garden/",
         ]
-        
+
         success_count = 0
-        
+
         for i, image_id in enumerate(image_ids):
             try:
                 if i % 100 == 0:
-                    logger.info(f"Progress: {i}/{len(image_ids)} ADE20K images")
-                
+                    logger.info(
+                        f"Progress: {i}/{len(image_ids)} ADE20K images")
+
                 image_path = download_dir / f"{image_id}.jpg"
                 if image_path.exists() and image_path.stat().st_size > 0:
                     success_count += 1
                     continue
-                
+
                 downloaded = False
-                
+
                 # Try different URL patterns and folder structures
                 for base_url in base_urls:
                     for folder in folder_patterns:
                         full_url = f"{base_url}{folder}{image_id}.jpg"
-                        
+
                         try:
                             response = requests.get(full_url, timeout=10)
-                            if response.status_code == 200 and len(response.content) > 1000:  # Valid image
+                            # Valid image
+                            if response.status_code == 200 and len(response.content) > 1000:
                                 with open(image_path, 'wb') as f:
                                     f.write(response.content)
                                 success_count += 1
                                 downloaded = True
-                                logger.debug(f"Downloaded ADE20K image {image_id} from {full_url}")
+                                logger.debug(
+                                    f"Downloaded ADE20K image {image_id} from {full_url}")
                                 break
                         except Exception as e:
-                            logger.debug(f"Failed to download from {full_url}: {e}")
+                            logger.debug(
+                                f"Failed to download from {full_url}: {e}")
                             continue
-                    
+
                     if downloaded:
                         break
-                
+
                 if not downloaded:
-                    logger.debug(f"Could not download ADE20K image {image_id}, creating placeholder")
+                    logger.debug(
+                        f"Could not download ADE20K image {image_id}, creating placeholder")
                     # Create placeholder for failed downloads
                     with open(image_path, 'w') as f:
                         f.write("")
-                        
+
             except Exception as e:
                 logger.debug(f"Error downloading ADE20K image {image_id}: {e}")
                 # Create placeholder for failed downloads
                 placeholder_path = download_dir / f"{image_id}.jpg"
                 if not placeholder_path.exists():
                     placeholder_path.write_text("")
-        
+
         if success_count == 0:
             logger.info("⚠️ Unable to download ADE20K images automatically.")
-            logger.info("📋 Manual download required from: https://ade20k.csail.mit.edu/request_data/")
+            logger.info(
+                "📋 Manual download required from: https://ade20k.csail.mit.edu/request_data/")
         else:
-            logger.info(f"✅ Successfully downloaded {success_count}/{len(image_ids)} ADE20K images")
-        
+            logger.info(
+                f"✅ Successfully downloaded {success_count}/{len(image_ids)} ADE20K images")
+
         return len(image_ids)  # Return total attempted, not just successful
 
     def download_coco_annotations(self) -> Dict[str, int]:
@@ -1033,50 +1117,69 @@ class MultimodalDatasetDownloader:
                                         # Extract image path for caching using downloaded local images
                                         if self.cache_vision_features and 'image_id' in data:
                                             image_id = data['image_id']
-                                            dataset_id = data.get('dataset_id', '')
-                                            
+                                            dataset_id = data.get(
+                                                'dataset_id', '')
+
                                             # Check if we have this image downloaded locally
                                             local_image_path = None
-                                            
+
                                             if 'open_images' in dataset_id.lower():
                                                 # Check if Open Images file exists
-                                                oi_image_path = self.data_dir / "open_images" / f"{image_id}.jpg"
+                                                oi_image_path = self.data_dir / \
+                                                    "open_images" / \
+                                                    f"{image_id}.jpg"
                                                 if oi_image_path.exists():
-                                                    local_image_path = str(oi_image_path)
+                                                    local_image_path = str(
+                                                        oi_image_path)
                                             elif 'coco' in dataset_id.lower():
                                                 # Check if COCO file exists (look in extracted train2017/val2017 directory first, then fallback)
                                                 split = "train2017" if "train" in dataset_id else "val2017"
-                                                coco_extracted_path = self.data_dir / "coco_images" / split / f"{int(image_id):012d}.jpg"
-                                                coco_flat_path = self.data_dir / "coco_images" / f"{int(image_id):012d}.jpg"
-                                                
+                                                coco_extracted_path = self.data_dir / "coco_images" / \
+                                                    split / \
+                                                    f"{int(image_id):012d}.jpg"
+                                                coco_flat_path = self.data_dir / \
+                                                    "coco_images" / \
+                                                    f"{int(image_id):012d}.jpg"
+
                                                 if coco_extracted_path.exists():
-                                                    local_image_path = str(coco_extracted_path)
+                                                    local_image_path = str(
+                                                        coco_extracted_path)
                                                 elif coco_flat_path.exists():
-                                                    local_image_path = str(coco_flat_path)
+                                                    local_image_path = str(
+                                                        coco_flat_path)
                                             elif 'flickr30k' in dataset_id.lower():
                                                 # Check if Flickr30k file exists
-                                                flickr_image_path = self.data_dir / "flickr30k" / f"{image_id}.jpg"
+                                                flickr_image_path = self.data_dir / \
+                                                    "flickr30k" / \
+                                                    f"{image_id}.jpg"
                                                 if flickr_image_path.exists():
-                                                    local_image_path = str(flickr_image_path)
+                                                    local_image_path = str(
+                                                        flickr_image_path)
                                             elif 'ade20k' in dataset_id.lower():
                                                 # Check if ADE20K file exists
-                                                ade_image_path = self.data_dir / "ade20k" / f"{image_id}.jpg"
+                                                ade_image_path = self.data_dir / \
+                                                    "ade20k" / \
+                                                    f"{image_id}.jpg"
                                                 if ade_image_path.exists():
-                                                    local_image_path = str(ade_image_path)
-                                            
+                                                    local_image_path = str(
+                                                        ade_image_path)
+
                                             # Add local path or None if not found
-                                            all_image_urls.append(local_image_path)
-                                            dataset_image_urls.append(local_image_path)
+                                            all_image_urls.append(
+                                                local_image_path)
+                                            dataset_image_urls.append(
+                                                local_image_path)
 
                         except Exception as e:
                             logger.warning(
                                 f"Failed to process {jsonl_file}: {e}")
-                    
+
                     # Cache vision features for this Localized Narratives dataset
                     if self.cache_vision_features and dataset_image_urls:
                         # Remove duplicates
                         unique_dataset_urls = list(set(dataset_image_urls))
-                        self._cache_vision_features(unique_dataset_urls, f"localized_narratives_{dataset_name}")
+                        self._cache_vision_features(
+                            unique_dataset_urls, f"localized_narratives_{dataset_name}")
 
         # Process COCO captions - REMOVED: Only use COCO from Localized Narratives
         # The COCO data in Localized Narratives is sufficient and avoids duplication
@@ -1219,7 +1322,7 @@ def main():
         "Dataset Selection", "Localized Narratives dataset (includes Open Images and COCO)")
     dataset_group.add_argument("--dataset", type=str, choices=['localized_narratives'], default='localized_narratives',
                                help="Dataset to download: 'localized_narratives' (~1.16M samples with Open Images + COCO)")
-    
+
     # HuggingFace options
     hf_group = parser.add_argument_group(
         "HuggingFace Options", "Use HuggingFace LocalizedNarratives instead of downloading")
@@ -1243,18 +1346,20 @@ def main():
 
     # Dataset is required and defaults to localized_narratives
     logger.info("📄 BitGen Localized Narratives Dataset Downloader")
-    logger.info("ℹ️  This will download Localized Narratives containing both Open Images and COCO data")
+    logger.info(
+        "ℹ️  This will download Localized Narratives containing both Open Images and COCO data")
     logger.info("")
 
     try:
         # Handle HuggingFace options
         use_hf = args.use_hf_localized_narratives and not args.no_hf_localized_narratives
-        
+
         # Force dummy vision to avoid URL issues unless explicitly requested
         use_real_vision = args.real_vision_features
         if not use_real_vision:
-            logger.info("🎨 Using dummy vision features to avoid URL download issues")
-        
+            logger.info(
+                "🎨 Using dummy vision features to avoid URL download issues")
+
         # Create downloader with vision caching options
         downloader = MultimodalDatasetDownloader(
             data_dir=args.data_dir,
@@ -1267,10 +1372,13 @@ def main():
         # Determine which datasets to download
         if args.dataset == 'localized_narratives':
             logger.info("🎯 Downloading ONLY Localized Narratives dataset")
-            logger.info("📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
-            logger.info("ℹ️  This includes both Open Images and COCO data from Localized Narratives")
+            logger.info(
+                "📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
+            logger.info(
+                "ℹ️  This includes both Open Images and COCO data from Localized Narratives")
         else:
-            logger.error("❌ Only 'localized_narratives' dataset is supported in this version")
+            logger.error(
+                "❌ Only 'localized_narratives' dataset is supported in this version")
             return 1
 
         if args.cache_vision_features:
