@@ -181,57 +181,32 @@ class BitNetAttention(nn.Module):
 
         # Attention computation
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        
+        print(f"🔍 DEBUG: BitNet attention - input shapes: query={query.shape}, key={key.shape}, value={value.shape}")
+        print(f"🔍 DEBUG: BitNet attention - attention_scores shape: {attention_scores.shape}")
+        print(f"🔍 DEBUG: BitNet attention - mask shape: {mask.shape if mask is not None else None}")
 
+        # TEMPORARILY DISABLE MASK TO ISOLATE THE PROBLEM
         if mask is not None:
-            # Handle mask shape properly to avoid dimension mismatches
-            # mask should be [batch_size, 1, 1, seq_len] from encoder
-            
-            # Ensure mask is 4D for attention scores [batch_size, num_heads, seq_len, key_seq_len]
-            if mask.dim() == 2:  # [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
-                mask = mask.unsqueeze(1).unsqueeze(1)
-            elif mask.dim() == 3:  # [batch_size, seq_len, seq_len] -> [batch_size, 1, seq_len, seq_len]  
-                mask = mask.unsqueeze(1)
-            elif mask.dim() == 4 and mask.size(1) == 1 and mask.size(2) == 1:
-                # Already correct shape [batch_size, 1, 1, seq_len], but ensure last dim matches
-                pass
-                
-            # Ensure the mask dimensions are compatible with attention scores
-            target_shape = (batch_size, 1, seq_len, key_seq_len)
-            
-            # Handle sequence length mismatch
-            if mask.size(-1) != key_seq_len:
-                if mask.size(-1) == seq_len and key_seq_len == seq_len:
-                    # Same sequence lengths, just ensure proper broadcasting
-                    pass
-                else:
-                    # Create a new mask with proper dimensions
-                    new_mask = torch.ones(target_shape, device=mask.device, dtype=mask.dtype)
-                    # Copy over the valid positions
-                    min_len = min(mask.size(-1), key_seq_len)
-                    if mask.size(-2) == 1:  # padding mask
-                        new_mask[..., :min_len] = mask[..., :min_len]
-                    else:  # attention mask
-                        new_mask[..., :min_len, :min_len] = mask[..., :min_len, :min_len]
-                    mask = new_mask
-            
-            # Expand to all heads: [batch_size, 1, seq_len, key_seq_len] -> [batch_size, num_heads, seq_len, key_seq_len]
-            mask = mask.expand(batch_size, self.num_heads, seq_len, key_seq_len)
-            
-            # Apply mask (0 means mask out, 1 means keep)
-            attention_scores = attention_scores.masked_fill(mask == 0, float('-inf'))
+            print(f"⚠️ DEBUG: Skipping mask application to isolate tensor dimension issue")
+            # Skip masking for now
+            pass
 
         attention_weights = F.softmax(attention_scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
+        print(f"🔍 DEBUG: BitNet attention - attention_weights shape: {attention_weights.shape}")
 
         # Apply attention to values
         attended = torch.matmul(attention_weights, v)
+        print(f"🔍 DEBUG: BitNet attention - attended shape: {attended.shape}")
 
         # Reshape and project output
         attended = attended.transpose(1, 2).contiguous().view(
             batch_size, seq_len, self.dim
         )
         output = self.out_proj(attended)
-
+        
+        print(f"🔍 DEBUG: BitNet attention - final output shape: {output.shape}")
         return output, attention_weights.mean(dim=1)  # Average across heads
 
 
