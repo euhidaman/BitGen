@@ -1638,29 +1638,67 @@ class BitMarModel(nn.Module):
         memory_attention_weights = None
         episode = None
 
+        print(f"🔍 DEBUG: Starting episodic memory processing")
         if self.use_episodic_memory:
-            # Create multimodal episode
-            episode = self.create_episode(
-                text_features, vision_latent, fiber_attention_weights)
+            print(f"🔍 DEBUG: Creating episode")
+            try:
+                # Create multimodal episode
+                episode = self.create_episode(
+                    text_features, vision_latent, fiber_attention_weights)
+                print(f"🔍 DEBUG: Episode created successfully - shape: {episode.shape}")
+            except Exception as e:
+                print(f"❌ DEBUG: Episode creation failed: {e}")
+                raise e
 
-            # Memory read-write operation
-            memory_output, memory_attention_weights = self.memory(episode)
+            print(f"🔍 DEBUG: Starting memory read-write operation")
+            try:
+                # Memory read-write operation
+                memory_output, memory_attention_weights = self.memory(episode)
+                print(f"🔍 DEBUG: Memory operation successful")
+            except Exception as e:
+                print(f"❌ DEBUG: Memory operation failed: {e}")
+                print(f"   Episode shape: {episode.shape}")
+                print(f"   Memory size: {self.memory.memory_size}")
+                print(f"   Episode dim: {self.memory.episode_dim}")
+                raise e
 
-            # Project memory output for decoder
-            memory_for_decoder = self.memory_to_decoder(memory_output)
+            print(f"🔍 DEBUG: Starting memory projection for decoder")
+            try:
+                # Project memory output for decoder
+                memory_for_decoder = self.memory_to_decoder(memory_output)
+                print(f"🔍 DEBUG: Memory projection successful - shape: {memory_for_decoder.shape}")
 
-            # Combine fused features with memory for decoder input
-            decoder_input = self.decoder_input_proj(fused_features) + memory_for_decoder
+                # Combine fused features with memory for decoder input
+                decoder_input = self.decoder_input_proj(fused_features) + memory_for_decoder
+                print(f"🔍 DEBUG: Decoder input creation successful - shape: {decoder_input.shape}")
+            except Exception as e:
+                print(f"❌ DEBUG: Memory projection failed: {e}")
+                raise e
         else:
+            print(f"🔍 DEBUG: Using direct fusion (no memory)")
             # Direct fusion to decoder (no memory)
             decoder_input = self.direct_fusion_proj(fused_features)
+            print(f"🔍 DEBUG: Direct fusion successful - shape: {decoder_input.shape}")
 
         # 5. Generate text using BitNet decoder
-        decoder_outputs = self.text_decoder(
-            inputs_embeds=decoder_input,
-            attention_mask=attention_mask,
-            labels=labels
-        )
+        print(f"🔍 DEBUG: Starting text decoder")
+        print(f"🔍 DEBUG: Decoder input shape: {decoder_input.shape}")
+        print(f"🔍 DEBUG: Attention mask shape: {attention_mask.shape}")
+        print(f"🔍 DEBUG: Labels shape: {labels.shape if labels is not None else None}")
+        
+        try:
+            decoder_outputs = self.text_decoder(
+                inputs_embeds=decoder_input,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            print(f"🔍 DEBUG: Text decoder successful")
+        except Exception as e:
+            print(f"❌ DEBUG: Text decoder failed: {e}")
+            print(f"   Decoder input shape: {decoder_input.shape}")
+            print(f"   Attention mask shape: {attention_mask.shape}")
+            print(f"   Labels shape: {labels.shape if labels is not None else None}")
+            raise e
 
         # 6. Compute losses
         decoder_loss = decoder_outputs['loss'] if decoder_outputs['loss'] is not None else torch.tensor(0.0)
