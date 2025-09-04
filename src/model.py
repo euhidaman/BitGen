@@ -1665,14 +1665,24 @@ class BitMarModel(nn.Module):
             print(f"🔍 DEBUG: Starting memory projection for decoder")
             try:
                 # Project memory output for decoder
-                memory_for_decoder = self.memory_to_decoder(memory_output)
-                print(f"🔍 DEBUG: Memory projection successful - shape: {memory_for_decoder.shape}")
+                memory_output_proj = self.memory_to_decoder(memory_output)
+                print(f"🔍 DEBUG: Memory output projection - shape: {memory_output_proj.shape}")
+                
+                # Expand memory to match sequence length for broadcasting
+                seq_len = fused_features.size(1)  # Get sequence length from fused_features
+                memory_for_decoder = memory_output_proj.unsqueeze(1).expand(-1, seq_len, -1)
+                print(f"🔍 DEBUG: Memory expanded for decoder - shape: {memory_for_decoder.shape}")
 
                 # Combine fused features with memory for decoder input
-                decoder_input = self.decoder_input_proj(fused_features) + memory_for_decoder
+                decoder_input_base = self.decoder_input_proj(fused_features)
+                print(f"🔍 DEBUG: Decoder input base - shape: {decoder_input_base.shape}")
+                
+                decoder_input = decoder_input_base + memory_for_decoder
                 print(f"🔍 DEBUG: Decoder input creation successful - shape: {decoder_input.shape}")
             except Exception as e:
                 print(f"❌ DEBUG: Memory projection failed: {e}")
+                print(f"   Memory output shape: {memory_output.shape}")
+                print(f"   Fused features shape: {fused_features.shape}")
                 raise e
         else:
             print(f"🔍 DEBUG: Using direct fusion (no memory)")
