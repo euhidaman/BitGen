@@ -1664,25 +1664,45 @@ class BitMarModel(nn.Module):
 
             print(f"🔍 DEBUG: Starting memory projection for decoder")
             try:
-                # Project memory output for decoder
-                memory_output_proj = self.memory_to_decoder(memory_output)
-                print(f"🔍 DEBUG: Memory output projection - shape: {memory_output_proj.shape}")
+                # Project memory output for decoder - Larimar-style integration
+                print(f"🔍 DEBUG: Memory output raw shape: {memory_output.shape}")
                 
-                # Expand memory to match sequence length for broadcasting
-                seq_len = fused_features.size(1)  # Get sequence length from fused_features
-                memory_for_decoder = memory_output_proj.unsqueeze(1).expand(-1, seq_len, -1)
-                print(f"🔍 DEBUG: Memory expanded for decoder - shape: {memory_for_decoder.shape}")
-
-                # Combine fused features with memory for decoder input
-                decoder_input_base = self.decoder_input_proj(fused_features)
-                print(f"🔍 DEBUG: Decoder input base - shape: {decoder_input_base.shape}")
+                # Instead of expanding to sequence length, integrate memory at the latent level
+                # Following Larimar's approach: memory enhances the latent representation
                 
-                decoder_input = decoder_input_base + memory_for_decoder
+                # Option 1: Add memory as a residual connection to the fused features
+                # by projecting memory to sequence-level representation
+                memory_enhanced_features = fused_features.clone()  # Start with original features
+                
+                # Pool fused features to get a single representation per batch item
+                fused_pooled = torch.mean(fused_features, dim=1)  # [batch, hidden_dim]
+                print(f"🔍 DEBUG: Fused pooled shape: {fused_pooled.shape}")
+                
+                # Combine pooled features with memory output
+                if memory_output.shape == fused_pooled.shape:
+                    memory_combined = memory_output + fused_pooled
+                    print(f"🔍 DEBUG: Memory combined shape: {memory_combined.shape}")
+                else:
+                    # Project to matching dimensions
+                    memory_proj = self.memory_to_decoder(memory_output)  
+                    print(f"🔍 DEBUG: Memory projected shape: {memory_proj.shape}")
+                    memory_combined = memory_proj + fused_pooled
+                    print(f"🔍 DEBUG: Memory combined shape: {memory_combined.shape}")
+                
+                # Broadcast the combined representation to all sequence positions
+                memory_broadcast = memory_combined.unsqueeze(1).expand(-1, fused_features.size(1), -1)
+                print(f"🔍 DEBUG: Memory broadcast shape: {memory_broadcast.shape}")
+                
+                # Create decoder input by adding memory to fused features
+                decoder_input = self.decoder_input_proj(fused_features) + memory_broadcast
                 print(f"🔍 DEBUG: Decoder input creation successful - shape: {decoder_input.shape}")
+                
             except Exception as e:
                 print(f"❌ DEBUG: Memory projection failed: {e}")
                 print(f"   Memory output shape: {memory_output.shape}")
                 print(f"   Fused features shape: {fused_features.shape}")
+                import traceback
+                traceback.print_exc()
                 raise e
         else:
             print(f"🔍 DEBUG: Using direct fusion (no memory)")
