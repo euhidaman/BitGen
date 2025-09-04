@@ -986,9 +986,9 @@ class FIBERIntegration(nn.Module):
         }
 
         # 4. Compute FIBER losses if requested
-        logger.debug(f"🔥 FIBER loss check: compute_losses={compute_losses}, input_ids is not None={input_ids is not None}")
+        logger.info(f"🔥 FIBER loss check: compute_losses={compute_losses}, input_ids is not None={input_ids is not None}")
         if compute_losses and input_ids is not None:
-            logger.debug(f"🔥 Computing FIBER losses with input_ids shape: {input_ids.shape}")
+            logger.info(f"🔥 Computing FIBER losses with input_ids shape: {input_ids.shape}")
             fiber_losses = self.fiber_loss(
                 text_features=text_features,
                 vision_features=enhanced_vision if enhanced_vision.dim() == 2 else enhanced_vision.mean(dim=1),
@@ -996,7 +996,7 @@ class FIBERIntegration(nn.Module):
                 input_ids=input_ids
             )
             outputs.update(fiber_losses)
-            logger.debug(f"🔥 FIBER losses computed: {list(fiber_losses.keys())}")
+            logger.info(f"🔥 FIBER losses computed: {list(fiber_losses.keys())}")
             
             # Log loss components for monitoring
             logger.debug(f"FIBER Losses - ITC: {fiber_losses['itc_loss_raw']:.4f}, "

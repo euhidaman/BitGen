@@ -1725,7 +1725,7 @@ class BitMarModel(nn.Module):
 
         try:
             # Use authentic FIBER with all loss components
-            logger.debug(f"🔥 Calling FIBER with compute_losses=True, input_ids shape: {input_ids.shape if input_ids is not None else 'None'}")
+            logger.info(f"🔥 Calling FIBER with compute_losses=True, input_ids shape: {input_ids.shape if input_ids is not None else 'None'}")
             fused_features, fiber_outputs = self.fusion(
                 text_features=text_features,
                 vision_features=vision_latent,
@@ -1734,8 +1734,8 @@ class BitMarModel(nn.Module):
                 labels=labels,
                 compute_losses=True  # Enable FIBER loss computation
             )
-            logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
-            logger.debug(f"   FIBER outputs keys: {list(fiber_outputs.keys()) if fiber_outputs else 'None'}")
+            logger.info(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
+            logger.info(f"   FIBER outputs keys: {list(fiber_outputs.keys()) if fiber_outputs else 'None'}")
         except Exception as e:
             # Debug removed
             print(f"   Text features: {text_features.shape}")
@@ -1777,23 +1777,23 @@ class BitMarModel(nn.Module):
         memory_attention_weights = None
         episode = None
 
-        logger.debug(f"🧠 Memory enabled: {self.use_episodic_memory}")
+        logger.info(f"🧠 Memory enabled: {self.use_episodic_memory}")
         if self.use_episodic_memory:
-            logger.debug(f"🧠 Starting episodic memory processing")
+            logger.info(f"🧠 Starting episodic memory processing")
             try:
                 # Create multimodal episode using FIBER outputs
                 episode = self.create_episode(
                     text_features, vision_latent, fiber_outputs)
-                logger.debug(f"🧠 Episode created: {episode.shape}")
+                logger.info(f"🧠 Episode created: {episode.shape}")
             except Exception as e:
                 logger.error(f"🧠 Episode creation failed: {e}")
                 raise e
 
-            logger.debug(f"🧠 Calling memory with episode shape: {episode.shape}")
+            logger.info(f"🧠 Calling memory with episode shape: {episode.shape}")
             try:
                 # Memory read-write operation
                 memory_output, memory_attention_weights = self.memory(episode)
-                logger.debug(f"🧠 Memory output: {memory_output.shape if memory_output is not None else 'None'}")
+                logger.info(f"🧠 Memory output: {memory_output.shape if memory_output is not None else 'None'}")
             except Exception as e:
                 # Debug removed
                 print(f"   Episode shape: {episode.shape}")
