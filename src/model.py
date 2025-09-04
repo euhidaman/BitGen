@@ -258,13 +258,27 @@ class BitNetTransformerBlock(nn.Module):
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        print(f"🔍 DEBUG: BitNet transformer block - input shape: {x.shape}")
+        print(f"🔍 DEBUG: BitNet transformer block - mask shape: {mask.shape if mask is not None else None}")
+        
         # Self-attention with residual connection
         normed_x = self.norm1(x)
-        attn_out, attn_weights = self.attn(normed_x, normed_x, normed_x, mask)
+        print(f"🔍 DEBUG: BitNet transformer block - normed_x shape: {normed_x.shape}")
+        
+        try:
+            attn_out, attn_weights = self.attn(normed_x, normed_x, normed_x, mask)
+            print(f"🔍 DEBUG: BitNet transformer block - attention output shape: {attn_out.shape}")
+        except Exception as e:
+            print(f"❌ DEBUG: BitNet transformer block attention failed: {e}")
+            print(f"   Input shapes: query={normed_x.shape}, key={normed_x.shape}, value={normed_x.shape}")
+            print(f"   Mask shape: {mask.shape if mask is not None else None}")
+            raise e
+            
         x = x + attn_out
 
         # MLP with residual connection
         x = x + self.mlp(self.norm2(x))
+        print(f"🔍 DEBUG: BitNet transformer block - final output shape: {x.shape}")
 
         return x, attn_weights
 
@@ -308,27 +322,41 @@ class BitNetTextEncoder(nn.Module):
         attention_mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         batch_size, seq_len = input_ids.shape
+        print(f"🔍 DEBUG: Text encoder - batch_size: {batch_size}, seq_len: {seq_len}")
 
         # Embeddings
         positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         x = self.token_embedding(input_ids) + \
             self.position_embedding(positions)
         x = self.dropout(x)
+        print(f"🔍 DEBUG: Text encoder - embeddings shape: {x.shape}")
 
         # Transform through BitNet layers
         attention_patterns = []
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            print(f"🔍 DEBUG: Text encoder layer {i} - input shape: {x.shape}")
+            
             # Convert attention mask to the right format for the layer
             layer_mask = None
             if attention_mask is not None:
+                print(f"🔍 DEBUG: Text encoder layer {i} - attention_mask shape: {attention_mask.shape}")
                 # Create a mask where 1 means attend, 0 means don't attend
                 layer_mask = attention_mask.unsqueeze(
                     1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
+                print(f"🔍 DEBUG: Text encoder layer {i} - layer_mask shape: {layer_mask.shape}")
 
-            x, attn_weights = layer(x, layer_mask)
-            attention_patterns.append(attn_weights)
+            try:
+                x, attn_weights = layer(x, layer_mask)
+                print(f"🔍 DEBUG: Text encoder layer {i} - output shape: {x.shape}")
+                attention_patterns.append(attn_weights)
+            except Exception as e:
+                print(f"❌ DEBUG: Text encoder layer {i} failed: {e}")
+                print(f"   Input shape: {x.shape}")
+                print(f"   Mask shape: {layer_mask.shape if layer_mask is not None else None}")
+                raise e
 
         x = self.norm(x)
+        print(f"🔍 DEBUG: Text encoder - final shape: {x.shape}")
         return x, attention_patterns
 
 
@@ -1571,16 +1599,32 @@ class BitMarModel(nn.Module):
         self.freeze_encoders_conditionally(step)
 
         # 1. Encode text using BitNet encoder
+        print(f"🔍 DEBUG: Starting forward pass")
+        print(f"🔍 DEBUG: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
         logger.debug(f"🔍 Debug: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
-        text_features, text_attention_patterns = self.encode_text(input_ids, attention_mask)
-        logger.debug(f"🔍 Debug: Text features shape: {text_features.shape}")
+        
+        try:
+            text_features, text_attention_patterns = self.encode_text(input_ids, attention_mask)
+            print(f"🔍 DEBUG: Text encoding successful - shape: {text_features.shape}")
+            logger.debug(f"🔍 Debug: Text features shape: {text_features.shape}")
+        except Exception as e:
+            print(f"❌ DEBUG: Text encoding failed: {e}")
+            raise e
 
         # 2. Encode vision using quantized vision encoder
+        print(f"🔍 DEBUG: Vision input shape: {vision_features.shape}")
         logger.debug(f"🔍 Debug: Vision input shape: {vision_features.shape}")
-        vision_latent = self.encode_vision(vision_features)
-        logger.debug(f"🔍 Debug: Vision latent shape: {vision_latent.shape}")
+        
+        try:
+            vision_latent = self.encode_vision(vision_features)
+            print(f"🔍 DEBUG: Vision encoding successful - shape: {vision_latent.shape}")
+            logger.debug(f"🔍 Debug: Vision latent shape: {vision_latent.shape}")
+        except Exception as e:
+            print(f"❌ DEBUG: Vision encoding failed: {e}")
+            raise e
 
         # 3. FIBER-enhanced cross-modal fusion
+        print(f"🔍 DEBUG: Starting FIBER fusion")
         logger.debug(f"🔄 Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
         try:
@@ -1589,8 +1633,13 @@ class BitMarModel(nn.Module):
                 vision_features=vision_latent,
                 text_attention_mask=attention_mask
             )
+            print(f"🔍 DEBUG: FIBER fusion successful - shape: {fused_features.shape}")
             logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
         except Exception as e:
+            print(f"❌ DEBUG: FIBER fusion failed: {e}")
+            print(f"   Text features: {text_features.shape}")
+            print(f"   Vision latent: {vision_latent.shape}")
+            print(f"   Attention mask: {attention_mask.shape}")
             logger.error(f"❌ FIBER fusion failed: {e}")
             logger.error(f"   Text features: {text_features.shape}")
             logger.error(f"   Vision latent: {vision_latent.shape}")
