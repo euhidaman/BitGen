@@ -1534,8 +1534,15 @@ class UnifiedBitMarTrainer:
                         )
 
                         # Use total reward for GRPO optimization
-                        grpo_rewards = torch.tensor(
-                            rewards['total'], device=self.device)
+                        total_rewards = rewards['total']
+                        if isinstance(total_rewards, (list, tuple)):
+                            grpo_rewards = torch.tensor(total_rewards, device=self.device, dtype=torch.float32)
+                        else:
+                            grpo_rewards = torch.tensor([total_rewards], device=self.device, dtype=torch.float32)
+                        
+                        # Ensure we have the right shape
+                        if grpo_rewards.dim() == 0:
+                            grpo_rewards = grpo_rewards.unsqueeze(0)
 
                         # Compute policy loss (simplified GRPO-style)
                         # Maximize rewards

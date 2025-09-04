@@ -1890,7 +1890,9 @@ class BitMarModel(nn.Module):
         # NEW: Robot reasoning loss (similar to deepseek-r1's multi-objective training)
         robot_reasoning_loss = None
         robot_reasoning_outputs = None
-        if self.robot_reasoning_integration is not None:
+        # Temporarily disable robot reasoning to resolve device issues
+        # if self.robot_reasoning_integration is not None:
+        if False:  # Temporarily disabled
             try:
                 # Ensure fused_features is on the same device as the model
                 device = next(self.parameters()).device
