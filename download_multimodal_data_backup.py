@@ -52,10 +52,10 @@ class MultimodalDatasetDownloader:
 
         if self.use_hf_localized_narratives:
             logger.warning(
-                f" HuggingFace LocalizedNarratives uses deprecated scripts - may not work")
+                f"⚠️ HuggingFace LocalizedNarratives uses deprecated scripts - may not work")
         else:
             logger.info(
-                " Will download LocalizedNarratives from original sources")
+                "📁 Will download LocalizedNarratives from original sources")
 
         # Vision caching options
         self.cache_vision_features = cache_vision_features
@@ -84,7 +84,7 @@ class MultimodalDatasetDownloader:
                     self._load_vision_model()
                 except ImportError as e:
                     logger.error(
-                        f" Real vision features requested but dependencies not available: {e}")
+                        f"❌ Real vision features requested but dependencies not available: {e}")
                     logger.error(
                         "   Install with: pip install torch transformers pillow")
                     raise ImportError(
@@ -96,7 +96,7 @@ class MultimodalDatasetDownloader:
         # Dataset URLs - Note: We only use OpenImages data, not COCO (see processing logic below)
         self.datasets = {
             'localized_narratives': {
-                'open_images': {  #  USED: High-quality, large dataset
+                'open_images': {  # ✅ USED: High-quality, large dataset
                     'train': [
                         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
                         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl',
@@ -112,7 +112,7 @@ class MultimodalDatasetDownloader:
                     'validation': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_validation_localized_narratives.jsonl',
                     'test': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_test_localized_narratives.jsonl'
                 },
-                'coco': {  #  SKIPPED: We focus on OpenImages only for better quality
+                'coco': {  # ⏭️ SKIPPED: We focus on OpenImages only for better quality
                     'train': [
                         'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00000-of-00004.jsonl',
                         'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00001-of-00004.jsonl',
@@ -147,12 +147,12 @@ class MultimodalDatasetDownloader:
             if self.torch.cuda.is_available():
                 device_name = self.torch.cuda.get_device_name(0)
                 self.vision_model = self.vision_model.cuda()
-                logger.info(f" DiNOv2 model loaded on GPU: {device_name}")
+                logger.info(f"✅ DiNOv2 model loaded on GPU: {device_name}")
                 logger.info(
                     f"   GPU Memory Available: {self.torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
             else:
                 logger.warning(
-                    "  No GPU detected, using CPU for DiNOv2 feature extraction (will be slower)")
+                    "⚠️  No GPU detected, using CPU for DiNOv2 feature extraction (will be slower)")
 
             self.vision_model.eval()
 
@@ -254,7 +254,7 @@ class MultimodalDatasetDownloader:
                 pbar.update(1)
 
         logger.info(
-            f" Cached {cached_count} new vision features for {dataset_name}")
+            f"✅ Cached {cached_count} new vision features for {dataset_name}")
         return cached_count
 
     def _extract_real_vision_features_from_file(self, image_path: str):
@@ -379,7 +379,7 @@ class MultimodalDatasetDownloader:
                 pickle.dump(metadata, f)
 
             logger.info(
-                f" Cached {len(all_features)} HuggingFace vision features to {cache_file}")
+                f"✅ Cached {len(all_features)} HuggingFace vision features to {cache_file}")
             return len(all_features)
 
         except Exception as e:
@@ -427,11 +427,11 @@ class MultimodalDatasetDownloader:
                             f.write(chunk)
                             pbar.update(len(chunk))
 
-            logger.info(f" Downloaded {filepath}")
+            logger.info(f"✅ Downloaded {filepath}")
             return True
 
         except Exception as e:
-            logger.error(f" Failed to download {url}: {e}")
+            logger.error(f"❌ Failed to download {url}: {e}")
             return False
 
     def extract_archive(self, archive_path: Path, extract_to: Path) -> bool:
@@ -451,38 +451,38 @@ class MultimodalDatasetDownloader:
                     f"Unsupported archive format: {archive_path.suffix}")
                 return False
 
-            logger.info(f" Extracted {archive_path}")
+            logger.info(f"✅ Extracted {archive_path}")
             return True
 
         except Exception as e:
-            logger.error(f" Failed to extract {archive_path}: {e}")
+            logger.error(f"❌ Failed to extract {archive_path}: {e}")
             return False
 
     def download_localized_narratives(self) -> Dict[str, int]:
         """Download Localized Narratives annotations or load from HuggingFace"""
         logger.info(
-            f" Debug: use_hf_localized_narratives = {self.use_hf_localized_narratives}")
+            f"🔧 Debug: use_hf_localized_narratives = {self.use_hf_localized_narratives}")
         logger.info(
-            f" Debug: HF_DATASETS_AVAILABLE = {HF_DATASETS_AVAILABLE}")
+            f"🔧 Debug: HF_DATASETS_AVAILABLE = {HF_DATASETS_AVAILABLE}")
 
         if self.use_hf_localized_narratives:
-            logger.info(" Attempting HuggingFace LocalizedNarratives...")
+            logger.info("🤗 Attempting HuggingFace LocalizedNarratives...")
             return self._load_hf_localized_narratives()
         else:
-            logger.info(" Using local LocalizedNarratives download...")
+            logger.info("📁 Using local LocalizedNarratives download...")
             return self._download_local_localized_narratives()
 
     def _load_hf_localized_narratives(self) -> Dict[str, int]:
         """Load LocalizedNarratives from HuggingFace and cache vision features"""
         logger.warning(
-            " HuggingFace LocalizedNarratives has deprecated dataset scripts")
+            "⚠️ HuggingFace LocalizedNarratives has deprecated dataset scripts")
         logger.info(
-            " Falling back to local processing with dummy vision features...")
+            "� Falling back to local processing with dummy vision features...")
         return self._download_local_localized_narratives()
 
     def _download_local_localized_narratives(self) -> Dict[str, int]:
         """Download Localized Narratives from original sources and get images from source datasets"""
-        logger.info(" Downloading Localized Narratives...")
+        logger.info("📥 Downloading Localized Narratives...")
 
         ln_dir = self.data_dir / "localized_narratives"
         ln_dir.mkdir(exist_ok=True)
@@ -498,7 +498,7 @@ class MultimodalDatasetDownloader:
             # Only process Open Images - skip COCO and other datasets for better quality and focus
             if dataset_name != 'open_images':
                 logger.info(
-                    f" Skipping {dataset_name} dataset (OpenImages only - better quality, larger dataset)")
+                    f"⏭️ Skipping {dataset_name} dataset (OpenImages only - better quality, larger dataset)")
                 continue
 
             dataset_dir = ln_dir / dataset_name
@@ -520,7 +520,7 @@ class MultimodalDatasetDownloader:
 
                         if filepath.exists():
                             logger.info(
-                                f" {filename} already exists, skipping download")
+                                f"✅ {filename} already exists, skipping download")
                         else:
                             success = self.download_file(
                                 url, filepath, f"Localized Narratives {dataset_name} {split} shard {i}")
@@ -547,13 +547,13 @@ class MultimodalDatasetDownloader:
                                             # Stop if we've collected enough samples
                                             if samples_collected >= self.max_samples:
                                                 logger.info(
-                                                    f" Reached limit of {self.max_samples:,} samples, stopping...")
+                                                    f"🛑 Reached limit of {self.max_samples:,} samples, stopping...")
                                                 break
                                         except json.JSONDecodeError:
                                             continue
                             dataset_samples_split += samples
                             logger.info(
-                                f"     shard {i}: {samples:,} samples")
+                                f"    ◦ shard {i}: {samples:,} samples")
 
                             # Break shard loop if we've hit the limit
                             if samples_collected >= self.max_samples:
@@ -564,7 +564,7 @@ class MultimodalDatasetDownloader:
 
                     dataset_samples += dataset_samples_split
                     logger.info(
-                        f"   {split}: {dataset_samples_split:,} samples total")
+                        f"  • {split}: {dataset_samples_split:,} samples total")
                 else:
                     # Single file
                     filename = f"{dataset_name}_{split}.jsonl"
@@ -572,7 +572,7 @@ class MultimodalDatasetDownloader:
 
                     if filepath.exists():
                         logger.info(
-                            f" {filename} already exists, skipping download")
+                            f"✅ {filename} already exists, skipping download")
                     else:
                         success = self.download_file(
                             urls, filepath, f"Localized Narratives {dataset_name} {split}")
@@ -593,7 +593,7 @@ class MultimodalDatasetDownloader:
                                         # Debug: Log dataset_id for first few samples
                                         if samples <= 3:
                                             logger.info(
-                                                f" Debug sample {samples} from {filename}:")
+                                                f"🔍 Debug sample {samples} from {filename}:")
                                             logger.info(
                                                 f"  dataset_id: '{data.get('dataset_id', 'MISSING')}'")
                                             logger.info(
@@ -609,12 +609,12 @@ class MultimodalDatasetDownloader:
                                         # Stop if we've collected enough samples
                                         if samples_collected >= self.max_samples:
                                             logger.info(
-                                                f" Reached limit of {self.max_samples:,} samples, stopping...")
+                                                f"🛑 Reached limit of {self.max_samples:,} samples, stopping...")
                                             break
                                     except json.JSONDecodeError:
                                         continue
                         dataset_samples += samples
-                        logger.info(f"   {split}: {samples:,} samples")
+                        logger.info(f"  • {split}: {samples:,} samples")
 
                         # Break outer loop if we've hit the limit
                         if samples_collected >= self.max_samples:
@@ -629,11 +629,11 @@ class MultimodalDatasetDownloader:
             # Break dataset loop if we've hit the limit
             if samples_collected >= self.max_samples:
                 logger.info(
-                    f" Sample limit reached, stopping dataset processing...")
+                    f"🛑 Sample limit reached, stopping dataset processing...")
                 break
 
         logger.info(
-            f" Localized Narratives: {total_samples:,} samples loaded")
+            f"✅ Localized Narratives: {total_samples:,} samples loaded")
 
         # Now download actual images from source datasets based on image_ids
         if all_image_info:
@@ -644,7 +644,7 @@ class MultimodalDatasetDownloader:
     def _download_source_images(self, image_info_list: List[Dict]):
         """Download actual images from source datasets (Open Images, COCO, etc.) based on image_ids"""
         logger.info(
-            f" Downloading {len(image_info_list):,} images from source datasets...")
+            f"📥 Downloading {len(image_info_list):,} images from source datasets...")
 
         # Group by dataset for efficient downloading
         datasets_to_download = {}
@@ -656,13 +656,13 @@ class MultimodalDatasetDownloader:
 
         # Debug: Show what dataset_ids we found
         logger.info(
-            f" Debug: Found dataset_ids: {list(datasets_to_download.keys())}")
+            f"🔍 Debug: Found dataset_ids: {list(datasets_to_download.keys())}")
         for dataset_id, image_ids in datasets_to_download.items():
-            logger.info(f" Debug: {dataset_id}: {len(image_ids):,} images")
+            logger.info(f"🔍 Debug: {dataset_id}: {len(image_ids):,} images")
 
         for dataset_id, image_ids in datasets_to_download.items():
             logger.info(
-                f" Downloading {len(image_ids):,} images from {dataset_id}")
+                f"📂 Downloading {len(image_ids):,} images from {dataset_id}")
 
             if 'open_images' in dataset_id.lower() or dataset_id == '':
                 # Handle both explicit open_images and empty dataset_id (assume open_images)
@@ -680,12 +680,12 @@ class MultimodalDatasetDownloader:
                 self._download_ade20k_images_by_ids(image_ids, ade20k_dir)
             else:
                 logger.warning(
-                    f" Unknown dataset type: {dataset_id} - treating as Open Images")
+                    f"⚠️ Unknown dataset type: {dataset_id} - treating as Open Images")
                 self._download_open_images_by_ids(image_ids)
 
     def _download_open_images_by_ids(self, image_ids: List[str]):
         """Download Open Images using official CVDF downloader (much more reliable than Flickr URLs)"""
-        logger.info(f"Processing {len(image_ids)} Open Images...")
+        logger.info(f"🖼️ Processing {len(image_ids)} Open Images...")
 
         # Create Open Images download directory
         oi_dir = self.data_dir / "open_images"
@@ -697,15 +697,15 @@ class MultimodalDatasetDownloader:
         existing_ids = {f.stem for f in existing_files if f.stat().st_size > 0}
         needed_ids = [img_id for img_id in image_ids if img_id not in existing_ids]
 
-        logger.info(f"Found {len(existing_ids)} existing images in folder")
-        logger.info(f"Need to download {len(needed_ids)} more images")
+        logger.info(f"📊 Found {len(existing_ids)} existing images in folder")
+        logger.info(f"📊 Need to download {len(needed_ids)} more images")
 
         if len(needed_ids) == 0:
-            logger.info("All images already exist!")
+            logger.info("✅ All images already exist!")
             return len(existing_ids)
 
         # Use official OpenImages downloader method (much more reliable than broken Flickr URLs)
-        logger.info("Using official OpenImages CVDF mirror downloader...")
+        logger.info("� Using official OpenImages CVDF mirror downloader...")
         logger.info("This is much more reliable than the old Flickr URLs which are mostly broken")
         
         # Try using official downloader with proper format
@@ -714,7 +714,7 @@ class MultimodalDatasetDownloader:
         
         # Create properly formatted image list for official downloader
         image_list_file = oi_dir / "image_list.txt"
-        logger.info(f"Creating image list file for {len(needed_ids)} images...")
+        logger.info(f"� Creating image list file for {len(needed_ids)} images...")
         
         with open(image_list_file, 'w') as f:
             for image_id in needed_ids:
@@ -722,7 +722,7 @@ class MultimodalDatasetDownloader:
                 f.write(f"train/{image_id}\n")
 
         # METHOD 1: Try CVDF AWS S3 bulk download (FASTEST AND MOST RELIABLE)
-        logger.info("Method 1: CVDF AWS S3 bulk download (recommended)")
+        logger.info("🚀 Method 1: CVDF AWS S3 bulk download (recommended)")
         logger.info("This downloads from official CVDF mirrors - much faster than individual downloads")
         
         try:
@@ -731,59 +731,33 @@ class MultimodalDatasetDownloader:
             # Check if AWS CLI is available
             result = subprocess.run(["aws", "--version"], capture_output=True, text=True)
             if result.returncode == 0:
-                logger.info(" AWS CLI detected - proceeding with bulk download")
-                logger.info(f" AWS CLI version: {result.stdout.strip()}")
+                logger.info("✅ AWS CLI detected - proceeding with bulk download")
+                logger.info(f"🔧 AWS CLI version: {result.stdout.strip()}")
                 
                 # Test AWS connection first
                 test_cmd = "aws s3 --no-sign-request ls s3://open-images-dataset/tar/ | head -3"
-                logger.info(" Testing AWS S3 connection...")
+                logger.info("🧪 Testing AWS S3 connection...")
                 try:
                     test_result = subprocess.run(test_cmd.split(), capture_output=True, text=True, timeout=30)
                     if test_result.returncode == 0:
-                        logger.info(" AWS S3 connection successful!")
-                        logger.info(f" Available files preview: {test_result.stdout.strip()[:100]}...")
+                        logger.info("✅ AWS S3 connection successful!")
+                        logger.info(f"📋 Available files preview: {test_result.stdout.strip()[:100]}...")
                     else:
-                        logger.warning(f" AWS S3 test failed: {test_result.stderr}")
+                        logger.warning(f"⚠️ AWS S3 test failed: {test_result.stderr}")
                         logger.info("Proceeding anyway - might be a temporary issue...")
                 except Exception as e:
-                    logger.warning(f" AWS S3 test error: {e}")
+                    logger.warning(f"⚠️ AWS S3 test error: {e}")
                     logger.info("Proceeding anyway...")
                 
-                # Determine how many shards to download based on needed images
-                # Each shard contains roughly: train_0 (~500K), train_1 (~400K), train_2 (~300K), etc.
-                shard_capacities = [500000, 400000, 300000, 320000, 280000, 260000, 240000, 220000]  # Approximate images per shard
-                
-                needed_count = len(needed_ids)
-                logger.info(f" Need {needed_count:,} images - determining optimal shard downloads")
-                
-                # Calculate which shards to download
-                aws_commands = []
-                cumulative_images = 0
-                
-                for shard_idx, shard_capacity in enumerate(shard_capacities):
-                    if cumulative_images >= needed_count:
-                        break
-                    
-                    aws_commands.append(f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_{shard_idx}.tar.gz {oi_dir}/")
-                    cumulative_images += shard_capacity
-                    
-                    logger.info(f" Will download shard {shard_idx} (~{shard_capacity/1000:.0f}K images, cumulative: ~{cumulative_images/1000:.0f}K)")
-                    
-                    # Stop if we have enough (with some buffer for missing images)
-                    if cumulative_images >= needed_count * 1.2:  # 20% buffer
-                        logger.info(f" Sufficient shards selected - should cover {needed_count:,} needed images")
-                        break
-                
-                if not aws_commands:
-                    # Fallback: download at least one shard
-                    aws_commands = [f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/"]
-                    logger.info(" Downloading at least train_0.tar.gz as fallback")
-                
-                logger.info(f" Selected {len(aws_commands)} shards for download")
+                # Download first two train tar files (should give us 200K+ images)
+                aws_commands = [
+                    f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
+                    f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
+                ]
                 
                 for i, cmd in enumerate(aws_commands):
-                    logger.info(f" Starting download of train_{i}.tar.gz (46GB each)")
-                    logger.info(" This may take 30-60 minutes - progress will be shown every 30 seconds")
+                    logger.info(f"🔽 Starting download of train_{i}.tar.gz (46GB each)")
+                    logger.info("⏱️ This may take 30-60 minutes - progress will be shown every 30 seconds")
                     
                     try:
                         # Start download with live output streaming
@@ -811,47 +785,47 @@ class MultimodalDatasetDownloader:
                             current_time = time.time()
                             if current_time - last_progress_time > 30:
                                 elapsed = current_time - start_time
-                                logger.info(f" Still downloading train_{i}.tar.gz... {elapsed/60:.1f} minutes elapsed")
+                                logger.info(f"📊 Still downloading train_{i}.tar.gz... {elapsed/60:.1f} minutes elapsed")
                                 
                                 # Check file size if it exists
                                 tar_file = oi_dir / f"train_{i}.tar.gz"
                                 if tar_file.exists():
                                     size_gb = tar_file.stat().st_size / (1024**3)
-                                    logger.info(f" Downloaded {size_gb:.1f} GB so far (target: ~46 GB)")
+                                    logger.info(f"📁 Downloaded {size_gb:.1f} GB so far (target: ~46 GB)")
                                 else:
                                     # Check if process is still active
                                     if process.poll() is None:
-                                        logger.info(f" AWS CLI process still active - download in progress...")
+                                        logger.info(f"🔄 AWS CLI process still active - download in progress...")
                                         # Try to check network activity or temp files
                                         temp_files = list(oi_dir.glob("*.tmp")) + list(oi_dir.glob("*.part"))
                                         if temp_files:
                                             total_temp_size = sum(f.stat().st_size for f in temp_files) / (1024**3)
-                                            logger.info(f" Temporary files: {total_temp_size:.1f} GB")
+                                            logger.info(f"📂 Temporary files: {total_temp_size:.1f} GB")
                                         else:
-                                            logger.info(f" No file yet - AWS CLI might be connecting/buffering...")
+                                            logger.info(f"⚠️ No file yet - AWS CLI might be connecting/buffering...")
                                     else:
-                                        logger.warning(f" AWS process ended unexpectedly!")
+                                        logger.warning(f"❌ AWS process ended unexpectedly!")
                                         break
                                 
                                 last_progress_time = current_time
                             
                             # Check for timeout (1 hour)
                             if current_time - start_time > 3600:
-                                logger.warning(" Download taking too long (>1 hour)")
-                                logger.info(" This could mean:")
-                                logger.info("    Slow internet connection")
-                                logger.info("    AWS S3 rate limiting")
-                                logger.info("    Network connectivity issues")
-                                logger.info(" Terminating download - you can restart later")
+                                logger.warning("⏰ Download taking too long (>1 hour)")
+                                logger.info("💡 This could mean:")
+                                logger.info("   • Slow internet connection")
+                                logger.info("   • AWS S3 rate limiting")
+                                logger.info("   • Network connectivity issues")
+                                logger.info("🛑 Terminating download - you can restart later")
                                 process.terminate()
                                 break
                             
                             # Quick timeout check every 15 minutes to offer advice
                             if elapsed > 900 and elapsed % 900 < 30:  # Every 15 minutes
-                                logger.info(" Download taking longer than expected. Options:")
-                                logger.info("    Continue waiting (recommended for slow connections)")
-                                logger.info("    Cancel (Ctrl+C) and try FiftyOne method instead")
-                                logger.info("    Check your internet speed: 46GB needs good bandwidth")
+                                logger.info("💡 Download taking longer than expected. Options:")
+                                logger.info("   • Continue waiting (recommended for slow connections)")
+                                logger.info("   • Cancel (Ctrl+C) and try FiftyOne method instead")
+                                logger.info("   • Check your internet speed: 46GB needs good bandwidth")
                             
                             time.sleep(5)  # Check every 5 seconds
                         
@@ -862,94 +836,73 @@ class MultimodalDatasetDownloader:
                             tar_file = oi_dir / f"train_{i}.tar.gz"
                             if tar_file.exists():
                                 size_gb = tar_file.stat().st_size / (1024**3)
-                                logger.info(f" Downloaded train_{i}.tar.gz ({size_gb:.1f} GB)")
+                                logger.info(f"✅ Downloaded train_{i}.tar.gz ({size_gb:.1f} GB)")
                                 
-                                # Extract with progress and early stopping
-                                logger.info(f" Extracting train_{i}.tar.gz... (may take 5-10 minutes)")
-                                logger.info(f" Will stop extraction once we have enough images for {needed_count:,} samples")
+                                # Extract with progress
+                                logger.info(f"📦 Extracting train_{i}.tar.gz... (this may take 5-10 minutes)")
                                 import tarfile
                                 
                                 with tarfile.open(tar_file, 'r:gz') as tar:
                                     members = tar.getmembers()
-                                    logger.info(f" Archive contains {len(members)} files...")
+                                    logger.info(f"🗂️ Extracting {len(members)} files...")
                                     
-                                    extracted_count = 0
                                     for i_member, member in enumerate(members):
-                                        # Check if we have enough images already
-                                        current_images = list(oi_dir.glob("**/*.jpg"))
-                                        if len(current_images) >= needed_count * 1.1:  # 10% buffer
-                                            logger.info(f" Early stop: Have {len(current_images)} images, need {needed_count}")
-                                            break
-                                            
                                         tar.extract(member, oi_dir)
-                                        extracted_count += 1
-                                        
-                                        if extracted_count % 1000 == 0:  # Progress every 1000 files
-                                            logger.info(f" Extracted {extracted_count:,} files...")
-                                            
-                                    logger.info(f" Extracted {extracted_count:,} files from shard {i}")
+                                        if i_member % 1000 == 0:  # Progress every 1000 files
+                                            logger.info(f"📂 Extracted {i_member}/{len(members)} files...")
                                 
                                 tar_file.unlink()  # Remove tar file to save space
-                                logger.info(f" Extracted train_{i}.tar.gz successfully!")
-                                
-                                # Check if we have enough images now
-                                current_images = list(oi_dir.glob("**/*.jpg"))
-                                if len(current_images) >= needed_count:
-                                    logger.info(f" Have {len(current_images)} images - sufficient for {needed_count} needed")
-                                    break  # Stop downloading more shards
+                                logger.info(f"✅ Extracted train_{i}.tar.gz successfully!")
                             else:
-                                logger.warning(f" train_{i}.tar.gz not found after download")
+                                logger.warning(f"❌ train_{i}.tar.gz not found after download")
                         else:
-                            logger.warning(f" AWS download failed with return code {process.returncode}")
+                            logger.warning(f"❌ AWS download failed with return code {process.returncode}")
                             if stdout:
                                 logger.warning(f"Error output: {stdout[-500:]}")  # Last 500 chars
                             
                     except Exception as e:
-                        logger.warning(f" AWS download failed: {e}")
+                        logger.warning(f"❌ AWS download failed: {e}")
                         break
                 
                 # Count what we got from AWS
                 final_files = list(oi_dir.glob("**/*.jpg"))
                 if len(final_files) > len(existing_files):
-                    logger.info(f" AWS S3 method succeeded! Downloaded {len(final_files) - len(existing_files)} new images")
+                    logger.info(f"🎉 AWS S3 method succeeded! Downloaded {len(final_files) - len(existing_files)} new images")
                     return len(final_files)
                 else:
-                    logger.info(" AWS S3 method didn't add new images, trying FiftyOne...")
+                    logger.info("⚠️ AWS S3 method didn't add new images, trying FiftyOne...")
             
             else:
-                logger.info(" AWS CLI not found - install with: pip install awscli")
+                logger.info("⚠️ AWS CLI not found - install with: pip install awscli")
                 logger.info("Proceeding to FiftyOne method...")
                 
         except Exception as e:
             logger.warning(f"AWS method failed: {e}")
         
         # METHOD 2: FiftyOne (PROVEN TO WORK)
-        logger.info(" Method 2: FiftyOne dataset zoo download")
+        logger.info("🚀 Method 2: FiftyOne dataset zoo download")
         logger.info("This is slower but very reliable - will download specific images")
         
         try:
             import fiftyone.zoo as foz
             
-            logger.info(" Using FiftyOne to download OpenImages subset...")
+            logger.info("📥 Using FiftyOne to download OpenImages subset...")
             
-            # Download a subset that matches our needs using FiftyOne
-            download_count = min(len(needed_ids), 50000)  # Cap at 50K for FiftyOne
-            logger.info(f" Downloading {download_count:,} images via FiftyOne (from {len(needed_ids):,} needed)")
-            
+            # Download a substantial subset using FiftyOne
             dataset = foz.load_zoo_dataset(
                 "open-images-v7",
                 split="train",
-                max_samples=download_count,  # Download only what we need
+                max_samples=min(50000, len(needed_ids)),  # Download up to 50K images
                 only_matching=False,
                 dataset_dir=str(oi_dir / "fiftyone_cache")
             )
             
-            logger.info(f" FiftyOne downloaded {len(dataset)} images")
+            logger.info(f"✅ FiftyOne downloaded {len(dataset)} images")
             
             # Copy images from FiftyOne cache to our format
             fo_image_dir = oi_dir / "fiftyone_cache" / "open-images-v7" / "train" / "data"
             if fo_image_dir.exists():
-                logger.info(" Copying images from FiftyOne cache...")
+                logger.info("📁 Copying images from FiftyOne cache...")
                 
                 copied = 0
                 for img_file in fo_image_dir.glob("*.jpg"):
@@ -959,19 +912,19 @@ class MultimodalDatasetDownloader:
                         shutil.copy2(img_file, target_file)
                         copied += 1
                 
-                logger.info(f" Copied {copied} images from FiftyOne")
+                logger.info(f"✅ Copied {copied} images from FiftyOne")
                 
                 # Count final results
                 final_files = list(oi_dir.glob("*.jpg"))
                 return len(final_files)
             
         except ImportError:
-            logger.warning(" FiftyOne not installed - install with: pip install fiftyone")
+            logger.warning("⚠️ FiftyOne not installed - install with: pip install fiftyone")
         except Exception as e:
             logger.warning(f"FiftyOne method failed: {e}")
         
         # METHOD 3: Official downloader fallback
-        logger.info(" Method 3: Official OpenImages downloader (fallback - slower)")
+        logger.info("🚀 Method 3: Official OpenImages downloader (fallback - slower)")
         
         # Download official downloader and use it
         
@@ -980,11 +933,11 @@ class MultimodalDatasetDownloader:
         final_existing = {f.stem for f in final_files if f.stat().st_size > 0}
         total_downloaded = len(final_existing) - len(existing_ids)
         
-        logger.info(f" Total images available: {len(final_existing)}")
-        logger.info(f" Downloaded {total_downloaded} new images this run")
+        logger.info(f"✅ Total images available: {len(final_existing)}")
+        logger.info(f"📊 Downloaded {total_downloaded} new images this run")
         
         if len(final_existing) < 50000:
-            logger.warning(" Got fewer than 50K images. To get 200K+ images:")
+            logger.warning("⚠️ Got fewer than 50K images. To get 200K+ images:")
             logger.warning("   1. Install AWS CLI: pip install awscli")
             logger.warning("   2. Install FiftyOne: pip install fiftyone") 
             logger.warning("   3. Re-run download with AWS S3 bulk download")
@@ -995,7 +948,7 @@ class MultimodalDatasetDownloader:
     def _download_coco_images_by_ids(self, image_ids: List[str], dataset_id: str):
         """Download COCO images using bulk zip download for much faster downloads"""
         logger.info(
-            f" Downloading {len(image_ids)} COCO images for {dataset_id}...")
+            f"🖼️ Downloading {len(image_ids)} COCO images for {dataset_id}...")
 
         coco_dir = self.data_dir / "coco_images"
         coco_dir.mkdir(exist_ok=True)
@@ -1010,27 +963,27 @@ class MultimodalDatasetDownloader:
 
         if not extract_dir.exists():
             logger.info(
-                f" Attempting bulk download of COCO {split} (~20GB zip file)...")
+                f"🗜️ Attempting bulk download of COCO {split} (~20GB zip file)...")
             logger.info("This is MUCH faster than individual image downloads!")
 
             # Download the entire COCO split as zip
             if self.download_file(zip_url, zip_file, f"COCO {split} bulk download"):
-                logger.info(f" Extracting COCO {split} zip file...")
+                logger.info(f"📦 Extracting COCO {split} zip file...")
                 if self.extract_archive(zip_file, coco_dir):
-                    logger.info(f" Successfully extracted COCO {split}")
+                    logger.info(f"✅ Successfully extracted COCO {split}")
                     # Clean up zip file after extraction
                     zip_file.unlink()
                 else:
-                    logger.error(f" Failed to extract {zip_file}")
+                    logger.error(f"❌ Failed to extract {zip_file}")
                     # Fall back to individual downloads
                     return self._download_coco_images_individually(image_ids, dataset_id)
             else:
                 logger.warning(
-                    " Bulk download failed, falling back to individual image downloads...")
+                    "❌ Bulk download failed, falling back to individual image downloads...")
                 return self._download_coco_images_individually(image_ids, dataset_id)
         else:
             logger.info(
-                f" COCO {split} directory already exists, skipping bulk download")
+                f"✅ COCO {split} directory already exists, skipping bulk download")
 
         # Count how many of our needed images are present
         downloaded_count = 0
@@ -1044,12 +997,12 @@ class MultimodalDatasetDownloader:
                 continue
 
         logger.info(
-            f" Found {downloaded_count}/{len(image_ids)} COCO images in bulk download")
+            f"✅ Found {downloaded_count}/{len(image_ids)} COCO images in bulk download")
 
     def _download_coco_images_individually(self, image_ids: List[str], dataset_id: str):
         """Fallback: Download COCO images individually (slower method)"""
         logger.info(
-            f" Fallback: Downloading {len(image_ids)} COCO images individually...")
+            f"🐌 Fallback: Downloading {len(image_ids)} COCO images individually...")
 
         coco_dir = self.data_dir / "coco_images"
         coco_dir.mkdir(exist_ok=True)
@@ -1077,12 +1030,12 @@ class MultimodalDatasetDownloader:
             except Exception as e:
                 logger.debug(f"Error downloading COCO image {image_id}: {e}")
 
-        logger.info(f" Downloaded {downloaded_count} COCO images")
+        logger.info(f"✅ Downloaded {downloaded_count} COCO images")
 
     def _download_flickr30k_images_by_ids(self, image_ids: List[str], download_dir):
         """Download Flickr30k images using Flickr API"""
         logger.info(
-            f" Downloading {len(image_ids)} Flickr30k images using Flickr API...")
+            f"🖼️ Downloading {len(image_ids)} Flickr30k images using Flickr API...")
 
         flickr30k_dir = self.data_dir / "flickr30k"
         flickr30k_dir.mkdir(exist_ok=True)
@@ -1155,7 +1108,7 @@ class MultimodalDatasetDownloader:
                         placeholder_path.write_text("")
 
             logger.info(
-                f" Successfully downloaded {success_count}/{len(image_ids)} Flickr30k images")
+                f"✅ Successfully downloaded {success_count}/{len(image_ids)} Flickr30k images")
             return success_count
 
         except ImportError:
@@ -1173,7 +1126,7 @@ class MultimodalDatasetDownloader:
     def _download_ade20k_images_by_ids(self, image_ids: List[str], download_dir):
         """Download ADE20K images using direct URLs and API endpoints"""
         logger.info(
-            f" Attempting to download {len(image_ids)} ADE20K images...")
+            f"🖼️ Attempting to download {len(image_ids)} ADE20K images...")
 
         # ADE20K images are often available through multiple mirrors and patterns
         base_urls = [
@@ -1256,18 +1209,18 @@ class MultimodalDatasetDownloader:
                     placeholder_path.write_text("")
 
         if success_count == 0:
-            logger.info(" Unable to download ADE20K images automatically.")
+            logger.info("⚠️ Unable to download ADE20K images automatically.")
             logger.info(
-                " Manual download required from: https://ade20k.csail.mit.edu/request_data/")
+                "📋 Manual download required from: https://ade20k.csail.mit.edu/request_data/")
         else:
             logger.info(
-                f" Successfully downloaded {success_count}/{len(image_ids)} ADE20K images")
+                f"✅ Successfully downloaded {success_count}/{len(image_ids)} ADE20K images")
 
         return len(image_ids)  # Return total attempted, not just successful
 
     def download_coco_annotations(self) -> Dict[str, int]:
         """Download COCO annotations"""
-        logger.info(" Downloading COCO annotations...")
+        logger.info("📥 Downloading COCO annotations...")
 
         coco_dir = self.data_dir / "coco"
         coco_dir.mkdir(exist_ok=True)
@@ -1279,7 +1232,7 @@ class MultimodalDatasetDownloader:
         ann_zip = coco_dir / "annotations_trainval2017.zip"
 
         if ann_zip.exists():
-            logger.info(" COCO annotations already downloaded")
+            logger.info("✅ COCO annotations already downloaded")
         else:
             success = self.download_file(ann_url, ann_zip, "COCO Annotations")
             if not success:
@@ -1309,18 +1262,18 @@ class MultimodalDatasetDownloader:
                     total_samples += num_annotations
 
                     logger.info(
-                        f"   COCO {split}: {num_images:,} images, {num_annotations:,} captions")
+                        f"  • COCO {split}: {num_images:,} images, {num_annotations:,} captions")
 
                 except Exception as e:
                     logger.warning(
                         f"Failed to count COCO {split} samples: {e}")
 
-        logger.info(f" COCO total: {total_samples:,} caption samples")
+        logger.info(f"✅ COCO total: {total_samples:,} caption samples")
         return dataset_info
 
     def prepare_unified_dataset(self) -> Tuple[List[str], int]:
         """Prepare unified caption dataset from all sources and optionally cache vision features"""
-        logger.info(" Preparing unified dataset...")
+        logger.info("🔄 Preparing unified dataset...")
 
         all_captions = []
         all_image_urls = []
@@ -1425,13 +1378,13 @@ class MultimodalDatasetDownloader:
             json.dump(all_captions, f, indent=2, ensure_ascii=False)
 
         logger.info(
-            f" Unified dataset created: {len(all_captions):,} captions")
+            f"✅ Unified dataset created: {len(all_captions):,} captions")
         logger.info(f"   Saved to: {captions_file}")
 
         if self.cache_vision_features:
             unique_urls = len(set(all_image_urls))
             logger.info(
-                f" Vision features processed for {unique_urls:,} unique images")
+                f"✅ Vision features processed for {unique_urls:,} unique images")
 
             # Create unified cache file for training
             self._create_unified_vision_cache(all_image_urls)
@@ -1440,7 +1393,7 @@ class MultimodalDatasetDownloader:
 
     def _create_unified_vision_cache(self, all_image_urls: List[str]):
         """Create unified vision cache file that training can use directly"""
-        logger.info(" Creating unified vision cache for training...")
+        logger.info("🔄 Creating unified vision cache for training...")
 
         # Collect all cached features in the same order as captions
         unified_features = []
@@ -1507,24 +1460,24 @@ class MultimodalDatasetDownloader:
             pickle.dump(metadata, f)
 
         logger.info(
-            f" Created unified vision cache: {len(unified_features_array):,} features")
+            f"✅ Created unified vision cache: {len(unified_features_array):,} features")
         logger.info(f"   Saved to: {unified_cache_file}")
         logger.info(f"   Feature type: {feature_type}")
 
     def download_all(self, download_localized_narratives: bool = True) -> Dict[str, int]:
         """Download Localized Narratives dataset and return statistics"""
-        logger.info(" Starting multimodal dataset download...")
+        logger.info("🚀 Starting multimodal dataset download...")
 
         total_stats = {}
 
         # Download Localized Narratives (contains both Open Images and COCO data)
         if download_localized_narratives:
-            logger.info(" Downloading Localized Narratives...")
+            logger.info("📥 Downloading Localized Narratives...")
             ln_stats = self.download_localized_narratives()
             total_stats.update(ln_stats)
         else:
-            logger.info("  Skipping Localized Narratives download")
-            logger.warning("  No datasets selected for download!")
+            logger.info("⏭️  Skipping Localized Narratives download")
+            logger.warning("⚠️  No datasets selected for download!")
             return {}
 
         # Prepare unified dataset from Localized Narratives
@@ -1532,13 +1485,13 @@ class MultimodalDatasetDownloader:
         total_stats['total_unified_captions'] = total_captions
 
         # Print summary
-        logger.info(" Dataset Download Summary:")
+        logger.info("📊 Dataset Download Summary:")
         total_samples = 0
         for key, count in total_stats.items():
-            logger.info(f"   {key}: {count:,}")
+            logger.info(f"  • {key}: {count:,}")
             total_samples += count
 
-        logger.info(f" TOTAL IMAGE-CAPTION PAIRS: {total_samples:,}")
+        logger.info(f"🎯 TOTAL IMAGE-CAPTION PAIRS: {total_samples:,}")
 
         return total_stats
 
@@ -1584,9 +1537,9 @@ def main():
     args = parser.parse_args()
 
     # Dataset is required and defaults to localized_narratives
-    logger.info(" BitGen Localized Narratives Dataset Downloader")
+    logger.info("📄 BitGen Localized Narratives Dataset Downloader")
     logger.info(
-        "  This will download Localized Narratives containing both Open Images and COCO data")
+        "ℹ️  This will download Localized Narratives containing both Open Images and COCO data")
     logger.info("")
 
     try:
@@ -1597,17 +1550,17 @@ def main():
         use_real_vision = args.real_vision_features
         if not use_real_vision:
             logger.info(
-                " Using dummy vision features to avoid URL download issues")
+                "🎨 Using dummy vision features to avoid URL download issues")
 
         # Handle full dataset download options
         max_samples = args.max_samples
         if args.download_full_openimages or max_samples <= 0:
             max_samples = 0  # Unlimited
-            logger.info(" FULL OPENIMAGES DOWNLOAD: No sample limit - downloading entire OpenImages dataset overnight!")
-            logger.info("  This will take several hours and require significant disk space")
-            logger.info(" Note: COCO data is excluded - focusing on high-quality OpenImages only")
+            logger.info("🌍 FULL OPENIMAGES DOWNLOAD: No sample limit - downloading entire OpenImages dataset overnight!")
+            logger.info("⚠️  This will take several hours and require significant disk space")
+            logger.info("📝 Note: COCO data is excluded - focusing on high-quality OpenImages only")
         else:
-            logger.info(f" OpenImages sample limit: {max_samples:,} samples (COCO excluded)")
+            logger.info(f"📊 OpenImages sample limit: {max_samples:,} samples (COCO excluded)")
 
         # Create downloader with vision caching options
         downloader = MultimodalDatasetDownloader(
@@ -1622,44 +1575,44 @@ def main():
         # Determine which datasets to download
         if args.dataset == 'localized_narratives':
             if max_samples <= 0:
-                logger.info(" Downloading ENTIRE OpenImages dataset (via Localized Narratives)")
-                logger.info(" Estimated download: ~900k+ image-caption pairs (OpenImages only - COCO excluded)")
-                logger.info(" Expected size: ~80+ GB (images) + ~8 GB (features)")
-                logger.info(" Estimated time: 4-8 hours depending on connection")
+                logger.info("🎯 Downloading ENTIRE OpenImages dataset (via Localized Narratives)")
+                logger.info("📊 Estimated download: ~900k+ image-caption pairs (OpenImages only - COCO excluded)")
+                logger.info("💾 Expected size: ~80+ GB (images) + ~8 GB (features)")
+                logger.info("⏰ Estimated time: 4-8 hours depending on connection")
             else:
-                logger.info(" Downloading LIMITED OpenImages dataset (via Localized Narratives)")
-                logger.info(f" Sample limit: {max_samples:,} image-caption pairs (OpenImages only)")
-            logger.info("  Using OpenImages data from Localized Narratives (COCO excluded for better focus)")
+                logger.info("🎯 Downloading LIMITED OpenImages dataset (via Localized Narratives)")
+                logger.info(f"📊 Sample limit: {max_samples:,} image-caption pairs (OpenImages only)")
+            logger.info("ℹ️  Using OpenImages data from Localized Narratives (COCO excluded for better focus)")
         else:
             logger.error(
-                " Only 'localized_narratives' dataset is supported in this version")
+                "❌ Only 'localized_narratives' dataset is supported in this version")
             return 1
 
         if args.cache_vision_features:
             if args.real_vision_features:
                 logger.info(
-                    " Will extract and cache REAL DiNOv2 vision features (slower, better quality)")
+                    "🔄 Will extract and cache REAL DiNOv2 vision features (slower, better quality)")
                 logger.info(
-                    "     This requires GPU and internet connection for each image")
+                    "   ⚠️  This requires GPU and internet connection for each image")
             else:
                 logger.info(
-                    " Will generate and cache DUMMY vision features (faster, for development)")
+                    "🔄 Will generate and cache DUMMY vision features (faster, for development)")
 
         # Download Localized Narratives dataset
         stats = downloader.download_all()
 
         if stats:
-            logger.info(" Download completed successfully!")
-            logger.info(" Data structure:")
-            logger.info(f"   {args.data_dir}/")
+            logger.info("✅ Download completed successfully!")
+            logger.info("📁 Data structure:")
+            logger.info(f"  📂 {args.data_dir}/")
             logger.info(
-                f"     all_captions.json ({stats.get('total_unified_captions', 0):,} captions)")
-            logger.info(f"     localized_narratives/")
+                f"    📄 all_captions.json ({stats.get('total_unified_captions', 0):,} captions)")
+            logger.info(f"    📂 localized_narratives/")
             if args.cache_vision_features:
-                logger.info(f"     vision_features_cache/ (cached features)")
+                logger.info(f"    📂 vision_features_cache/ (cached features)")
 
     except Exception as e:
-        logger.error(f" Download failed: {e}")
+        logger.error(f"❌ Download failed: {e}")
         return 1
 
     return 0
