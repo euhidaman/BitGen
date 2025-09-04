@@ -90,10 +90,10 @@ class MultimodalDatasetDownloader:
                 logger.info(
                     "Will use dummy vision features (no additional dependencies required)")
 
-        # Dataset URLs
+        # Dataset URLs - Note: We only use OpenImages data, not COCO (see processing logic below)
         self.datasets = {
             'localized_narratives': {
-                'open_images': {
+                'open_images': {  # ✅ USED: High-quality, large dataset
                     'train': [
                         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
                         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl',
@@ -109,7 +109,7 @@ class MultimodalDatasetDownloader:
                     'validation': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_validation_localized_narratives.jsonl',
                     'test': 'https://storage.googleapis.com/localized-narratives/annotations/open_images_test_localized_narratives.jsonl'
                 },
-                'coco': {
+                'coco': {  # ⏭️ SKIPPED: We focus on OpenImages only for better quality
                     'train': [
                         'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00000-of-00004.jsonl',
                         'https://storage.googleapis.com/localized-narratives/annotations/coco_train_localized_narratives-00001-of-00004.jsonl',
@@ -492,11 +492,10 @@ class MultimodalDatasetDownloader:
         samples_collected = 0
 
         for dataset_name, splits in self.datasets['localized_narratives'].items():
-            # Only process Open Images (revert back to original working approach)
-            # But limit to first 50k samples for faster downloads
+            # Only process Open Images - skip COCO and other datasets for better quality and focus
             if dataset_name != 'open_images':
                 logger.info(
-                    f"⏭️ Skipping {dataset_name} dataset (only using Open Images subset)")
+                    f"⏭️ Skipping {dataset_name} dataset (OpenImages only - better quality, larger dataset)")
                 continue
 
             dataset_dir = ln_dir / dataset_name
@@ -1345,11 +1344,11 @@ def main():
     dataset_group = parser.add_argument_group(
         "Dataset Selection", "Localized Narratives dataset (includes Open Images and COCO)")
     dataset_group.add_argument("--dataset", type=str, choices=['localized_narratives'], default='localized_narratives',
-                               help="Dataset to download: 'localized_narratives' (~1.16M samples with Open Images + COCO)")
+                               help="Dataset to download: 'localized_narratives' (~900k OpenImages samples, COCO excluded)")
     dataset_group.add_argument("--max_samples", type=int, default=50000,
-                               help="Maximum number of samples to download (default: 50000, use 0 or -1 for unlimited)")
+                               help="Maximum number of OpenImages samples to download (default: 50000, use 0 or -1 for unlimited)")
     dataset_group.add_argument("--download_full_openimages", action="store_true",
-                               help="Download the entire OpenImages dataset overnight (removes 50k sample limit)")
+                               help="Download the entire OpenImages dataset overnight (removes 50k sample limit, COCO excluded)")
 
     # HuggingFace options
     hf_group = parser.add_argument_group(
@@ -1392,10 +1391,11 @@ def main():
         max_samples = args.max_samples
         if args.download_full_openimages or max_samples <= 0:
             max_samples = 0  # Unlimited
-            logger.info("🌍 FULL OPENIMAGES DOWNLOAD: No sample limit - downloading entire dataset overnight!")
+            logger.info("🌍 FULL OPENIMAGES DOWNLOAD: No sample limit - downloading entire OpenImages dataset overnight!")
             logger.info("⚠️  This will take several hours and require significant disk space")
+            logger.info("📝 Note: COCO data is excluded - focusing on high-quality OpenImages only")
         else:
-            logger.info(f"📊 Sample limit: {max_samples:,} samples")
+            logger.info(f"📊 OpenImages sample limit: {max_samples:,} samples (COCO excluded)")
 
         # Create downloader with vision caching options
         downloader = MultimodalDatasetDownloader(
@@ -1410,14 +1410,14 @@ def main():
         # Determine which datasets to download
         if args.dataset == 'localized_narratives':
             if max_samples <= 0:
-                logger.info("🎯 Downloading ENTIRE Localized Narratives dataset")
-                logger.info("📊 Estimated download: ~1.16M+ image-caption pairs (Full OpenImages + COCO)")
-                logger.info("💾 Expected size: ~100+ GB (images) + ~10 GB (features)")
-                logger.info("⏰ Estimated time: 6-12 hours depending on connection")
+                logger.info("🎯 Downloading ENTIRE OpenImages dataset (via Localized Narratives)")
+                logger.info("📊 Estimated download: ~900k+ image-caption pairs (OpenImages only - COCO excluded)")
+                logger.info("💾 Expected size: ~80+ GB (images) + ~8 GB (features)")
+                logger.info("⏰ Estimated time: 4-8 hours depending on connection")
             else:
-                logger.info("🎯 Downloading LIMITED Localized Narratives dataset")
-                logger.info(f"📊 Sample limit: {max_samples:,} image-caption pairs")
-            logger.info("ℹ️  This includes both Open Images and COCO data from Localized Narratives")
+                logger.info("🎯 Downloading LIMITED OpenImages dataset (via Localized Narratives)")
+                logger.info(f"📊 Sample limit: {max_samples:,} image-caption pairs (OpenImages only)")
+            logger.info("ℹ️  Using OpenImages data from Localized Narratives (COCO excluded for better focus)")
         else:
             logger.error(
                 "❌ Only 'localized_narratives' dataset is supported in this version")
