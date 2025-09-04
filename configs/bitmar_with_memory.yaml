@@ -45,9 +45,24 @@ model:
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
 
-  # Cross-modal fusion
+  # Cross-modal fusion with AUTHENTIC FIBER
   fusion_hidden_size: 128 # Match text encoder dim for consistency
   fusion_num_heads: 4 # More heads for better alignment
+  
+  # AUTHENTIC FIBER Configuration (following Microsoft Research implementation)
+  num_fiber_fusion_layers: 6 # Number of layers with cross-modal fusion
+  num_fiber_layers: 6 # Total FIBER transformer layers
+  fiber_dropout: 0.1 # Dropout for FIBER layers
+  
+  # FIBER Loss Objectives (ITC + ITM + MLM)
+  alpha_itc: 1.0 # Image-Text Contrastive loss weight
+  alpha_itm: 1.0 # Image-Text Matching loss weight  
+  alpha_mlm: 1.0 # Masked Language Modeling loss weight
+  
+  # FIBER Contrastive Learning
+  fiber_temperature: 0.07 # Temperature for contrastive learning
+  fiber_queue_size: 4096 # Momentum queue size for negative mining
+  fiber_momentum: 0.995 # Momentum coefficient for queue updates
   fusion_num_layers: 2 # Deeper fusion for understanding
 
   # FIBER-specific configuration

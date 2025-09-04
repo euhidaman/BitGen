@@ -1256,15 +1256,22 @@ class BitMarModel(nn.Module):
         #    num_heads=config['fusion_num_heads'],
         #    num_layers=config['fusion_num_layers']
         #)
-        logger.info("🔄 Implementing FIBER backbone fusion instead of basic cross-attention")
+        logger.info("� Implementing AUTHENTIC FIBER backbone fusion for superior cross-modal understanding")
+        logger.info("   • ITC (Image-Text Contrastive) loss with momentum queue")
+        logger.info("   • ITM (Image-Text Matching) loss with hard negatives") 
+        logger.info("   • MLM (Masked Language Modeling) integration")
+        logger.info("   • Temperature-scaled contrastive learning")
+        
+        # Use authentic FIBER implementation that includes all original components
         self.fusion = create_fiber_fusion(
             text_encoder_dim=config['text_encoder_dim'],
             vision_encoder_dim=config['vision_latent_size'],
             fusion_hidden_size=config['fusion_hidden_size'],
+            vocab_size=config.get('vocab_size', 50257),  # GPT-2 vocab size
             num_heads=config.get('fusion_num_heads', 8),
             num_layers=config.get('fusion_num_layers', 2),
-            dropout=config.get('dropout', 0.1),
             num_fusion_layers=config.get('num_fiber_fusion_layers', 6),
+            dropout=config.get('dropout', 0.1),
             config=config  # Pass full config for FIBER-specific parameters
         )
 
@@ -1469,11 +1476,13 @@ class BitMarModel(nn.Module):
         vision_loss: Optional[torch.Tensor] = None,
         memory_loss: Optional[torch.Tensor] = None,
         robot_reasoning_loss: Optional[torch.Tensor] = None,
+        fiber_losses: Optional[Dict[str, torch.Tensor]] = None,  # NEW: FIBER losses
         step: int = 0,
         adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
         """
         Compute balanced multi-objective loss with adaptive scaling
+        Now includes FIBER losses (ITC + ITM + MLM)
         """
         # ENHANCED LEARNING VERIFICATION - Always show first 10 steps and every 100 steps
         if not hasattr(self, '_loss_debug_count'):
@@ -1491,9 +1500,18 @@ class BitMarModel(nn.Module):
             print(f"   Memory loss: {memory_loss.item():.6f}" if memory_loss is not None else "   Memory loss: None")
             print(f"   Robot reasoning loss: {robot_reasoning_loss.item():.6f}" if robot_reasoning_loss is not None else "   Robot reasoning loss: None")
             
-            # Track loss progression
+            # NEW: Log FIBER losses
+            if fiber_losses is not None:
+                print(f"🔥 FIBER LOSSES:")
+                for key, loss in fiber_losses.items():
+                    if loss is not None and 'loss' in key:
+                        print(f"   {key}: {loss.item():.6f}")
+            
+            # Track loss progression (include FIBER total loss)
             current_total = decoder_loss.item() if decoder_loss is not None else 0.0
             current_total += cross_modal_loss.item() if cross_modal_loss is not None else 0.0
+            if fiber_losses and fiber_losses.get('fiber_total_loss') is not None:
+                current_total += fiber_losses['fiber_total_loss'].item()
             self._loss_history.append(current_total)
             
             # Check if losses are decreasing (learning indicator)
@@ -1574,7 +1592,7 @@ class BitMarModel(nn.Module):
             except Exception as e:
                 logger.warning(f"⚠️ Adaptive controller error: {e}")
 
-        # Compute weighted total loss
+        # Compute weighted total loss (including FIBER losses)
         total_loss = (
             decoder_scale * decoder_loss +
             cross_modal_scale * cross_modal_loss
@@ -1589,6 +1607,11 @@ class BitMarModel(nn.Module):
         if robot_reasoning_loss is not None:
             total_loss += robot_reasoning_scale * robot_reasoning_loss
 
+        # NEW: Add FIBER losses to total loss
+        fiber_scale = 1.0  # Default weight for FIBER losses
+        if fiber_losses is not None and fiber_losses.get('fiber_total_loss') is not None:
+            total_loss += fiber_scale * fiber_losses['fiber_total_loss']
+
         return {
             'total_loss': total_loss,
             'decoder_loss': decoder_loss,
@@ -1596,6 +1619,7 @@ class BitMarModel(nn.Module):
             'vision_loss': vision_loss,
             'memory_loss': memory_loss if self.use_episodic_memory else torch.tensor(0.0),
             'robot_reasoning_loss': robot_reasoning_loss if robot_reasoning_loss is not None else torch.tensor(0.0),
+            'fiber_losses': fiber_losses,  # NEW: Include FIBER losses in output
             'decoder_scale': decoder_scale,
             'cross_modal_scale': cross_modal_scale,
             'vision_scale': vision_scale,
@@ -1682,15 +1706,19 @@ class BitMarModel(nn.Module):
             print(f"❌ DEBUG: Vision encoding failed: {e}")
             raise e
 
-        # 3. FIBER-enhanced cross-modal fusion
-        print(f"🔍 DEBUG: Starting FIBER fusion")
-        logger.debug(f"🔄 Applying FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
+        # 3. AUTHENTIC FIBER-enhanced cross-modal fusion with proper loss objectives
+        print(f"🔍 DEBUG: Starting AUTHENTIC FIBER fusion")
+        logger.debug(f"🔄 Applying AUTHENTIC FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
         try:
-            fused_features, fiber_attention_weights = self.fusion(
+            # Use authentic FIBER with all loss components
+            fused_features, fiber_outputs = self.fusion(
                 text_features=text_features,
                 vision_features=vision_latent,
-                text_attention_mask=attention_mask
+                input_ids=input_ids,
+                text_attention_mask=attention_mask,
+                labels=labels,
+                compute_losses=True  # Enable FIBER loss computation
             )
             print(f"🔍 DEBUG: FIBER fusion successful - shape: {fused_features.shape}")
             logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
@@ -1706,16 +1734,29 @@ class BitMarModel(nn.Module):
             raise e
 
         # Log FIBER fusion results
-        logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
-        logger.debug(f"   Fusion type: {fiber_attention_weights.get('fusion_type', 'unknown')}")
+        logger.debug(f"✅ AUTHENTIC FIBER fusion completed - Output: {fused_features.shape}")
+        logger.debug(f"   Fusion type: {fiber_outputs.get('fusion_type', 'unknown')}")
 
         # Extract enhanced vision features from FIBER output
-        enhanced_vision = fiber_attention_weights.get('enhanced_vision')
+        enhanced_vision = fiber_outputs.get('enhanced_vision')
         if enhanced_vision is not None:
             # Use enhanced vision features for downstream tasks
             if enhanced_vision.dim() == 3 and enhanced_vision.shape[1] == 1:
                 enhanced_vision = enhanced_vision.squeeze(1)  # Remove sequence dimension
             logger.debug(f"🔥 Enhanced vision features: {enhanced_vision.shape}")
+
+        # Extract FIBER losses for integration with main training loop
+        fiber_itc_loss = fiber_outputs.get('itc_loss')
+        fiber_itm_loss = fiber_outputs.get('itm_loss') 
+        fiber_mlm_loss = fiber_outputs.get('mlm_loss')
+        fiber_total_loss = fiber_outputs.get('fiber_total_loss')
+        
+        # Log FIBER loss components
+        if fiber_total_loss is not None:
+            logger.debug(f"🔥 FIBER Losses - Total: {fiber_total_loss.item():.4f}")
+            logger.debug(f"   • ITC: {fiber_itc_loss.item():.4f}")
+            logger.debug(f"   • ITM: {fiber_itm_loss.item():.4f}")
+            logger.debug(f"   • MLM: {fiber_mlm_loss.item():.4f}")
 
         # 4. Episodic memory processing (OPTIONAL for ablation study)
         memory_output = None
@@ -1726,9 +1767,9 @@ class BitMarModel(nn.Module):
         if self.use_episodic_memory:
             print(f"🔍 DEBUG: Creating episode")
             try:
-                # Create multimodal episode
+                # Create multimodal episode using FIBER outputs
                 episode = self.create_episode(
-                    text_features, vision_latent, fiber_attention_weights)
+                    text_features, vision_latent, fiber_outputs)
                 print(f"🔍 DEBUG: Episode created successfully - shape: {episode.shape}")
             except Exception as e:
                 print(f"❌ DEBUG: Episode creation failed: {e}")
@@ -1871,13 +1912,21 @@ class BitMarModel(nn.Module):
                 # Continue training without robot reasoning
                 robot_reasoning_loss = None
 
-        # Balanced loss computation (enhanced for robot reasoning)
+        # Balanced loss computation (enhanced for FIBER and robot reasoning)
+        fiber_losses_dict = {
+            'itc_loss': fiber_itc_loss,
+            'itm_loss': fiber_itm_loss,
+            'mlm_loss': fiber_mlm_loss,
+            'fiber_total_loss': fiber_total_loss
+        } if fiber_total_loss is not None else None
+        
         loss_dict = self.compute_balanced_loss(
             decoder_loss=decoder_loss,
             cross_modal_loss=cross_modal_loss,
             vision_loss=vision_loss,
             memory_loss=memory_loss,
-            robot_reasoning_loss=robot_reasoning_loss,  # NEW: Include robot reasoning loss
+            robot_reasoning_loss=robot_reasoning_loss,  # Include robot reasoning loss
+            fiber_losses=fiber_losses_dict,  # NEW: Include FIBER losses
             step=step,
             adaptive_controller=adaptive_controller
         )
@@ -1890,7 +1939,7 @@ class BitMarModel(nn.Module):
             'vision_latent': vision_latent,
             'enhanced_vision': enhanced_vision,  # FIBER-enhanced vision
             'fused_features': fused_features,   # FIBER-fused features
-            'fiber_attention_weights': fiber_attention_weights,  # FIBER attention patterns
+            'fiber_outputs': fiber_outputs,  # AUTHENTIC FIBER outputs with attention patterns and losses
             'text_attention_patterns': text_attention_patterns,
             'decoder_attention_patterns': decoder_outputs['attention_patterns'],
             'episode': episode,
