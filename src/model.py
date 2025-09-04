@@ -1725,6 +1725,7 @@ class BitMarModel(nn.Module):
 
         try:
             # Use authentic FIBER with all loss components
+            logger.debug(f"🔥 Calling FIBER with compute_losses=True, input_ids shape: {input_ids.shape if input_ids is not None else 'None'}")
             fused_features, fiber_outputs = self.fusion(
                 text_features=text_features,
                 vision_features=vision_latent,
@@ -1733,8 +1734,8 @@ class BitMarModel(nn.Module):
                 labels=labels,
                 compute_losses=True  # Enable FIBER loss computation
             )
-            # Debug removed
             logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
+            logger.debug(f"   FIBER outputs keys: {list(fiber_outputs.keys()) if fiber_outputs else 'None'}")
         except Exception as e:
             # Debug removed
             print(f"   Text features: {text_features.shape}")
@@ -1778,21 +1779,21 @@ class BitMarModel(nn.Module):
 
         logger.debug(f"🧠 Memory enabled: {self.use_episodic_memory}")
         if self.use_episodic_memory:
-            # Debug removed
+            logger.debug(f"🧠 Starting episodic memory processing")
             try:
                 # Create multimodal episode using FIBER outputs
                 episode = self.create_episode(
                     text_features, vision_latent, fiber_outputs)
-                # Debug removed
+                logger.debug(f"🧠 Episode created: {episode.shape}")
             except Exception as e:
-                # Debug removed
+                logger.error(f"🧠 Episode creation failed: {e}")
                 raise e
 
-            # Debug removed
+            logger.debug(f"🧠 Calling memory with episode shape: {episode.shape}")
             try:
                 # Memory read-write operation
                 memory_output, memory_attention_weights = self.memory(episode)
-                # Debug removed
+                logger.debug(f"🧠 Memory output: {memory_output.shape if memory_output is not None else 'None'}")
             except Exception as e:
                 # Debug removed
                 print(f"   Episode shape: {episode.shape}")
