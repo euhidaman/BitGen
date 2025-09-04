@@ -407,20 +407,46 @@ class GRPORobotRewardFunctions:
     ) -> Dict[str, List[float]]:
         """Compute all GRPO rewards"""
 
-        # Extract responses from completions
-        responses = [completion[0]["content"] for completion in completions]
+        # Extract responses from completions with better error handling
+        try:
+            if not completions or len(completions) == 0:
+                # Return empty rewards if no completions
+                return {'total': [0.0]}
+            
+            responses = []
+            for completion in completions:
+                if isinstance(completion, list) and len(completion) > 0:
+                    if isinstance(completion[0], dict) and "content" in completion[0]:
+                        responses.append(completion[0]["content"])
+                    else:
+                        responses.append(str(completion[0]))
+                else:
+                    responses.append("")
+        except Exception as e:
+            logger.warning(f"Error extracting responses from completions: {e}")
+            return {'total': [0.0] * len(prompts)}
 
         # Compute individual reward components
-        rewards = {
-            'correctness': self._correctness_reward(responses, ground_truth),
-            'validity': self._validity_reward(responses),
-            'strict_format': self._strict_format_reward(responses),
-            'soft_format': self._soft_format_reward(responses),
-            'xml_count': self._xml_count_reward(responses),
-            'reasoning_quality': self._reasoning_quality_reward(responses),
-            'top_n_efficiency': self._top_n_efficiency_reward(responses, ground_truth),
-            'diversity_bonus': self._diversity_bonus_reward(responses)
-        }
+        try:
+            rewards = {
+                'correctness': self._correctness_reward(responses, ground_truth),
+                'validity': self._validity_reward(responses),
+                'strict_format': self._strict_format_reward(responses),
+                'soft_format': self._soft_format_reward(responses),
+                'xml_count': self._xml_count_reward(responses),
+                'reasoning_quality': self._reasoning_quality_reward(responses),
+                'top_n_efficiency': self._top_n_efficiency_reward(responses, ground_truth),
+                'diversity_bonus': self._diversity_bonus_reward(responses)
+            }
+        except Exception as e:
+            logger.warning(f"Error computing rewards: {e}")
+            # Return default rewards
+            num_responses = len(responses)
+            return {
+                'total': [0.0] * num_responses,
+                'correctness': [0.0] * num_responses,
+                'validity': [0.0] * num_responses
+            }
 
         # Compute weighted total reward
         total_rewards = []
