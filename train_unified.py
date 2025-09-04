@@ -1262,6 +1262,62 @@ class UnifiedBitMarTrainer:
 
                 batch = processed_batch
 
+                # 🔍 DATA QUALITY VERIFICATION - Ensure we're using real DiNOv2 features
+                if not hasattr(self, '_data_verification_count'):
+                    self._data_verification_count = 0
+                
+                self._data_verification_count += 1
+                
+                # Verify data quality every 100 batches
+                if self._data_verification_count % 100 == 0:
+                    print(f"\n🔍 DATA QUALITY VERIFICATION [Batch {batch_idx}, Step {self.global_step}]:")
+                    
+                    # Check vision features
+                    if 'vision_features' in batch:
+                        vf = batch['vision_features']
+                        print(f"   Vision features shape: {vf.shape}")
+                        print(f"   Vision features mean: {vf.mean().item():.6f}")
+                        print(f"   Vision features std: {vf.std().item():.6f}")
+                        print(f"   Vision features range: [{vf.min().item():.6f}, {vf.max().item():.6f}]")
+                        
+                        # Check if features are real (should have meaningful variation) or dummy (usually random)
+                        feature_std = vf.std().item()
+                        if feature_std > 0.1:  # Real DiNOv2 features typically have good variation
+                            print(f"   ✅ REAL FEATURES: Strong variation ({feature_std:.6f}) - likely real DiNOv2")
+                        elif feature_std > 0.01:
+                            print(f"   ⚡ MODERATE FEATURES: Moderate variation ({feature_std:.6f})")
+                        else:
+                            print(f"   ⚠️  SUSPICIOUS: Low variation ({feature_std:.6f}) - may be dummy features")
+                        
+                        # Check for NaN or infinite values
+                        if torch.isnan(vf).any():
+                            print(f"   ⚠️  WARNING: Vision features contain NaN values")
+                        if torch.isinf(vf).any():
+                            print(f"   ⚠️  WARNING: Vision features contain infinite values")
+                        
+                        # Check if all features are identical (indicates dummy features)
+                        if vf.numel() > 1:
+                            first_sample = vf[0:1]
+                            if torch.allclose(vf, first_sample.expand_as(vf), atol=1e-6):
+                                print(f"   ⚠️  WARNING: All vision features are identical - likely dummy features")
+                            else:
+                                print(f"   ✅ DIVERSE FEATURES: Vision features vary between samples")
+                    
+                    # Check text data
+                    print(f"   Batch size: {batch['input_ids'].size(0)}")
+                    print(f"   Sequence length: {batch['input_ids'].size(1)}")
+                    
+                    if 'has_vision' in batch:
+                        vision_ratio = batch['has_vision'].float().mean().item()
+                        print(f"   Vision ratio: {vision_ratio:.2f} ({vision_ratio*100:.1f}% have vision)")
+                        
+                        if vision_ratio < 0.5:
+                            print(f"   ⚠️  WARNING: Low vision ratio - most samples don't have vision features")
+                        else:
+                            print(f"   ✅ GOOD VISION COVERAGE: {vision_ratio*100:.1f}% of samples have vision")
+                    
+                    print()  # Empty line for clarity
+
                 # Check if this is a robot reasoning batch
                 is_robot_batch = batch.get(
                     'is_robot_reasoning', torch.tensor([False]))
@@ -1350,6 +1406,54 @@ class UnifiedBitMarTrainer:
                             batch['input_ids'].size(0), dtype=torch.bool)),
                         adaptive_controller=self.adaptive_controller
                     )
+                    
+                    # 🔍 ATTENTION PATTERN ANALYSIS - Verify cross-modal learning
+                    if not hasattr(self, '_attention_analysis_count'):
+                        self._attention_analysis_count = 0
+                    
+                    self._attention_analysis_count += 1
+                    
+                    # Analyze attention patterns every 50 steps to verify learning
+                    if self._attention_analysis_count % 50 == 0 and 'fiber_attention_weights' in outputs:
+                        print(f"\n🔍 CROSS-MODAL ATTENTION ANALYSIS [Step {self.global_step}]:")
+                        
+                        fiber_attn = outputs.get('fiber_attention_weights')
+                        if fiber_attn is not None:
+                            # Analyze FIBER attention patterns
+                            attn_mean = fiber_attn.mean().item()
+                            attn_std = fiber_attn.std().item()
+                            attn_max = fiber_attn.max().item()
+                            
+                            print(f"   FIBER attention - mean: {attn_mean:.6f}, std: {attn_std:.6f}, max: {attn_max:.6f}")
+                            
+                            # Check if attention is focused (learning) or uniform (not learning)
+                            if attn_std > 0.1:  # Good variation indicates focused attention
+                                print(f"   ✅ FOCUSED ATTENTION: High variation ({attn_std:.6f}) - model learning alignments")
+                            elif attn_std > 0.05:
+                                print(f"   ⚡ MODERATE ATTENTION: Moderate variation ({attn_std:.6f})")
+                            else:
+                                print(f"   ⚠️  UNIFORM ATTENTION: Low variation ({attn_std:.6f}) - may not be learning alignments")
+                        
+                        # Check if episodic memory is being used effectively
+                        memory_attn = outputs.get('memory_attention_weights')
+                        if memory_attn is not None:
+                            mem_mean = memory_attn.mean().item()
+                            mem_std = memory_attn.std().item()
+                            print(f"   Memory attention - mean: {mem_mean:.6f}, std: {mem_std:.6f}")
+                            
+                            if mem_std > 0.1:
+                                print(f"   ✅ MEMORY LEARNING: Strong memory attention patterns")
+                            else:
+                                print(f"   ⚡ Memory attention variation: {mem_std:.6f}")
+                        
+                        # Check text attention patterns
+                        text_attn = outputs.get('text_attention_patterns')
+                        if text_attn is not None:
+                            text_mean = text_attn.mean().item()
+                            text_std = text_attn.std().item()
+                            print(f"   Text attention - mean: {text_mean:.6f}, std: {text_std:.6f}")
+                        
+                        print()  # Empty line for clarity
                     logger.debug(
                         f"Forward pass completed successfully for step {self.global_step}")
                 except Exception as forward_error:
@@ -1515,6 +1619,70 @@ class UnifiedBitMarTrainer:
                 # Backward pass
                 self.optimizer.zero_grad()
                 loss.backward()
+
+                # 🔍 ENHANCED LEARNING VERIFICATION - Check if model is actually learning
+                if not hasattr(self, '_learning_verification_count'):
+                    self._learning_verification_count = 0
+                    self._loss_history = []
+                    self._lr_history = []
+                
+                self._learning_verification_count += 1
+                current_lr = self.optimizer.param_groups[0]['lr']
+                current_loss = loss.item()
+                
+                self._loss_history.append(current_loss)
+                self._lr_history.append(current_lr)
+                
+                # Show learning verification every 20 steps or first 5 steps
+                should_verify = (self._learning_verification_count <= 5 or self._learning_verification_count % 20 == 0)
+                
+                if should_verify:
+                    print(f"\n🔍 LEARNING VERIFICATION [Step {self.global_step}]:")
+                    print(f"   Current loss: {current_loss:.6f}")
+                    print(f"   Learning rate: {current_lr:.8f}")
+                    
+                    # Check loss trend
+                    if len(self._loss_history) > 10:
+                        recent_losses = self._loss_history[-5:]
+                        older_losses = self._loss_history[-10:-5]
+                        recent_avg = sum(recent_losses) / len(recent_losses)
+                        older_avg = sum(older_losses) / len(older_losses)
+                        
+                        loss_change = (recent_avg - older_avg) / older_avg * 100
+                        if loss_change < -1:  # Loss decreased by >1%
+                            print(f"   ✅ LEARNING CONFIRMED: Loss decreased by {-loss_change:.2f}% (recent: {recent_avg:.6f} vs older: {older_avg:.6f})")
+                        elif loss_change > 1:  # Loss increased by >1%
+                            print(f"   ⚠️  WARNING: Loss increased by {loss_change:.2f}% - potential training instability")
+                        else:
+                            print(f"   ⚡ Loss stable: {loss_change:+.2f}% change (recent: {recent_avg:.6f} vs older: {older_avg:.6f})")
+                    
+                    # Check if learning rate is reasonable
+                    if current_lr < 1e-6:
+                        print(f"   ⚠️  WARNING: Learning rate very small ({current_lr:.2e}) - learning may be slow")
+                    elif current_lr > 1e-2:
+                        print(f"   ⚠️  WARNING: Learning rate very high ({current_lr:.2e}) - potential instability")
+                    else:
+                        print(f"   ✅ Learning rate in reasonable range: {current_lr:.2e}")
+                    
+                    # Monitor gradient flow after clipping
+                    total_grad_norm_after = 0.0
+                    params_with_grads = 0
+                    for param in self.model.parameters():
+                        if param.grad is not None:
+                            params_with_grads += 1
+                            total_grad_norm_after += param.grad.norm().item() ** 2
+                    
+                    total_grad_norm_after = (total_grad_norm_after ** 0.5) if total_grad_norm_after > 0 else 0.0
+                    print(f"   Post-clip gradient norm: {total_grad_norm_after:.6f} ({params_with_grads} params)")
+                    
+                    if total_grad_norm_after > 0.01:
+                        print(f"   ✅ HEALTHY: Strong gradient flow detected")
+                    elif total_grad_norm_after > 0.001:
+                        print(f"   ⚡ MODERATE: Moderate gradient flow")
+                    else:
+                        print(f"   ⚠️  WEAK: Very weak gradient flow - model may not be learning effectively")
+                    
+                    print()  # Empty line for clarity
 
                 # Gradient clipping
                 if self.config['training']['gradient_clip_val'] > 0:

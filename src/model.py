@@ -186,11 +186,29 @@ class BitNetAttention(nn.Module):
         print(f"🔍 DEBUG: BitNet attention - attention_scores shape: {attention_scores.shape}")
         print(f"🔍 DEBUG: BitNet attention - mask shape: {mask.shape if mask is not None else None}")
 
-        # TEMPORARILY DISABLE MASK TO ISOLATE THE PROBLEM
+        # Apply attention mask properly
         if mask is not None:
-            print(f"⚠️ DEBUG: Skipping mask application to isolate tensor dimension issue")
-            # Skip masking for now
-            pass
+            print(f"🔍 DEBUG: Applying attention mask")
+            # Ensure mask is on same device as attention_scores
+            mask = mask.to(attention_scores.device)
+            
+            # Handle different mask shapes
+            if mask.dim() == 3:  # [batch_size, 1, seq_len] or [batch_size, seq_len, seq_len]
+                if mask.shape[1] == 1:
+                    # Broadcast [batch_size, 1, seq_len] to [batch_size, 1, 1, seq_len]
+                    mask = mask.unsqueeze(1)
+                elif mask.shape[1] == mask.shape[2]:
+                    # [batch_size, seq_len, seq_len] -> [batch_size, 1, seq_len, seq_len]
+                    mask = mask.unsqueeze(1)
+            elif mask.dim() == 4:  # Already [batch_size, 1, seq_len, seq_len] or similar
+                pass
+            else:
+                print(f"⚠️ DEBUG: Unexpected mask dimensions: {mask.shape}")
+            
+            # Apply mask by setting masked positions to large negative value
+            mask = mask.to(attention_scores.dtype)
+            attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
+            print(f"🔍 DEBUG: Mask applied successfully")
 
         attention_weights = F.softmax(attention_scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
@@ -1453,6 +1471,42 @@ class BitMarModel(nn.Module):
         """
         Compute balanced multi-objective loss with adaptive scaling
         """
+        # ENHANCED LEARNING VERIFICATION - Always show first 10 steps and every 100 steps
+        if not hasattr(self, '_loss_debug_count'):
+            self._loss_debug_count = 0
+            self._loss_history = []
+        
+        self._loss_debug_count += 1
+        should_debug = (self._loss_debug_count <= 10 or self._loss_debug_count % 100 == 0)
+        
+        if should_debug:
+            print(f"🔍 LEARNING VERIFICATION [Step {self._loss_debug_count}]:")
+            print(f"   Decoder loss: {decoder_loss.item():.6f}" if decoder_loss is not None else "   Decoder loss: None")
+            print(f"   Cross-modal loss: {cross_modal_loss.item():.6f}" if cross_modal_loss is not None else "   Cross-modal loss: None")
+            print(f"   Vision loss: {vision_loss.item():.6f}" if vision_loss is not None else "   Vision loss: None")
+            print(f"   Memory loss: {memory_loss.item():.6f}" if memory_loss is not None else "   Memory loss: None")
+            print(f"   Robot reasoning loss: {robot_reasoning_loss.item():.6f}" if robot_reasoning_loss is not None else "   Robot reasoning loss: None")
+            
+            # Track loss progression
+            current_total = decoder_loss.item() if decoder_loss is not None else 0.0
+            current_total += cross_modal_loss.item() if cross_modal_loss is not None else 0.0
+            self._loss_history.append(current_total)
+            
+            # Check if losses are decreasing (learning indicator)
+            if len(self._loss_history) > 5:
+                recent_avg = sum(self._loss_history[-3:]) / 3
+                older_avg = sum(self._loss_history[-6:-3]) / 3
+                if recent_avg < older_avg:
+                    print(f"   ✅ LEARNING DETECTED: Loss decreasing (recent: {recent_avg:.6f} < older: {older_avg:.6f})")
+                else:
+                    print(f"   ⚠️  POTENTIAL ISSUE: Loss not decreasing (recent: {recent_avg:.6f} >= older: {older_avg:.6f})")
+            
+            # Check loss magnitudes
+            if decoder_loss is not None and decoder_loss.item() > 10.0:
+                print(f"   ⚠️  WARNING: Very high decoder loss - potential training instability")
+            if cross_modal_loss is not None and cross_modal_loss.item() < 0.001:
+                print(f"   ⚠️  WARNING: Very low cross-modal loss - model may not be learning alignment")
+        
         losses = {'decoder_loss': decoder_loss, 'cross_modal_loss': cross_modal_loss}
 
         if vision_loss is not None:
@@ -1576,6 +1630,22 @@ class BitMarModel(nn.Module):
         # 1. Encode text using BitNet encoder
         print(f"🔍 DEBUG: Starting forward pass")
         print(f"🔍 DEBUG: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
+        
+        # 🔍 DATA DIAGNOSTIC: Check if we're seeing different data
+        if hasattr(self, '_last_input_hash'):
+            current_hash = hash(input_ids.sum().item())
+            if current_hash == self._last_input_hash:
+                print(f"⚠️ WARNING: Same input data as previous batch - training may be stuck!")
+            else:
+                print(f"✅ DATA: Different input data from previous batch")
+            self._last_input_hash = current_hash
+        else:
+            self._last_input_hash = hash(input_ids.sum().item())
+            print(f"✅ DATA: First batch processed")
+        
+        # Check input data properties
+        unique_tokens = torch.unique(input_ids).numel()
+        print(f"🔍 DATA: Unique tokens in batch: {unique_tokens}, Total tokens: {input_ids.numel()}")
         logger.debug(f"🔍 Debug: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
         
         try:
@@ -1808,6 +1878,97 @@ class BitMarModel(nn.Module):
             'robot_reasoning_outputs': robot_reasoning_outputs,
             'robot_reasoning_loss': robot_reasoning_loss
         }
+        
+        # 🔍 LEARNING DIAGNOSTIC: Check if model is actually learning
+        print(f"🔍 LEARNING DIAGNOSTIC:")
+        print(f"   Total loss: {loss_dict['total_loss'].item():.6f}")
+        print(f"   Loss requires_grad: {loss_dict['total_loss'].requires_grad}")
+        if 'decoder_loss' in loss_dict and loss_dict['decoder_loss'] is not None:
+            print(f"   Decoder loss: {loss_dict['decoder_loss'].item():.6f}")
+            print(f"   Decoder loss grad_fn: {loss_dict['decoder_loss'].grad_fn}")
+        
+        # Check if loss is suspiciously low (indicating potential issues)
+        total_loss = loss_dict['total_loss'].item()
+        if total_loss < 0.01:
+            print(f"⚠️ WARNING: Loss suspiciously low ({total_loss:.8f}) - model may not be learning!")
+        elif total_loss > 100:
+            print(f"⚠️ WARNING: Loss suspiciously high ({total_loss:.8f}) - training may be unstable!")
+        
+        # Enhanced gradient flow diagnostics with comprehensive monitoring
+        if hasattr(self, '_debug_step_count'):
+            self._debug_step_count += 1
+        else:
+            self._debug_step_count = 1
+            self._param_norms_history = []
+            self._grad_norms_history = []
+            
+        should_debug = (self._debug_step_count <= 10 or self._debug_step_count % 50 == 0)
+        
+        if should_debug:  # Show first 10 steps and every 50 steps for monitoring
+            param_count = 0
+            grad_count = 0
+            total_grad_norm = 0.0
+            total_param_norm = 0.0
+            component_grads = {}  # Track gradients by component
+            
+            for name, param in self.named_parameters():
+                param_count += 1
+                param_norm = param.norm().item()
+                total_param_norm += param_norm ** 2
+                
+                if param.grad is not None:
+                    grad_count += 1
+                    grad_norm = param.grad.norm().item()
+                    total_grad_norm += grad_norm ** 2
+                    
+                    # Track component gradients
+                    if 'text_encoder' in name:
+                        component_grads.setdefault('text_encoder', []).append(grad_norm)
+                    elif 'vision' in name:
+                        component_grads.setdefault('vision', []).append(grad_norm)
+                    elif 'fiber' in name:
+                        component_grads.setdefault('fiber', []).append(grad_norm)
+                    elif 'memory' in name:
+                        component_grads.setdefault('memory', []).append(grad_norm)
+                    elif 'decoder' in name:
+                        component_grads.setdefault('decoder', []).append(grad_norm)
+                    
+                # Show first 3 params for debugging
+                if param_count <= 3:
+                    grad_norm = param.grad.norm().item() if param.grad is not None else 0.0
+                    print(f"   Param '{name[:50]}': shape={param.shape}, grad_norm={grad_norm:.6f}, param_norm={param_norm:.6f}")
+            
+            total_grad_norm = (total_grad_norm ** 0.5)
+            total_param_norm = (total_param_norm ** 0.5)
+            
+            print(f"🔍 GRADIENT FLOW VERIFICATION [Step {self._debug_step_count}]:")
+            print(f"   Parameters: {param_count} total, {grad_count} with gradients ({grad_count/param_count*100:.1f}%)")
+            print(f"   Total gradient norm: {total_grad_norm:.6f}")
+            print(f"   Total parameter norm: {total_param_norm:.6f}")
+            
+            # Component-wise gradient analysis
+            for component, grads in component_grads.items():
+                avg_grad = sum(grads) / len(grads)
+                print(f"   {component} avg gradient norm: {avg_grad:.6f} ({len(grads)} params)")
+            
+            # Track gradient history and check for learning
+            self._grad_norms_history.append(total_grad_norm)
+            self._param_norms_history.append(total_param_norm)
+            
+            if len(self._grad_norms_history) > 5:
+                param_change = abs(self._param_norms_history[-1] - self._param_norms_history[-6])
+                if param_change > 1e-6:
+                    print(f"   ✅ PARAMETERS UPDATING: Change of {param_change:.6f} over 5 steps")
+                else:
+                    print(f"   ⚠️  WARNING: Parameters barely changing ({param_change:.8f}) - potential learning issue")
+            
+            # Gradient magnitude warnings
+            if total_grad_norm < 1e-6:
+                print(f"   ⚠️  CRITICAL: Gradient norm extremely small ({total_grad_norm:.8f}) - model likely NOT learning!")
+            elif total_grad_norm > 100.0:
+                print(f"   ⚠️  WARNING: Gradient norm very large ({total_grad_norm:.2f}) - potential exploding gradients")
+            elif 1e-4 < total_grad_norm < 1e-1:
+                print(f"   ✅ HEALTHY: Gradient norm in good range for learning ({total_grad_norm:.6f})")
 
         return outputs
 
