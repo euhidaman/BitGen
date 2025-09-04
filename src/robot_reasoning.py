@@ -616,6 +616,16 @@ class RobotReasoningIntegration:
         # Add to model
         if not hasattr(model, 'robot_reasoning'):
             model.robot_reasoning = self.robot_selection_head
+            
+            # Add a hook to ensure device consistency when model is moved
+            def _ensure_robot_reasoning_device_hook(module, input, output):
+                device = next(module.parameters()).device
+                if hasattr(module, 'robot_reasoning') and module.robot_reasoning is not None:
+                    if next(module.robot_reasoning.parameters()).device != device:
+                        module.robot_reasoning = module.robot_reasoning.to(device)
+                return output
+            
+            model.register_forward_hook(_ensure_robot_reasoning_device_hook)
             logger.info(f"✅ Robot reasoning head integrated into BitGen model (device: {device})")
 
     def prepare_robot_reasoning_training_data(self) -> Dict:

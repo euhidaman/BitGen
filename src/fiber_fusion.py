@@ -204,7 +204,7 @@ class AuthenticFIBERLoss(nn.Module):
         
         # Create labels (-100 for non-masked positions)
         mlm_labels = input_ids.clone()
-        mlm_labels[~masked_positions] = -100
+        mlm_labels[~masked_positions.bool()] = -100
         
         mlm_loss = F.cross_entropy(mlm_logits.view(-1, self.vocab_size), mlm_labels.view(-1), ignore_index=-100)
         
@@ -575,7 +575,8 @@ class FIBERTransformerBlock(nn.Module):
                 )
                 # Debug removed
             else:
-                vision_key_padding_mask = ~vision_attention_mask
+                # Convert to boolean before using ~ operator
+                vision_key_padding_mask = ~vision_attention_mask.bool()
                 # Debug removed
         
         try:
@@ -609,7 +610,8 @@ class FIBERTransformerBlock(nn.Module):
             if text_attention_mask.shape != text_hidden_states.shape[:2]:
                 print(f"❌ Text attention mask shape mismatch!")
                 raise ValueError(f"Text attention mask shape {text_attention_mask.shape} doesn't match text features {text_hidden_states.shape[:2]}")
-            text_key_padding_mask = ~text_attention_mask
+            # Convert to boolean before using ~ operator
+            text_key_padding_mask = ~text_attention_mask.bool()
             # Debug removed
             
         try:

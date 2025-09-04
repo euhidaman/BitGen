@@ -1896,6 +1896,10 @@ class BitMarModel(nn.Module):
                 device = next(self.parameters()).device
                 fused_features = fused_features.to(device)
                 
+                # Ensure robot reasoning head is on the correct device
+                if hasattr(self, 'robot_reasoning') and self.robot_reasoning is not None:
+                    self.robot_reasoning = self.robot_reasoning.to(device)
+                
                 # Apply robot reasoning to fused features
                 robot_reasoning_outputs = self.robot_reasoning_integration.robot_selection_head(fused_features)
                 
