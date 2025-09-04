@@ -60,9 +60,14 @@ class FIBERCrossModalLayer(nn.Module):
         self.text_dropout = nn.Dropout(hidden_dropout_prob)
 
     def transpose_for_scores(self, x):
+        print(f"🔍 transpose_for_scores input: {x.shape}")
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        print(f"🔍 new_x_shape: {new_x_shape}")
         x = x.view(*new_x_shape)
-        return x.permute(0, 2, 1, 3)
+        print(f"🔍 after view: {x.shape}")
+        result = x.permute(0, 2, 1, 3)
+        print(f"🔍 transpose_for_scores output: {result.shape}")
+        return result
 
     def forward(
         self,
@@ -103,13 +108,27 @@ class FIBERCrossModalLayer(nn.Module):
 
         # Compute vision-to-text attention scores
         try:
+            print(f"🔍 V2T attention matrix multiplication:")
+            print(f"   Vision query: {vision_query_layer.shape}")
+            print(f"   Text key transposed: {text_key_layer.transpose(-1, -2).shape}")
+            
+            # The issue: vision_query has different seq_len than text_key
+            # vision_query: [batch, heads, vision_seq_len, head_dim]
+            # text_key: [batch, heads, text_seq_len, head_dim]
+            # When we do matmul(query, key.T) we get [batch, heads, vision_seq_len, text_seq_len]
+            # This should be valid - the error must be elsewhere
+            
             v2t_attention_scores = torch.matmul(vision_query_layer, text_key_layer.transpose(-1, -2))
             v2t_attention_scores = v2t_attention_scores / math.sqrt(self.attention_head_size)
-            print(f"🔍 V2T attention scores computed: {v2t_attention_scores.shape}")
+            print(f"🔍 V2T attention scores computed successfully: {v2t_attention_scores.shape}")
         except Exception as e:
             print(f"❌ V2T attention scores failed: {e}")
             print(f"   Vision query: {vision_query_layer.shape}")
             print(f"   Text key: {text_key_layer.shape}")
+            print(f"   Vision query device: {vision_query_layer.device}")
+            print(f"   Text key device: {text_key_layer.device}")
+            print(f"   Vision query dtype: {vision_query_layer.dtype}")
+            print(f"   Text key dtype: {text_key_layer.dtype}")
             raise e
 
         if text_attention_mask is not None:
@@ -145,13 +164,26 @@ class FIBERCrossModalLayer(nn.Module):
 
         # Compute text-to-vision attention scores
         try:
+            print(f"🔍 T2V attention matrix multiplication:")
+            print(f"   Text query: {text_query_layer.shape}")
+            print(f"   Vision key transposed: {vision_key_layer.transpose(-1, -2).shape}")
+            
+            # Same logic: text_query and vision_key can have different seq_lens
+            # text_query: [batch, heads, text_seq_len, head_dim] 
+            # vision_key: [batch, heads, vision_seq_len, head_dim]
+            # Result: [batch, heads, text_seq_len, vision_seq_len]
+            
             t2v_attention_scores = torch.matmul(text_query_layer, vision_key_layer.transpose(-1, -2))
             t2v_attention_scores = t2v_attention_scores / math.sqrt(self.attention_head_size)
-            print(f"🔍 T2V attention scores computed: {t2v_attention_scores.shape}")
+            print(f"🔍 T2V attention scores computed successfully: {t2v_attention_scores.shape}")
         except Exception as e:
             print(f"❌ T2V attention scores failed: {e}")
             print(f"   Text query: {text_query_layer.shape}")
             print(f"   Vision key: {vision_key_layer.shape}")
+            print(f"   Text query device: {text_query_layer.device}")
+            print(f"   Vision key device: {vision_key_layer.device}")
+            print(f"   Text query dtype: {text_query_layer.dtype}")
+            print(f"   Vision key dtype: {vision_key_layer.dtype}")
             raise e
 
         if vision_attention_mask is not None:
