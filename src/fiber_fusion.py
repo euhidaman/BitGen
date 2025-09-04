@@ -717,12 +717,9 @@ class FIBERFusion(nn.Module):
         if intermediate_size is None:
             intermediate_size = hidden_dim * 4
 
-        logger.info(f"🔥 Initializing FIBER Fusion:")
-        logger.info(f"  • Text dim: {text_dim}")
-        logger.info(f"  • Vision dim: {vision_dim}")
-        logger.info(f"  • Hidden dim: {hidden_dim}")
-        logger.info(f"  • Total layers: {num_layers}")
-        logger.info(f"  • Fusion layers: {num_fuse_layers}")
+        # Only log essential FIBER initialization info
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(f"🔥 FIBER Fusion: {text_dim}→{hidden_dim}, {num_fuse_layers}/{num_layers} fusion layers")
 
         # Input projections to common hidden dimension
         self.text_projection = nn.Linear(text_dim, hidden_dim)
@@ -753,7 +750,8 @@ class FIBERFusion(nn.Module):
         self.vision_output_projection = nn.Linear(hidden_dim, hidden_dim)
         self.text_output_projection = nn.Linear(hidden_dim, hidden_dim)
 
-        logger.info(f"✅ FIBER Fusion initialized with {num_fuse_layers}/{num_layers} fusion layers")
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(f"✅ FIBER Fusion ready: {num_fuse_layers}/{num_layers} layers")
 
     def forward(
         self,
@@ -778,11 +776,8 @@ class FIBERFusion(nn.Module):
         import logging
         logger = logging.getLogger(__name__)
         
-        logger.debug(f"🔍 FIBER Forward - Input shapes:")
-        logger.debug(f"   text_features: {text_features.shape}")
-        logger.debug(f"   vision_features: {vision_features.shape}")
-        logger.debug(f"   text_attention_mask: {text_attention_mask.shape if text_attention_mask is not None else None}")
-        logger.debug(f"   vision_attention_mask: {vision_attention_mask.shape if vision_attention_mask is not None else None}")
+        # Debug logging removed for cleaner output
+        # Input shapes: text_features: {text_features.shape}, vision_features: {vision_features.shape}
         
         batch_size = text_features.shape[0]
         text_seq_len = text_features.shape[1]
@@ -791,21 +786,21 @@ class FIBERFusion(nn.Module):
         if vision_features.dim() == 2:  # [batch_size, vision_dim]
             vision_features = vision_features.unsqueeze(1)  # [batch_size, 1, vision_dim]
             vision_seq_len = 1
-            logger.debug(f"🔍 FIBER - Converted vision to sequence format: {vision_features.shape}")
+            # Vision converted to sequence format: {vision_features.shape}
         else:  # [batch_size, vision_seq_len, vision_dim]
             vision_seq_len = vision_features.shape[1]
 
         # Project to common hidden dimension
         try:
             text_hidden = self.text_projection(text_features)
-            logger.debug(f"🔍 FIBER - Text projection: {text_hidden.shape}")
+            # Text projection: {text_hidden.shape}
         except Exception as e:
             logger.error(f"❌ FIBER text projection failed: {e}")
             raise e
             
         try:
             vision_hidden = self.vision_projection(vision_features)
-            logger.debug(f"🔍 FIBER - Vision projection: {vision_hidden.shape}")
+            # Vision projection: {vision_hidden.shape}
         except Exception as e:
             logger.error(f"❌ FIBER vision projection failed: {e}")
             raise e
@@ -822,7 +817,7 @@ class FIBERFusion(nn.Module):
         for layer_idx, layer in enumerate(self.layers):
             print(f"🔍 FIBER Layer {layer_idx} - Starting")
             print(f"🔍 FIBER Layer {layer_idx} - Input shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
-            logger.debug(f"🔍 FIBER Layer {layer_idx} - Input shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+            # FIBER Layer {layer_idx} processing...
             try:
                 vision_hidden, text_hidden, attention_patterns = layer(
                     vision_hidden_states=vision_hidden,
@@ -832,7 +827,7 @@ class FIBERFusion(nn.Module):
                     output_attentions=output_attentions
                 )
                 print(f"🔍 FIBER Layer {layer_idx} - Output shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
-                logger.debug(f"🔍 FIBER Layer {layer_idx} - Output shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+                # FIBER Layer {layer_idx} completed
             except Exception as e:
                 print(f"❌ FIBER Layer {layer_idx} failed: {e}")
                 print(f"   Vision input shape: {vision_hidden.shape}")
@@ -915,10 +910,9 @@ class FIBERIntegration(nn.Module):
             attention_temperature = fiber_config.get('fiber_attention_temperature', 1.0)
             cross_attention_dropout = fiber_config.get('fiber_cross_attention_dropout', dropout)
 
-            logger.info("🔥 Applying AUTHENTIC FIBER configuration:")
-            logger.info(f"  • Fusion layers: {num_fuse_layers}/{num_layers}")
-            logger.info(f"  • Attention temperature: {attention_temperature}")
-            logger.info(f"  • Cross-attention dropout: {cross_attention_dropout}")
+            # AUTHENTIC FIBER configuration applied
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(f"🔥 AUTHENTIC FIBER: {num_fuse_layers}/{num_layers} layers, temp={attention_temperature}")
 
         # Create FIBER fusion backbone
         self.fiber_fusion = FIBERFusion(

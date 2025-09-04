@@ -182,13 +182,13 @@ class BitNetAttention(nn.Module):
         # Attention computation
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
         
-        print(f"🔍 DEBUG: BitNet attention - input shapes: query={query.shape}, key={key.shape}, value={value.shape}")
-        print(f"🔍 DEBUG: BitNet attention - attention_scores shape: {attention_scores.shape}")
-        print(f"🔍 DEBUG: BitNet attention - mask shape: {mask.shape if mask is not None else None}")
+        # Debug: BitNet attention - input shapes: query={query.shape}, key={key.shape}, value={value.shape}
+        # Debug: BitNet attention - attention_scores shape: {attention_scores.shape}
+        # Debug: BitNet attention - mask shape: {mask.shape if mask is not None else None}
 
         # Apply attention mask properly
         if mask is not None:
-            print(f"🔍 DEBUG: Applying attention mask")
+            # Debug: Applying attention mask
             # Ensure mask is on same device as attention_scores
             mask = mask.to(attention_scores.device)
             
@@ -203,20 +203,21 @@ class BitNetAttention(nn.Module):
             elif mask.dim() == 4:  # Already [batch_size, 1, seq_len, seq_len] or similar
                 pass
             else:
-                print(f"⚠️ DEBUG: Unexpected mask dimensions: {mask.shape}")
+                # Debug: Unexpected mask dimensions: {mask.shape}
+                pass
             
             # Apply mask by setting masked positions to large negative value
             mask = mask.to(attention_scores.dtype)
             attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
-            print(f"🔍 DEBUG: Mask applied successfully")
+            # Debug: Mask applied successfully
 
         attention_weights = F.softmax(attention_scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
-        print(f"🔍 DEBUG: BitNet attention - attention_weights shape: {attention_weights.shape}")
+        # Debug: BitNet attention - attention_weights shape: {attention_weights.shape}
 
         # Apply attention to values
         attended = torch.matmul(attention_weights, v)
-        print(f"🔍 DEBUG: BitNet attention - attended shape: {attended.shape}")
+        # Debug: BitNet attention - attended shape: {attended.shape}
 
         # Reshape and project output
         attended = attended.transpose(1, 2).contiguous().view(
@@ -224,7 +225,7 @@ class BitNetAttention(nn.Module):
         )
         output = self.out_proj(attended)
         
-        print(f"🔍 DEBUG: BitNet attention - final output shape: {output.shape}")
+        # Debug: BitNet attention - final output shape: {output.shape}
         return output, attention_weights.mean(dim=1)  # Average across heads
 
 
@@ -251,27 +252,27 @@ class BitNetTransformerBlock(nn.Module):
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        print(f"🔍 DEBUG: BitNet transformer block - input shape: {x.shape}")
-        print(f"🔍 DEBUG: BitNet transformer block - mask shape: {mask.shape if mask is not None else None}")
+        # Debug: BitNet transformer block - input shape: {x.shape}
+        # Debug: BitNet transformer block - mask shape: {mask.shape if mask is not None else None}
         
         # Self-attention with residual connection
         normed_x = self.norm1(x)
-        print(f"🔍 DEBUG: BitNet transformer block - normed_x shape: {normed_x.shape}")
+        # Debug: BitNet transformer block - normed_x shape: {normed_x.shape}
         
         try:
             attn_out, attn_weights = self.attn(normed_x, normed_x, normed_x, mask)
-            print(f"🔍 DEBUG: BitNet transformer block - attention output shape: {attn_out.shape}")
+            # Debug: BitNet transformer block - attention output shape: {attn_out.shape}
         except Exception as e:
-            print(f"❌ DEBUG: BitNet transformer block attention failed: {e}")
-            print(f"   Input shapes: query={normed_x.shape}, key={normed_x.shape}, value={normed_x.shape}")
-            print(f"   Mask shape: {mask.shape if mask is not None else None}")
+            # Debug: BitNet transformer block attention failed: {e}
+            # Input shapes: query={normed_x.shape}, key={normed_x.shape}, value={normed_x.shape}
+            # Mask shape: {mask.shape if mask is not None else None}
             raise e
             
         x = x + attn_out
 
         # MLP with residual connection
         x = x + self.mlp(self.norm2(x))
-        print(f"🔍 DEBUG: BitNet transformer block - final output shape: {x.shape}")
+        # Debug: BitNet transformer block - final output shape: {x.shape}
 
         return x, attn_weights
 
@@ -315,24 +316,24 @@ class BitNetTextEncoder(nn.Module):
         attention_mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         batch_size, seq_len = input_ids.shape
-        print(f"🔍 DEBUG: Text encoder - batch_size: {batch_size}, seq_len: {seq_len}")
+        # Debug: Text encoder - batch_size: {batch_size}, seq_len: {seq_len}
 
         # Embeddings
         positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         x = self.token_embedding(input_ids) + \
             self.position_embedding(positions)
         x = self.dropout(x)
-        print(f"🔍 DEBUG: Text encoder - embeddings shape: {x.shape}")
+        # Debug: Text encoder - embeddings shape: {x.shape}
 
         # Transform through BitNet layers
         attention_patterns = []
         for i, layer in enumerate(self.layers):
-            print(f"🔍 DEBUG: Text encoder layer {i} - input shape: {x.shape}")
+            # Debug: Text encoder layer {i} - input shape: {x.shape}
             
             # Convert attention mask to the right format for the layer
             layer_mask = None
             if attention_mask is not None:
-                print(f"🔍 DEBUG: Text encoder layer {i} - attention_mask shape: {attention_mask.shape}")
+                # Debug: Text encoder layer {i} - attention_mask shape: {attention_mask.shape}
                 # Create a mask where 1 means attend, 0 means don't attend
                 layer_mask = attention_mask.unsqueeze(
                     1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]

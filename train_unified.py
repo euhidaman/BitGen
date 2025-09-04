@@ -44,16 +44,27 @@ except ImportError:
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
-# Setup logging first
+# Setup logging first - Reduced verbosity for cleaner output
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Only show warnings and errors by default
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('training.log'),
         logging.StreamHandler()
     ]
 )
+
+# Configure specific loggers
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # Training script shows progress
+
+# Reduce noise from other modules
+logging.getLogger('src.fiber_fusion').setLevel(logging.WARNING)
+logging.getLogger('src.security_guard').setLevel(logging.ERROR)
+logging.getLogger('src.adaptive_training_controller').setLevel(logging.WARNING)
+logging.getLogger('transformers').setLevel(logging.ERROR)
+logging.getLogger('torch').setLevel(logging.ERROR)
+logging.getLogger('wandb').setLevel(logging.ERROR)
 
 # GRPO imports for policy optimization (after logger is defined)
 try:
@@ -116,6 +127,9 @@ class UnifiedBitMarTrainer:
 
     def __init__(self, config_path: str, device: Optional[str] = None):
         """Initialize unified trainer"""
+        # Control debug output verbosity
+        self.debug_mode = False  # Set to True for detailed debugging
+        
         # Load configuration with validation
         try:
             with open(config_path, 'r') as f:
@@ -1268,8 +1282,8 @@ class UnifiedBitMarTrainer:
                 
                 self._data_verification_count += 1
                 
-                # Verify data quality every 100 batches
-                if self._data_verification_count % 100 == 0:
+                # Verify data quality every 100 batches (only in debug mode)
+                if self.debug_mode and self._data_verification_count % 100 == 0:
                     print(f"\n🔍 DATA QUALITY VERIFICATION [Batch {batch_idx}, Step {self.global_step}]:")
                     
                     # Check vision features
@@ -1413,8 +1427,8 @@ class UnifiedBitMarTrainer:
                     
                     self._attention_analysis_count += 1
                     
-                    # Analyze attention patterns every 50 steps to verify learning
-                    if self._attention_analysis_count % 50 == 0 and 'fiber_attention_weights' in outputs:
+                    # Analyze attention patterns every 50 steps to verify learning (only in debug mode)
+                    if self.debug_mode and self._attention_analysis_count % 50 == 0 and 'fiber_attention_weights' in outputs:
                         print(f"\n🔍 CROSS-MODAL ATTENTION ANALYSIS [Step {self.global_step}]:")
                         
                         fiber_attn = outputs.get('fiber_attention_weights')
@@ -1633,8 +1647,8 @@ class UnifiedBitMarTrainer:
                 self._loss_history.append(current_loss)
                 self._lr_history.append(current_lr)
                 
-                # Show learning verification every 20 steps or first 5 steps
-                should_verify = (self._learning_verification_count <= 5 or self._learning_verification_count % 20 == 0)
+                # Show learning verification every 20 steps or first 5 steps (only in debug mode)
+                should_verify = self.debug_mode and (self._learning_verification_count <= 5 or self._learning_verification_count % 20 == 0)
                 
                 if should_verify:
                     print(f"\n🔍 LEARNING VERIFICATION [Step {self.global_step}]:")
@@ -2486,6 +2500,8 @@ def main():
                         help="Path to configuration file")
     parser.add_argument("--device", type=str,
                         help="Device to use (cuda:0, cpu)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug mode with verbose output")
     parser.add_argument("--rebuild_cache", action="store_true",
                         help="Rebuild dataset cache")
     parser.add_argument("--rebuild_vision_cache", action="store_true",
@@ -2498,6 +2514,7 @@ def main():
     try:
         # Initialize trainer
         trainer = UnifiedBitMarTrainer(args.config, device=args.device)
+        trainer.debug_mode = args.debug  # Set debug mode from command line
         trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
         # Pass vision cache rebuild flag
         trainer.rebuild_vision_cache = args.rebuild_vision_cache
