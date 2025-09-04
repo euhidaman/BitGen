@@ -36,18 +36,32 @@ huggingface-cli login
 
 **IMPORTANT:** Vision features are ONLY created during download, not during training!
 
-### Option A: With Real DiNOv2 Features (Recommended)
+### Option A: Limited Dataset (50k samples - Fast)
 
 ```powershell
-# Download both datasets with GPU-accelerated DiNOv2 features
-python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features --real_vision_features
+# Download OpenImages subset with real DiNOv2 features
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features --real_vision_features
 ```
 
-### Option B: With Dummy Features (Fast Development)
+### Option B: Full OpenImages Dataset (900k+ samples - Overnight)
 
 ```powershell
-# Download both datasets with dummy features (no GPU required)
-python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features
+# Download entire OpenImages dataset with real DiNOv2 features (4-8 hours)
+python download_multimodal_data.py --download_full_openimages --cache_vision_features --real_vision_features --data_dir ./data
+```
+
+### Option C: Custom Sample Limit
+
+```powershell
+# Download specific number of samples (e.g., 200k samples)
+python download_multimodal_data.py --max_samples 200000 --cache_vision_features --real_vision_features --data_dir ./data
+```
+
+### Option D: With Dummy Features (Fast Development)
+
+```powershell
+# Download with dummy features (no GPU required)
+python download_multimodal_data.py --dataset localized_narratives --data_dir ./data --cache_vision_features
 ```
 
 ### Download Robot Reasoning Data
