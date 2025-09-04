@@ -1495,9 +1495,7 @@ class UnifiedBitMarTrainer:
                     raise forward_error
 
                 # Handle GRPO training vs standard training
-                # Temporarily disable GRPO to avoid tensor indexing issues
-                # if self.enable_grpo_training and is_robot_batch and self.grpo_integration:
-                if False:  # Temporarily disabled
+                if self.enable_grpo_training and is_robot_batch and self.grpo_integration:
                     # GRPO policy optimization for robot reasoning
                     try:
                         # Prepare data for GRPO
@@ -1762,40 +1760,33 @@ class UnifiedBitMarTrainer:
 
                 # Update progress bar with enhanced metrics
                 progress_info = {
-                    'loss': f"{loss.item():.2f}",
+                    'loss': f"{loss.item():.1f}",
                     'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}"
                 }
 
-                # Add FIBER cross-modal metrics if available
+                # Add FIBER cross-modal metrics from model outputs
                 if hasattr(outputs, 'fiber_losses') and outputs.fiber_losses is not None:
                     fiber_losses = outputs.fiber_losses
-                    if 'itc_loss' in fiber_losses:
-                        progress_info['ITC'] = f"{fiber_losses['itc_loss']:.2f}"
-                    if 'itm_loss' in fiber_losses:
-                        progress_info['ITM'] = f"{fiber_losses['itm_loss']:.2f}"
-                    if 'mlm_loss' in fiber_losses:
-                        progress_info['MLM'] = f"{fiber_losses['mlm_loss']:.2f}"
-                elif 'fiber_losses_dict' in locals() and fiber_losses_dict is not None:
-                    if 'itc_loss' in fiber_losses_dict and fiber_losses_dict['itc_loss'] is not None:
-                        progress_info['ITC'] = f"{fiber_losses_dict['itc_loss'].item():.2f}"
-                    if 'itm_loss' in fiber_losses_dict and fiber_losses_dict['itm_loss'] is not None:
-                        progress_info['ITM'] = f"{fiber_losses_dict['itm_loss'].item():.2f}"
-                    if 'mlm_loss' in fiber_losses_dict and fiber_losses_dict['mlm_loss'] is not None:
-                        progress_info['MLM'] = f"{fiber_losses_dict['mlm_loss'].item():.2f}"
+                    if 'itc_loss' in fiber_losses and fiber_losses['itc_loss'] is not None:
+                        progress_info['ITC'] = f"{fiber_losses['itc_loss'].item():.1f}"
+                    if 'itm_loss' in fiber_losses and fiber_losses['itm_loss'] is not None:
+                        progress_info['ITM'] = f"{fiber_losses['itm_loss'].item():.1f}"
+                    if 'mlm_loss' in fiber_losses and fiber_losses['mlm_loss'] is not None:
+                        progress_info['MLM'] = f"{fiber_losses['mlm_loss'].item():.1f}"
 
-                # Add other component losses
+                # Add component losses with shorter names for space
                 if 'decoder_loss' in locals() and decoder_loss is not None:
-                    progress_info['dec'] = f"{decoder_loss.item():.2f}"
+                    progress_info['dec'] = f"{decoder_loss.item():.1f}"
                 if 'cross_modal_loss' in locals() and cross_modal_loss is not None:
-                    progress_info['xmod'] = f"{cross_modal_loss.item():.2f}"
+                    progress_info['xmod'] = f"{cross_modal_loss.item():.1f}"
                 if 'vision_loss' in locals() and vision_loss is not None:
-                    progress_info['vis'] = f"{vision_loss.item():.2f}"
+                    progress_info['vis'] = f"{vision_loss.item():.1f}"
                 if 'memory_loss' in locals() and memory_loss is not None:
-                    progress_info['mem'] = f"{memory_loss.item():.2f}"
+                    progress_info['mem'] = f"{memory_loss.item():.1f}"
 
                 # Add GRPO metrics if available
                 if 'grpo_rewards' in locals() and grpo_rewards is not None:
-                    progress_info['GRPO'] = f"{grpo_rewards.mean().item():.3f}"
+                    progress_info['GRPO'] = f"{grpo_rewards.mean().item():.2f}"
 
                 if self.enable_robot_reasoning:
                     progress_info['robot_batches'] = f"{reasoning_batches}/{total_batches}"
