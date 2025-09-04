@@ -680,6 +680,9 @@ class RobotReasoningIntegration:
             robot_key = robot.replace(' ', '_')
             if robot_key in robot_outputs['robot_selections']:
                 pred = robot_outputs['robot_selections'][robot_key]
+                # Ensure pred is on the correct device
+                if pred.device != device:
+                    pred = pred.to(device)
                 target = targets[:, i]
                 loss = F.binary_cross_entropy(pred, target)
                 robot_selection_loss += loss

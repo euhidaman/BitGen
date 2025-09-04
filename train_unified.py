@@ -1514,10 +1514,10 @@ class UnifiedBitMarTrainer:
                                     input_ids=batch['input_ids'],
                                     attention_mask=batch['attention_mask'],
                                     vision_features=batch['vision_features'],
-                                    max_new_tokens=150,
+                                    max_length=batch['input_ids'].shape[1] + 150,  # Use max_length instead of max_new_tokens
                                     do_sample=True,
                                     temperature=self.grpo_config['temperature'],
-                                    pad_token_id=self.model.tokenizer.eos_token_id
+                                    # pad_token_id parameter not supported by our generate method
                                 )
 
                                 # Decode generations

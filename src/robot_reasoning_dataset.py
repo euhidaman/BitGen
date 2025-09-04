@@ -663,4 +663,4 @@ def create_robot_reasoning_trainer_integration():
 
             return rewards
 
-    return RobotReasoningTrainerMixin
+    return RobotReasoningTrainerMixin()
