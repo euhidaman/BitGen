@@ -1492,7 +1492,7 @@ class BitMarModel(nn.Module):
         
         self._loss_debug_count += 1
         # Only show debug output for first 5 steps or every 200 steps (reduced frequency)
-        should_debug = (self._loss_debug_count <= 5 or self._loss_debug_count % 200 == 0)
+        should_debug = False  # Disable all debug prints to clean up output
         
         if should_debug:
             # Debug removed
@@ -1965,20 +1965,26 @@ class BitMarModel(nn.Module):
             'robot_reasoning_loss': robot_reasoning_loss
         }
         
-        # 🔍 LEARNING DIAGNOSTIC: Check if model is actually learning
-        # Debug removed
-        print(f"   Total loss: {loss_dict['total_loss'].item():.6f}")
-        print(f"   Loss requires_grad: {loss_dict['total_loss'].requires_grad}")
-        if 'decoder_loss' in loss_dict and loss_dict['decoder_loss'] is not None:
-            print(f"   Decoder loss: {loss_dict['decoder_loss'].item():.6f}")
-            print(f"   Decoder loss grad_fn: {loss_dict['decoder_loss'].grad_fn}")
-        
-        # Check if loss is suspiciously low (indicating potential issues)
-        total_loss = loss_dict['total_loss'].item()
-        if total_loss < 0.01:
-            print(f"⚠️ WARNING: Loss suspiciously low ({total_loss:.8f}) - model may not be learning!")
-        elif total_loss > 100:
-            print(f"⚠️ WARNING: Loss suspiciously high ({total_loss:.8f}) - training may be unstable!")
+        # Log metrics to wandb if available (instead of printing)
+        if hasattr(self, 'use_wandb') and self.use_wandb and hasattr(self, 'wandb_logger') and self.wandb_logger:
+            try:
+                log_dict = {
+                    'loss/total': loss_dict['total_loss'].item(),
+                    'loss/decoder': loss_dict.get('decoder_loss', torch.tensor(0.0)).item() if loss_dict.get('decoder_loss') is not None else 0.0,
+                    'loss/cross_modal': loss_dict.get('cross_modal_loss', torch.tensor(0.0)).item() if loss_dict.get('cross_modal_loss') is not None else 0.0,
+                    'loss/vision': loss_dict.get('vision_loss', torch.tensor(0.0)).item() if loss_dict.get('vision_loss') is not None else 0.0,
+                    'loss/memory': loss_dict.get('memory_loss', torch.tensor(0.0)).item() if loss_dict.get('memory_loss') is not None else 0.0,
+                }
+                
+                # Add FIBER losses if available
+                if hasattr(self, 'fiber_losses') and self.fiber_losses:
+                    for key, value in self.fiber_losses.items():
+                        if value is not None and 'loss' in key:
+                            log_dict[f'fiber/{key}'] = value.item()
+                
+                self.wandb_logger.log(log_dict)
+            except Exception as e:
+                pass  # Silent fail for wandb logging
         
         # Enhanced gradient flow diagnostics with comprehensive monitoring
         if hasattr(self, '_debug_step_count'):
@@ -1988,7 +1994,7 @@ class BitMarModel(nn.Module):
             self._param_norms_history = []
             self._grad_norms_history = []
             
-        should_debug = (self._debug_step_count <= 10 or self._debug_step_count % 50 == 0)
+        should_debug = False  # Disable all debug prints
         
         if should_debug:  # Show first 10 steps and every 50 steps for monitoring
             param_count = 0
