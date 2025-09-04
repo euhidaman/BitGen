@@ -1417,7 +1417,7 @@ class UnifiedBitMarTrainer:
                         logger.info(f"  • Has vision: {batch.get('has_vision', 'Not set').sum() if torch.is_tensor(batch.get('has_vision')) else batch.get('has_vision')}")
                         logger.info(f"  • Model components:")
                         logger.info(f"    - BitNet quantization: {'✅' if hasattr(self.model.text_encoder.layers[0], 'attn') and hasattr(self.model.text_encoder.layers[0].attn, 'q_proj') and hasattr(self.model.text_encoder.layers[0].attn.q_proj, 'quantize_weights') else '❌'}")
-                        logger.info(f"    - FIBER fusion: {'✅' if hasattr(self.model, 'fiber_integration') else '❌'}")
+                        logger.info(f"    - FIBER fusion: {'✅' if hasattr(self.model, 'fusion') and hasattr(self.model.fusion, 'fiber_fusion_layers') else '❌'}")
                         logger.info(f"    - Episodic memory: {'✅' if self.model.use_episodic_memory else '❌'}")
                         logger.info(f"    - Robot reasoning: {'✅' if self.model.robot_reasoning_integration else '❌'}")
                         logger.info(f"    - GRPO training: {'✅' if self.enable_grpo_training else '❌'}")
@@ -1440,13 +1440,26 @@ class UnifiedBitMarTrainer:
                         logger.info("🕐 FORWARD PASS COMPLETED - checking output structure:")
                         if hasattr(outputs, 'fiber_losses') and outputs.fiber_losses:
                             logger.info(f"  • FIBER losses present: {list(outputs.fiber_losses.keys())}")
+                            for k, v in outputs.fiber_losses.items():
+                                if v is not None:
+                                    logger.info(f"    - {k}: {v.item():.4f}")
                         else:
-                            logger.warning("  • ❌ FIBER losses missing - FIBER may not be active!")
+                            logger.warning("  • ❌ FIBER losses missing - checking fiber_outputs...")
+                            # Check if model has fusion component
+                            if hasattr(self.model, 'fusion'):
+                                logger.info("  • ✅ Model has fusion component")
+                                # Check if FIBER fusion was called
+                                logger.info("  • Check if FIBER fusion returned outputs properly")
+                            else:
+                                logger.warning("  • ❌ Model missing fusion component!")
                         
                         if hasattr(outputs, 'memory_state'):
                             logger.info(f"  • Memory state present: {outputs.memory_state is not None}")
                         else:
                             logger.warning("  • ❌ Memory state missing - Episodic memory may not be active!")
+                        
+                        # Check if outputs has expected attributes
+                        logger.info(f"  • Output attributes: {[attr for attr in dir(outputs) if not attr.startswith('_')]}")
                     
                     # 🔍 ATTENTION PATTERN ANALYSIS - Verify cross-modal learning
                     if not hasattr(self, '_attention_analysis_count'):
