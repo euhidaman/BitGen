@@ -729,6 +729,22 @@ class MultimodalDatasetDownloader:
             result = subprocess.run(["aws", "--version"], capture_output=True, text=True)
             if result.returncode == 0:
                 logger.info("✅ AWS CLI detected - proceeding with bulk download")
+                logger.info(f"🔧 AWS CLI version: {result.stdout.strip()}")
+                
+                # Test AWS connection first
+                test_cmd = "aws s3 --no-sign-request ls s3://open-images-dataset/tar/ | head -3"
+                logger.info("🧪 Testing AWS S3 connection...")
+                try:
+                    test_result = subprocess.run(test_cmd.split(), capture_output=True, text=True, timeout=30)
+                    if test_result.returncode == 0:
+                        logger.info("✅ AWS S3 connection successful!")
+                        logger.info(f"📋 Available files preview: {test_result.stdout.strip()[:100]}...")
+                    else:
+                        logger.warning(f"⚠️ AWS S3 test failed: {test_result.stderr}")
+                        logger.info("Proceeding anyway - might be a temporary issue...")
+                except Exception as e:
+                    logger.warning(f"⚠️ AWS S3 test error: {e}")
+                    logger.info("Proceeding anyway...")
                 
                 # Download first two train tar files (should give us 200K+ images)
                 aws_commands = [
@@ -773,14 +789,40 @@ class MultimodalDatasetDownloader:
                                 if tar_file.exists():
                                     size_gb = tar_file.stat().st_size / (1024**3)
                                     logger.info(f"📁 Downloaded {size_gb:.1f} GB so far (target: ~46 GB)")
+                                else:
+                                    # Check if process is still active
+                                    if process.poll() is None:
+                                        logger.info(f"🔄 AWS CLI process still active - download in progress...")
+                                        # Try to check network activity or temp files
+                                        temp_files = list(oi_dir.glob("*.tmp")) + list(oi_dir.glob("*.part"))
+                                        if temp_files:
+                                            total_temp_size = sum(f.stat().st_size for f in temp_files) / (1024**3)
+                                            logger.info(f"📂 Temporary files: {total_temp_size:.1f} GB")
+                                        else:
+                                            logger.info(f"⚠️ No file yet - AWS CLI might be connecting/buffering...")
+                                    else:
+                                        logger.warning(f"❌ AWS process ended unexpectedly!")
+                                        break
                                 
                                 last_progress_time = current_time
                             
                             # Check for timeout (1 hour)
                             if current_time - start_time > 3600:
-                                logger.warning("⏰ Download taking too long (>1 hour), terminating...")
+                                logger.warning("⏰ Download taking too long (>1 hour)")
+                                logger.info("💡 This could mean:")
+                                logger.info("   • Slow internet connection")
+                                logger.info("   • AWS S3 rate limiting")
+                                logger.info("   • Network connectivity issues")
+                                logger.info("🛑 Terminating download - you can restart later")
                                 process.terminate()
                                 break
+                            
+                            # Quick timeout check every 15 minutes to offer advice
+                            if elapsed > 900 and elapsed % 900 < 30:  # Every 15 minutes
+                                logger.info("💡 Download taking longer than expected. Options:")
+                                logger.info("   • Continue waiting (recommended for slow connections)")
+                                logger.info("   • Cancel (Ctrl+C) and try FiftyOne method instead")
+                                logger.info("   • Check your internet speed: 46GB needs good bandwidth")
                             
                             time.sleep(5)  # Check every 5 seconds
                         
