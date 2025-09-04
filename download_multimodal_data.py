@@ -36,9 +36,12 @@ class MultimodalDatasetDownloader:
     """Download and prepare Localized Narratives and COCO datasets"""
 
     def __init__(self, data_dir: str = "./data", cache_vision_features: bool = False, use_real_vision: bool = False,
-                 use_hf_localized_narratives: bool = False, hf_dataset_config: str = "open_images"):
+                 use_hf_localized_narratives: bool = False, hf_dataset_config: str = "open_images", max_samples: int = 50000):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
+        
+        # Sample limit configuration
+        self.max_samples = max_samples if max_samples > 0 else float('inf')  # 0 or negative means unlimited
 
         # HuggingFace options (disabled by default due to deprecated scripts)
         self.use_hf_localized_narratives = use_hf_localized_narratives and HF_DATASETS_AVAILABLE
@@ -485,8 +488,7 @@ class MultimodalDatasetDownloader:
         dataset_info = {}
         all_image_info = []  # Store image_id and dataset info for downloading actual images
 
-        # Limit to first 50k samples for faster downloads
-        MAX_SAMPLES = 50000
+        # Use configurable sample limit
         samples_collected = 0
 
         for dataset_name, splits in self.datasets['localized_narratives'].items():
@@ -528,7 +530,7 @@ class MultimodalDatasetDownloader:
                             with open(filepath, 'r', encoding='utf-8') as f:
                                 samples = 0
                                 for line in f:
-                                    if line.strip() and samples_collected < MAX_SAMPLES:
+                                    if line.strip() and samples_collected < self.max_samples:
                                         try:
                                             data = json.loads(line)
                                             samples += 1
@@ -541,9 +543,9 @@ class MultimodalDatasetDownloader:
                                             })
 
                                             # Stop if we've collected enough samples
-                                            if samples_collected >= MAX_SAMPLES:
+                                            if samples_collected >= self.max_samples:
                                                 logger.info(
-                                                    f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                                    f"🛑 Reached limit of {self.max_samples:,} samples, stopping...")
                                                 break
                                         except json.JSONDecodeError:
                                             continue
@@ -552,7 +554,7 @@ class MultimodalDatasetDownloader:
                                 f"    ◦ shard {i}: {samples:,} samples")
 
                             # Break shard loop if we've hit the limit
-                            if samples_collected >= MAX_SAMPLES:
+                            if samples_collected >= self.max_samples:
                                 break
 
                         except Exception as e:
@@ -580,7 +582,7 @@ class MultimodalDatasetDownloader:
                         with open(filepath, 'r', encoding='utf-8') as f:
                             samples = 0
                             for line in f:
-                                if line.strip() and samples_collected < MAX_SAMPLES:
+                                if line.strip() and samples_collected < self.max_samples:
                                     try:
                                         data = json.loads(line)
                                         samples += 1
@@ -603,9 +605,9 @@ class MultimodalDatasetDownloader:
                                         })
 
                                         # Stop if we've collected enough samples
-                                        if samples_collected >= MAX_SAMPLES:
+                                        if samples_collected >= self.max_samples:
                                             logger.info(
-                                                f"🛑 Reached limit of {MAX_SAMPLES:,} samples, stopping...")
+                                                f"🛑 Reached limit of {self.max_samples:,} samples, stopping...")
                                             break
                                     except json.JSONDecodeError:
                                         continue
@@ -613,7 +615,7 @@ class MultimodalDatasetDownloader:
                         logger.info(f"  • {split}: {samples:,} samples")
 
                         # Break outer loop if we've hit the limit
-                        if samples_collected >= MAX_SAMPLES:
+                        if samples_collected >= self.max_samples:
                             break
 
                     except Exception as e:
@@ -623,7 +625,7 @@ class MultimodalDatasetDownloader:
             total_samples += dataset_samples
 
             # Break dataset loop if we've hit the limit
-            if samples_collected >= MAX_SAMPLES:
+            if samples_collected >= self.max_samples:
                 logger.info(
                     f"🛑 Sample limit reached, stopping dataset processing...")
                 break
@@ -1344,6 +1346,10 @@ def main():
         "Dataset Selection", "Localized Narratives dataset (includes Open Images and COCO)")
     dataset_group.add_argument("--dataset", type=str, choices=['localized_narratives'], default='localized_narratives',
                                help="Dataset to download: 'localized_narratives' (~1.16M samples with Open Images + COCO)")
+    dataset_group.add_argument("--max_samples", type=int, default=50000,
+                               help="Maximum number of samples to download (default: 50000, use 0 or -1 for unlimited)")
+    dataset_group.add_argument("--download_full_openimages", action="store_true",
+                               help="Download the entire OpenImages dataset overnight (removes 50k sample limit)")
 
     # HuggingFace options
     hf_group = parser.add_argument_group(
@@ -1382,22 +1388,36 @@ def main():
             logger.info(
                 "🎨 Using dummy vision features to avoid URL download issues")
 
+        # Handle full dataset download options
+        max_samples = args.max_samples
+        if args.download_full_openimages or max_samples <= 0:
+            max_samples = 0  # Unlimited
+            logger.info("🌍 FULL OPENIMAGES DOWNLOAD: No sample limit - downloading entire dataset overnight!")
+            logger.info("⚠️  This will take several hours and require significant disk space")
+        else:
+            logger.info(f"📊 Sample limit: {max_samples:,} samples")
+
         # Create downloader with vision caching options
         downloader = MultimodalDatasetDownloader(
             data_dir=args.data_dir,
             cache_vision_features=args.cache_vision_features,
             use_real_vision=use_real_vision,
             use_hf_localized_narratives=use_hf,
-            hf_dataset_config=args.hf_dataset_config
+            hf_dataset_config=args.hf_dataset_config,
+            max_samples=max_samples
         )
 
         # Determine which datasets to download
         if args.dataset == 'localized_narratives':
-            logger.info("🎯 Downloading ONLY Localized Narratives dataset")
-            logger.info(
-                "📊 Estimated download: ~1.16M image-caption pairs (Localized Narratives)")
-            logger.info(
-                "ℹ️  This includes both Open Images and COCO data from Localized Narratives")
+            if max_samples <= 0:
+                logger.info("🎯 Downloading ENTIRE Localized Narratives dataset")
+                logger.info("📊 Estimated download: ~1.16M+ image-caption pairs (Full OpenImages + COCO)")
+                logger.info("💾 Expected size: ~100+ GB (images) + ~10 GB (features)")
+                logger.info("⏰ Estimated time: 6-12 hours depending on connection")
+            else:
+                logger.info("🎯 Downloading LIMITED Localized Narratives dataset")
+                logger.info(f"📊 Sample limit: {max_samples:,} image-caption pairs")
+            logger.info("ℹ️  This includes both Open Images and COCO data from Localized Narratives")
         else:
             logger.error(
                 "❌ Only 'localized_narratives' dataset is supported in this version")
