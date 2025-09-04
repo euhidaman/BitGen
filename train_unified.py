@@ -1413,6 +1413,17 @@ class UnifiedBitMarTrainer:
                     if self.global_step == 1:
                         logger.info("🔍 COMPONENT VERIFICATION:")
                         logger.info(f"  • Input IDs shape: {batch['input_ids'].shape}")
+                        
+                        # Verify tokenization is working
+                        sample_tokens = batch['input_ids'][0][:10]  # First 10 tokens of first sample
+                        sample_text = self.model.tokenizer.decode(sample_tokens, skip_special_tokens=True)
+                        logger.info(f"  • Sample tokenized text: '{sample_text}'")
+                        logger.info(f"  • Sample token IDs: {sample_tokens.tolist()}")
+                        
+                        # Check for non-padding tokens
+                        non_pad_tokens = (batch['input_ids'] != self.model.tokenizer.pad_token_id).sum()
+                        total_tokens = batch['input_ids'].numel()
+                        logger.info(f"  • Non-padding tokens: {non_pad_tokens}/{total_tokens} ({100*non_pad_tokens/total_tokens:.1f}%)")
                         logger.info(f"  • Vision features shape: {batch['vision_features'].shape}")
                         logger.info(f"  • Has vision: {batch.get('has_vision', 'Not set').sum() if torch.is_tensor(batch.get('has_vision')) else batch.get('has_vision')}")
                         logger.info(f"  • Model components:")
