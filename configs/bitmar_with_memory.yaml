@@ -103,7 +103,7 @@ data:
   # HuggingFace LocalizedNarratives configuration
   use_hf_localized_narratives: false # Disabled - HuggingFace scripts deprecated
   hf_dataset_config: "open_images" # Options: open_images, ait, flickr, coco
-  max_samples_per_split: 15000 # Limit samples for faster loading (15k train + 7.5k val)
+  max_samples_per_split: null # USE ALL DATA - No artificial limits (was 15000)
 
   # Robot reasoning data integration (after multimodal training)
   include_robot_data: true # Include robot selection examples for reasoning grounding
