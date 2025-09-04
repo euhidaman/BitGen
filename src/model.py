@@ -1776,7 +1776,7 @@ class BitMarModel(nn.Module):
         memory_attention_weights = None
         episode = None
 
-        # Debug removed
+        logger.debug(f"🧠 Memory enabled: {self.use_episodic_memory}")
         if self.use_episodic_memory:
             # Debug removed
             try:
@@ -1935,7 +1935,7 @@ class BitMarModel(nn.Module):
             'itm_loss': fiber_itm_loss,
             'mlm_loss': fiber_mlm_loss,
             'fiber_total_loss': fiber_total_loss
-        } if fiber_total_loss is not None else None
+        }  # Always include dict, even with None values
         
         loss_dict = self.compute_balanced_loss(
             decoder_loss=decoder_loss,

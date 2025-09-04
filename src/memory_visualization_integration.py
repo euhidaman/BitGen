@@ -6,7 +6,14 @@ Seamlessly integrates memory visualization with the training loop
 import torch
 import logging
 from typing import Dict, List, Optional
-import wandb
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None
+
 from .memory_visualizer import EpisodicMemoryVisualizer
 
 logger = logging.getLogger(__name__)
