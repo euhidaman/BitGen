@@ -1485,27 +1485,35 @@ class BitMarModel(nn.Module):
         Compute balanced multi-objective loss with adaptive scaling
         Now includes FIBER losses (ITC + ITM + MLM)
         """
-        # ENHANCED LEARNING VERIFICATION - Always show first 10 steps and every 100 steps
+        # ENHANCED LEARNING VERIFICATION - Only in debug mode or for critical monitoring
         if not hasattr(self, '_loss_debug_count'):
             self._loss_debug_count = 0
             self._loss_history = []
         
         self._loss_debug_count += 1
-        should_debug = (self._loss_debug_count <= 10 or self._loss_debug_count % 100 == 0)
+        # Only show debug output for first 5 steps or every 200 steps (reduced frequency)
+        should_debug = (self._loss_debug_count <= 5 or self._loss_debug_count % 200 == 0)
         
         if should_debug:
             print(f"🔍 LEARNING VERIFICATION [Step {self._loss_debug_count}]:")
             print(f"   Decoder loss: {decoder_loss.item():.6f}" if decoder_loss is not None else "   Decoder loss: None")
             print(f"   Cross-modal loss: {cross_modal_loss.item():.6f}" if cross_modal_loss is not None else "   Cross-modal loss: None")
-            print(f"   Vision loss: {vision_loss.item():.6f}" if vision_loss is not None else "   Vision loss: None")
-            print(f"   Memory loss: {memory_loss.item():.6f}" if memory_loss is not None else "   Memory loss: None")
-            print(f"   Robot reasoning loss: {robot_reasoning_loss.item():.6f}" if robot_reasoning_loss is not None else "   Robot reasoning loss: None")
             
-            # NEW: Log FIBER losses
+            # Only show additional losses if they're significant
+            if vision_loss is not None and vision_loss.item() > 0.001:
+                print(f"   Vision loss: {vision_loss.item():.6f}")
+            if memory_loss is not None and memory_loss.item() > 0.001:
+                print(f"   Memory loss: {memory_loss.item():.6f}")
+            if robot_reasoning_loss is not None and robot_reasoning_loss.item() > 0.001:
+                print(f"   Robot reasoning loss: {robot_reasoning_loss.item():.6f}")
+            
+            # NEW: Log FIBER losses only if significant
             if fiber_losses is not None:
-                print(f"🔥 FIBER LOSSES:")
-                for key, loss in fiber_losses.items():
-                    if loss is not None and 'loss' in key:
+                significant_fiber_losses = {k: v for k, v in fiber_losses.items() 
+                                          if v is not None and 'loss' in k and v.item() > 0.001}
+                if significant_fiber_losses:
+                    print(f"🔥 FIBER LOSSES:")
+                    for key, loss in significant_fiber_losses.items():
                         print(f"   {key}: {loss.item():.6f}")
             
             # Track loss progression (include FIBER total loss)
@@ -1608,8 +1616,8 @@ class BitMarModel(nn.Module):
         if robot_reasoning_loss is not None:
             total_loss += robot_reasoning_scale * robot_reasoning_loss
 
-        # NEW: Add FIBER losses to total loss
-        fiber_scale = 1.0  # Default weight for FIBER losses
+        # NEW: Add FIBER losses to total loss with reduced scale for stability
+        fiber_scale = config.get('fiber_loss_scale', 0.1)  # Reduced from 1.0 for stability
         if fiber_losses is not None and fiber_losses.get('fiber_total_loss') is not None:
             total_loss += fiber_scale * fiber_losses['fiber_total_loss']
 
@@ -1890,11 +1898,17 @@ class BitMarModel(nn.Module):
                 
                 # Apply robot reasoning to fused features
                 robot_reasoning_outputs = self.robot_reasoning_integration.robot_selection_head(fused_features)
+                
+                # Ensure robot reasoning outputs are on correct device
+                if isinstance(robot_reasoning_outputs, torch.Tensor):
+                    robot_reasoning_outputs = robot_reasoning_outputs.to(device)
+                elif isinstance(robot_reasoning_outputs, dict):
+                    robot_reasoning_outputs = {k: v.to(device) if torch.is_tensor(v) else v 
+                                             for k, v in robot_reasoning_outputs.items()}
 
                 # Compute robot selection loss if labels are provided and this is a reasoning batch
                 if hasattr(self, '_current_robot_labels') and self._current_robot_labels:
                     # Ensure robot labels are on the correct device
-                    device = next(self.parameters()).device
                     if isinstance(self._current_robot_labels, torch.Tensor):
                         robot_labels_device = self._current_robot_labels.to(device)
                     elif isinstance(self._current_robot_labels, (list, tuple)):
@@ -1904,7 +1918,7 @@ class BitMarModel(nn.Module):
                         robot_labels_device = self._current_robot_labels
                     
                     robot_reasoning_loss = self.robot_reasoning_integration.compute_reasoning_loss(
-                        outputs={'fused_features': fused_features},
+                        outputs={'fused_features': fused_features.to(device)},  # Ensure device consistency
                         robot_labels=robot_labels_device
                     )
 

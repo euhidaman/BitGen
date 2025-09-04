@@ -54,10 +54,11 @@ model:
   num_fiber_layers: 6 # Total FIBER transformer layers
   fiber_dropout: 0.1 # Dropout for FIBER layers
   
-  # FIBER Loss Objectives (ITC + ITM + MLM)
-  alpha_itc: 1.0 # Image-Text Contrastive loss weight
-  alpha_itm: 1.0 # Image-Text Matching loss weight  
-  alpha_mlm: 1.0 # Masked Language Modeling loss weight
+  # FIBER Loss Objectives (ITC + ITM + MLM) - Reduced for stability
+  alpha_itc: 0.3 # Image-Text Contrastive loss weight (reduced from 1.0)
+  alpha_itm: 0.3 # Image-Text Matching loss weight (reduced from 1.0)
+  alpha_mlm: 0.2 # Masked Language Modeling loss weight (reduced from 1.0)
+  fiber_loss_scale: 0.1 # Overall FIBER loss scaling factor for stability
   
   # FIBER Contrastive Learning
   fiber_temperature: 0.07 # Temperature for contrastive learning
