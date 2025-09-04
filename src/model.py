@@ -183,25 +183,42 @@ class BitNetAttention(nn.Module):
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
 
         if mask is not None:
-            # Handle mask shape: expand to match attention scores shape
-            if mask.dim() == 2:  # [batch_size, seq_len]
-                mask = mask.unsqueeze(1).unsqueeze(1)  # [batch_size, 1, 1, seq_len]
-            elif mask.dim() == 3:  # [batch_size, seq_len, seq_len]
-                mask = mask.unsqueeze(1)  # [batch_size, 1, seq_len, seq_len]
-
-            # Expand mask to match attention scores shape [batch_size, num_heads, seq_len, key_seq_len]
-            if mask.size(-1) != key_seq_len:
-                # Adjust mask if needed
-                if mask.size(-1) == seq_len:
-                    # Pad or trim mask to match key_seq_len
-                    if key_seq_len > seq_len:
-                        pad_size = key_seq_len - seq_len
-                        mask = torch.cat([mask, torch.zeros(*mask.shape[:-1], pad_size, device=mask.device, dtype=mask.dtype)], dim=-1)
-                    else:
-                        mask = mask[..., :key_seq_len]
+            # Handle mask shape properly to avoid dimension mismatches
+            # mask should be [batch_size, 1, 1, seq_len] from encoder
             
+            # Ensure mask is 4D for attention scores [batch_size, num_heads, seq_len, key_seq_len]
+            if mask.dim() == 2:  # [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
+                mask = mask.unsqueeze(1).unsqueeze(1)
+            elif mask.dim() == 3:  # [batch_size, seq_len, seq_len] -> [batch_size, 1, seq_len, seq_len]  
+                mask = mask.unsqueeze(1)
+            elif mask.dim() == 4 and mask.size(1) == 1 and mask.size(2) == 1:
+                # Already correct shape [batch_size, 1, 1, seq_len], but ensure last dim matches
+                pass
+                
+            # Ensure the mask dimensions are compatible with attention scores
+            target_shape = (batch_size, 1, seq_len, key_seq_len)
+            
+            # Handle sequence length mismatch
+            if mask.size(-1) != key_seq_len:
+                if mask.size(-1) == seq_len and key_seq_len == seq_len:
+                    # Same sequence lengths, just ensure proper broadcasting
+                    pass
+                else:
+                    # Create a new mask with proper dimensions
+                    new_mask = torch.ones(target_shape, device=mask.device, dtype=mask.dtype)
+                    # Copy over the valid positions
+                    min_len = min(mask.size(-1), key_seq_len)
+                    if mask.size(-2) == 1:  # padding mask
+                        new_mask[..., :min_len] = mask[..., :min_len]
+                    else:  # attention mask
+                        new_mask[..., :min_len, :min_len] = mask[..., :min_len, :min_len]
+                    mask = new_mask
+            
+            # Expand to all heads: [batch_size, 1, seq_len, key_seq_len] -> [batch_size, num_heads, seq_len, key_seq_len]
             mask = mask.expand(batch_size, self.num_heads, seq_len, key_seq_len)
-            attention_scores.masked_fill_(mask == 0, float('-inf'))
+            
+            # Apply mask (0 means mask out, 1 means keep)
+            attention_scores = attention_scores.masked_fill(mask == 0, float('-inf'))
 
         attention_weights = F.softmax(attention_scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
@@ -386,8 +403,21 @@ class BitNetTextDecoder(nn.Module):
         # Create causal mask
         causal_mask = self.causal_mask[:, :, :seq_len, :seq_len]
         if attention_mask is not None:
-            # Combine causal mask with padding mask
-            mask = attention_mask.unsqueeze(1).unsqueeze(2) * causal_mask
+            # Ensure attention_mask is properly shaped [batch_size, seq_len]
+            if attention_mask.dim() != 2:
+                raise ValueError(f"attention_mask should be 2D, got {attention_mask.dim()}D: {attention_mask.shape}")
+            if attention_mask.shape != (batch_size, seq_len):
+                raise ValueError(f"attention_mask shape {attention_mask.shape} doesn't match input shape ({batch_size}, {seq_len})")
+                
+            # Expand attention mask to 4D: [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
+            expanded_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            
+            # Combine with causal mask: both should be [batch_size, 1, seq_len, seq_len]
+            # Expand attention mask to match causal mask shape
+            expanded_attention_mask = expanded_attention_mask.expand(batch_size, 1, seq_len, seq_len)
+            
+            # Element-wise multiplication
+            mask = expanded_attention_mask * causal_mask
         else:
             mask = causal_mask
 
