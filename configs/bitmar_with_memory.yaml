@@ -3,7 +3,7 @@
 
 model:
   # Robot Reasoning Configuration (similar to deepseek-r1's structured reasoning)
-  enable_robot_reasoning: true # Enable robot selection reasoning capabilities
+  enable_robot_reasoning: false # TEMPORARILY DISABLED for faster training
   robot_data_dir: "../robot_selection_data/data" # Path to robot selection data
 
   # Robot reasoning specific settings
@@ -12,7 +12,7 @@ model:
   enable_multi_robot_coordination: true # Support multi-robot task decomposition
 
   # GRPO Configuration (Group Relative Policy Optimization) for robot reasoning
-  enable_grpo_training: true # Enable policy optimization for robot selection
+  enable_grpo_training: false # TEMPORARILY DISABLED for faster training
   grpo_num_generations: 6 # Generate 6 completions per prompt for policy optimization
   grpo_alpha: 0.01 # GRPO regularization strength
   grpo_temperature: 0.8 # Generation temperature for policy sampling

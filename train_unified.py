@@ -1268,8 +1268,8 @@ class UnifiedBitMarTrainer:
                 
                 self._data_verification_count += 1
                 
-                # Verify data quality every 100 batches
-                if self._data_verification_count % 100 == 0:
+                # Verify data quality every 500 batches (reduced from 100 for speed)
+                if self._data_verification_count % 500 == 0:
                     print(f"\n🔍 DATA QUALITY VERIFICATION [Batch {batch_idx}, Step {self.global_step}]:")
                     
                     # Check vision features
@@ -1413,8 +1413,8 @@ class UnifiedBitMarTrainer:
                     
                     self._attention_analysis_count += 1
                     
-                    # Analyze attention patterns every 50 steps to verify learning
-                    if self._attention_analysis_count % 50 == 0 and 'fiber_attention_weights' in outputs:
+                    # Analyze attention patterns every 200 steps to verify learning (reduced from 50 for speed)
+                    if self._attention_analysis_count % 200 == 0 and 'fiber_attention_weights' in outputs:
                         print(f"\n🔍 CROSS-MODAL ATTENTION ANALYSIS [Step {self.global_step}]:")
                         
                         fiber_attn = outputs.get('fiber_attention_weights')
@@ -1633,8 +1633,8 @@ class UnifiedBitMarTrainer:
                 self._loss_history.append(current_loss)
                 self._lr_history.append(current_lr)
                 
-                # Show learning verification every 20 steps or first 5 steps
-                should_verify = (self._learning_verification_count <= 5 or self._learning_verification_count % 20 == 0)
+                # Show learning verification every 100 steps (reduced from 20 for speed)
+                should_verify = (self._learning_verification_count <= 5 or self._learning_verification_count % 100 == 0)
                 
                 if should_verify:
                     print(f"\n🔍 LEARNING VERIFICATION [Step {self.global_step}]:")
