@@ -737,30 +737,86 @@ class MultimodalDatasetDownloader:
                 ]
                 
                 for i, cmd in enumerate(aws_commands):
-                    logger.info(f"🔽 Downloading train_{i}.tar.gz (46GB each - 200K+ images total)")
-                    logger.info("⏱️ This may take 30-60 minutes but will give you proper dataset size")
+                    logger.info(f"🔽 Starting download of train_{i}.tar.gz (46GB each)")
+                    logger.info("⏱️ This may take 30-60 minutes - progress will be shown every 30 seconds")
                     
                     try:
-                        result = subprocess.run(cmd.split(), timeout=3600, capture_output=True, text=True)
-                        if result.returncode == 0:
-                            logger.info(f"✅ Downloaded train_{i}.tar.gz")
+                        # Start download with live output streaming
+                        process = subprocess.Popen(
+                            cmd.split(),
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            bufsize=1,
+                            universal_newlines=True
+                        )
+                        
+                        # Monitor progress with timeouts
+                        import time
+                        start_time = time.time()
+                        last_progress_time = start_time
+                        
+                        while True:
+                            # Check if process finished
+                            return_code = process.poll()
+                            if return_code is not None:
+                                break
                             
-                            # Extract the tar file
+                            # Show progress every 30 seconds
+                            current_time = time.time()
+                            if current_time - last_progress_time > 30:
+                                elapsed = current_time - start_time
+                                logger.info(f"📊 Still downloading train_{i}.tar.gz... {elapsed/60:.1f} minutes elapsed")
+                                
+                                # Check file size if it exists
+                                tar_file = oi_dir / f"train_{i}.tar.gz"
+                                if tar_file.exists():
+                                    size_gb = tar_file.stat().st_size / (1024**3)
+                                    logger.info(f"📁 Downloaded {size_gb:.1f} GB so far (target: ~46 GB)")
+                                
+                                last_progress_time = current_time
+                            
+                            # Check for timeout (1 hour)
+                            if current_time - start_time > 3600:
+                                logger.warning("⏰ Download taking too long (>1 hour), terminating...")
+                                process.terminate()
+                                break
+                            
+                            time.sleep(5)  # Check every 5 seconds
+                        
+                        # Get final result
+                        stdout, _ = process.communicate()
+                        
+                        if process.returncode == 0:
                             tar_file = oi_dir / f"train_{i}.tar.gz"
                             if tar_file.exists():
-                                logger.info(f"📦 Extracting train_{i}.tar.gz...")
+                                size_gb = tar_file.stat().st_size / (1024**3)
+                                logger.info(f"✅ Downloaded train_{i}.tar.gz ({size_gb:.1f} GB)")
+                                
+                                # Extract with progress
+                                logger.info(f"📦 Extracting train_{i}.tar.gz... (this may take 5-10 minutes)")
                                 import tarfile
+                                
                                 with tarfile.open(tar_file, 'r:gz') as tar:
-                                    tar.extractall(oi_dir)
+                                    members = tar.getmembers()
+                                    logger.info(f"🗂️ Extracting {len(members)} files...")
+                                    
+                                    for i_member, member in enumerate(members):
+                                        tar.extract(member, oi_dir)
+                                        if i_member % 1000 == 0:  # Progress every 1000 files
+                                            logger.info(f"📂 Extracted {i_member}/{len(members)} files...")
+                                
                                 tar_file.unlink()  # Remove tar file to save space
-                                logger.info(f"✅ Extracted train_{i}.tar.gz")
+                                logger.info(f"✅ Extracted train_{i}.tar.gz successfully!")
+                            else:
+                                logger.warning(f"❌ train_{i}.tar.gz not found after download")
                         else:
-                            logger.warning(f"AWS download had issues: {result.stderr}")
-                    except subprocess.TimeoutExpired:
-                        logger.warning("AWS download timed out after 1 hour")
-                        break
+                            logger.warning(f"❌ AWS download failed with return code {process.returncode}")
+                            if stdout:
+                                logger.warning(f"Error output: {stdout[-500:]}")  # Last 500 chars
+                            
                     except Exception as e:
-                        logger.warning(f"AWS download failed: {e}")
+                        logger.warning(f"❌ AWS download failed: {e}")
                         break
                 
                 # Count what we got from AWS
