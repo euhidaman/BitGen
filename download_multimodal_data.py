@@ -745,11 +745,16 @@ class MultimodalDatasetDownloader:
         # Download images based on IDs (only the needed ones)
         downloaded_count = 0
         existing_count = 0
+        failed_count = 0
 
         logger.info(
             f"🔍 Now downloading the {len(needed_ids)} missing images...")
 
-        for image_id in tqdm(needed_ids, desc="Downloading missing Open Images"):
+        for i, image_id in enumerate(tqdm(needed_ids, desc="Downloading missing Open Images")):
+            # Progress update every 1000 images
+            if i > 0 and i % 1000 == 0:
+                logger.info(f"Progress: {i}/{len(needed_ids)} - Downloaded: {downloaded_count}, Failed: {failed_count}")
+            
             if image_id in id_to_url:
                 image_url = id_to_url[image_id]
                 image_file = oi_dir / f"{image_id}.jpg"
@@ -767,16 +772,22 @@ class MultimodalDatasetDownloader:
                             f.write(response.content)
                         downloaded_count += 1
                     else:
-                        logger.debug(
-                            f"Failed to download {image_url}: {response.status_code}")
+                        logger.warning(
+                            f"Failed to download {image_url}: HTTP {response.status_code}")
+                        failed_count += 1
                 except Exception as e:
-                    logger.debug(f"Error downloading {image_url}: {e}")
+                    logger.warning(f"Error downloading {image_url}: {e}")
+                    failed_count += 1
+            else:
+                logger.warning(f"No URL found for image ID: {image_id}")
+                failed_count += 1
 
         total_existing = len(existing_ids)  # From pre-check
         logger.info(
-            f"✅ Found {total_existing} existing images, downloaded {downloaded_count} new images")
+            f"✅ Found {total_existing} existing images, downloaded {downloaded_count} new images, failed {failed_count}")
         logger.info(
             f"📊 Total images available: {total_existing + downloaded_count}")
+        logger.info(f"📊 Success rate: {downloaded_count}/{downloaded_count + failed_count} ({100*downloaded_count/(downloaded_count + failed_count) if (downloaded_count + failed_count) > 0 else 0:.1f}%)")
 
         return total_existing + downloaded_count
 
