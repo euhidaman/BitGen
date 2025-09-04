@@ -1409,6 +1409,19 @@ class UnifiedBitMarTrainer:
 
                 # Forward pass with detailed error tracking
                 try:
+                    # ONE-TIME DIAGNOSTIC: Verify all components are active
+                    if self.global_step == 1:
+                        logger.info("🔍 COMPONENT VERIFICATION:")
+                        logger.info(f"  • Input IDs shape: {batch['input_ids'].shape}")
+                        logger.info(f"  • Vision features shape: {batch['vision_features'].shape}")
+                        logger.info(f"  • Has vision: {batch.get('has_vision', 'Not set').sum() if torch.is_tensor(batch.get('has_vision')) else batch.get('has_vision')}")
+                        logger.info(f"  • Model components:")
+                        logger.info(f"    - BitNet quantization: {'✅' if hasattr(self.model.text_encoder.layers[0].attention, 'q_proj') and hasattr(self.model.text_encoder.layers[0].attention.q_proj, 'quantize_weights') else '❌'}")
+                        logger.info(f"    - FIBER fusion: {'✅' if hasattr(self.model, 'fiber_integration') else '❌'}")
+                        logger.info(f"    - Episodic memory: {'✅' if self.model.use_episodic_memory else '❌'}")
+                        logger.info(f"    - Robot reasoning: {'✅' if self.model.robot_reasoning_integration else '❌'}")
+                        logger.info(f"    - GRPO training: {'✅' if self.enable_grpo_training else '❌'}")
+
                     logger.debug(
                         f"Starting forward pass for step {self.global_step}")
                     outputs = self.model(
@@ -1421,6 +1434,19 @@ class UnifiedBitMarTrainer:
                             batch['input_ids'].size(0), dtype=torch.bool)),
                         adaptive_controller=self.adaptive_controller
                     )
+                    
+                    # ONE-TIME TIMING DIAGNOSTIC
+                    if self.global_step == 1:
+                        logger.info("🕐 FORWARD PASS COMPLETED - checking output structure:")
+                        if hasattr(outputs, 'fiber_losses') and outputs.fiber_losses:
+                            logger.info(f"  • FIBER losses present: {list(outputs.fiber_losses.keys())}")
+                        else:
+                            logger.warning("  • ❌ FIBER losses missing - FIBER may not be active!")
+                        
+                        if hasattr(outputs, 'memory_state'):
+                            logger.info(f"  • Memory state present: {outputs.memory_state is not None}")
+                        else:
+                            logger.warning("  • ❌ Memory state missing - Episodic memory may not be active!")
                     
                     # 🔍 ATTENTION PATTERN ANALYSIS - Verify cross-modal learning
                     if not hasattr(self, '_attention_analysis_count'):
