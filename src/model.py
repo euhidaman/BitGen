@@ -38,6 +38,10 @@ class BitNetLinear(nn.Module):
         self.register_buffer('weight_scale', torch.ones(1))
         self.register_buffer('input_scale', torch.ones(1))
 
+    def quantize_weights(self):
+        """Method for diagnostic detection"""
+        return self.quantize_weights_1_58_bit(self.weight)
+
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
         """BitNet b1.58 weight quantization: {-1, 0, +1}"""
         # Compute scaling factor with numerical stability
@@ -1953,10 +1957,12 @@ class BitMarModel(nn.Module):
             'enhanced_vision': enhanced_vision,  # FIBER-enhanced vision
             'fused_features': fused_features,   # FIBER-fused features
             'fiber_outputs': fiber_outputs,  # AUTHENTIC FIBER outputs with attention patterns and losses
+            'fiber_losses': fiber_losses_dict,  # FIBER losses for easy access
             'text_attention_patterns': text_attention_patterns,
             'decoder_attention_patterns': decoder_outputs['attention_patterns'],
             'episode': episode,
             'memory_output': memory_output,
+            'memory_state': memory_output,  # Add memory state for diagnostics
             'memory_attention_weights': memory_attention_weights,
             'loss_components': loss_dict,
             'fiber_config': self.fiber_config,
