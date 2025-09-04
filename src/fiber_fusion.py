@@ -295,13 +295,13 @@ class FIBERCrossModalLayer(nn.Module):
         self.text_dropout = nn.Dropout(hidden_dropout_prob)
 
     def transpose_for_scores(self, x):
-        print(f"🔍 transpose_for_scores input: {x.shape}")
+        # Debug: transpose_for_scores input: {x.shape}
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        print(f"🔍 new_x_shape: {new_x_shape}")
+        # Debug: new_x_shape: {new_x_shape}
         x = x.view(*new_x_shape)
-        print(f"🔍 after view: {x.shape}")
+        # Debug: after view: {x.shape}
         result = x.permute(0, 2, 1, 3)
-        print(f"🔍 transpose_for_scores output: {result.shape}")
+        # Debug: transpose_for_scores output: {result.shape}
         return result
 
     def forward(
@@ -324,28 +324,28 @@ class FIBERCrossModalLayer(nn.Module):
         Returns:
             Enhanced vision features, enhanced text features, and optionally attention weights
         """
-        print(f"🔍 FIBERCrossModalLayer - Starting forward")
-        print(f"🔍 Input shapes: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}")
+        # Debug: FIBERCrossModalLayer - Starting forward
+        # Debug: Input shapes: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}
         
         batch_size = vision_hidden_states.shape[0]
 
         # Vision attending to text
-        print(f"🔍 Vision-to-text attention - Starting")
+        # Debug: Vision-to-text attention - Starting
         
         try:
             vision_query_layer = self.transpose_for_scores(self.vision_to_text_query(vision_hidden_states))
             text_key_layer = self.transpose_for_scores(self.text_to_vision_key(text_hidden_states))
             text_value_layer = self.transpose_for_scores(self.text_to_vision_value(text_hidden_states))
-            print(f"🔍 V2T projections successful: query={vision_query_layer.shape}, key={text_key_layer.shape}, value={text_value_layer.shape}")
+            # Debug: V2T projections successful: query={vision_query_layer.shape}, key={text_key_layer.shape}, value={text_value_layer.shape}
         except Exception as e:
             print(f"❌ V2T projections failed: {e}")
             raise e
 
         # Compute vision-to-text attention scores
         try:
-            print(f"🔍 V2T attention matrix multiplication:")
-            print(f"   Vision query: {vision_query_layer.shape}")
-            print(f"   Text key transposed: {text_key_layer.transpose(-1, -2).shape}")
+            # Debug: V2T attention matrix multiplication:
+            # Debug: Vision query: {vision_query_layer.shape}
+            # Debug: Text key transposed: {text_key_layer.transpose(-1, -2).shape}
             
             # The issue: vision_query has different seq_len than text_key
             # vision_query: [batch, heads, vision_seq_len, head_dim]
@@ -355,7 +355,7 @@ class FIBERCrossModalLayer(nn.Module):
             
             v2t_attention_scores = torch.matmul(vision_query_layer, text_key_layer.transpose(-1, -2))
             v2t_attention_scores = v2t_attention_scores / math.sqrt(self.attention_head_size)
-            print(f"🔍 V2T attention scores computed successfully: {v2t_attention_scores.shape}")
+            # Debug: V2T attention scores computed successfully: {v2t_attention_scores.shape}
         except Exception as e:
             print(f"❌ V2T attention scores failed: {e}")
             print(f"   Vision query: {vision_query_layer.shape}")
@@ -367,7 +367,7 @@ class FIBERCrossModalLayer(nn.Module):
             raise e
 
         if text_attention_mask is not None:
-            print(f"🔍 Applying text attention mask: {text_attention_mask.shape}")
+            # Debug: Applying text attention mask: {text_attention_mask.shape}
             # Apply text attention mask to vision-to-text attention
             v2t_attention_scores = v2t_attention_scores + text_attention_mask.unsqueeze(1).unsqueeze(1)
 
@@ -380,28 +380,28 @@ class FIBERCrossModalLayer(nn.Module):
             v2t_context_layer = v2t_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = v2t_context_layer.size()[:-2] + (self.all_head_size,)
             v2t_context_layer = v2t_context_layer.view(*new_context_layer_shape)
-            print(f"🔍 V2T context layer computed: {v2t_context_layer.shape}")
+            # Debug: V2T context layer computed: {v2t_context_layer.shape}
         except Exception as e:
             print(f"❌ V2T context layer failed: {e}")
             raise e
 
         # Text attending to vision
-        print(f"🔍 Text-to-vision attention - Starting")
+        # Debug: Text-to-vision attention - Starting
         
         try:
             text_query_layer = self.transpose_for_scores(self.text_to_vision_query(text_hidden_states))
             vision_key_layer = self.transpose_for_scores(self.vision_to_text_key(vision_hidden_states))
             vision_value_layer = self.transpose_for_scores(self.vision_to_text_value(vision_hidden_states))
-            print(f"🔍 T2V projections successful: query={text_query_layer.shape}, key={vision_key_layer.shape}, value={vision_value_layer.shape}")
+            # Debug: T2V projections successful: query={text_query_layer.shape}, key={vision_key_layer.shape}, value={vision_value_layer.shape}
         except Exception as e:
             print(f"❌ T2V projections failed: {e}")
             raise e
 
         # Compute text-to-vision attention scores
         try:
-            print(f"🔍 T2V attention matrix multiplication:")
-            print(f"   Text query: {text_query_layer.shape}")
-            print(f"   Vision key transposed: {vision_key_layer.transpose(-1, -2).shape}")
+            # Debug: T2V attention matrix multiplication:
+            # Debug: Text query: {text_query_layer.shape}  
+            # Debug: Vision key transposed: {vision_key_layer.transpose(-1, -2).shape}
             
             # Same logic: text_query and vision_key can have different seq_lens
             # text_query: [batch, heads, text_seq_len, head_dim] 
@@ -410,7 +410,7 @@ class FIBERCrossModalLayer(nn.Module):
             
             t2v_attention_scores = torch.matmul(text_query_layer, vision_key_layer.transpose(-1, -2))
             t2v_attention_scores = t2v_attention_scores / math.sqrt(self.attention_head_size)
-            print(f"🔍 T2V attention scores computed successfully: {t2v_attention_scores.shape}")
+            # Debug: T2V attention scores computed successfully: {t2v_attention_scores.shape}
         except Exception as e:
             print(f"❌ T2V attention scores failed: {e}")
             print(f"   Text query: {text_query_layer.shape}")
@@ -422,7 +422,7 @@ class FIBERCrossModalLayer(nn.Module):
             raise e
 
         if vision_attention_mask is not None:
-            print(f"🔍 Applying vision attention mask: {vision_attention_mask.shape}")
+            # Debug: Applying vision attention mask: {vision_attention_mask.shape}
             # Apply vision attention mask to text-to-vision attention
             t2v_attention_scores = t2v_attention_scores + vision_attention_mask.unsqueeze(1).unsqueeze(1)
 
@@ -435,19 +435,19 @@ class FIBERCrossModalLayer(nn.Module):
             t2v_context_layer = t2v_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = t2v_context_layer.size()[:-2] + (self.all_head_size,)
             t2v_context_layer = t2v_context_layer.view(*new_context_layer_shape)
-            print(f"🔍 T2V context layer computed: {t2v_context_layer.shape}")
+            # Debug: T2V context layer computed: {t2v_context_layer.shape}
         except Exception as e:
             print(f"❌ T2V context layer failed: {e}")
             raise e
 
         # Apply output transformations and residual connections
-        print(f"🔍 Applying output transformations")
+        # Debug: Applying output transformations
         
         try:
             enhanced_vision = self.vision_output(v2t_context_layer)
             enhanced_vision = self.vision_dropout(enhanced_vision)
             enhanced_vision = self.vision_LayerNorm(enhanced_vision + vision_hidden_states)
-            print(f"🔍 Enhanced vision computed: {enhanced_vision.shape}")
+            # Debug: Enhanced vision computed: {enhanced_vision.shape}
         except Exception as e:
             print(f"❌ Enhanced vision computation failed: {e}")
             print(f"   V2T context: {v2t_context_layer.shape}")
@@ -458,7 +458,7 @@ class FIBERCrossModalLayer(nn.Module):
             enhanced_text = self.text_output(t2v_context_layer)
             enhanced_text = self.text_dropout(enhanced_text)
             enhanced_text = self.text_LayerNorm(enhanced_text + text_hidden_states)
-            print(f"🔍 Enhanced text computed: {enhanced_text.shape}")
+            # Debug: Enhanced text computed: {enhanced_text.shape}
         except Exception as e:
             print(f"❌ Enhanced text computation failed: {e}")
             print(f"   T2V context: {t2v_context_layer.shape}")
@@ -469,7 +469,7 @@ class FIBERCrossModalLayer(nn.Module):
         if output_attentions:
             outputs += (v2t_attention_probs, t2v_attention_probs)
 
-        print(f"🔍 FIBERCrossModalLayer - Forward completed successfully")
+        # Debug: FIBERCrossModalLayer - Forward completed successfully
         return outputs
 
 
@@ -550,33 +550,33 @@ class FIBERTransformerBlock(nn.Module):
         Returns:
             Enhanced vision and text hidden states, attention patterns
         """
-        print(f"🔍 FIBERTransformerBlock - Starting forward")
-        print(f"🔍 Input shapes: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}")
+        # Debug: FIBERTransformerBlock - Starting forward
+        # Debug: Input shapes: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}
         
         attention_outputs = {}
 
         # Self-attention for vision
-        print(f"🔍 Vision self-attention - Starting")
+        # Debug: Vision self-attention - Starting
         vision_normed = self.vision_norm1(vision_hidden_states)
-        print(f"🔍 Vision normed shape: {vision_normed.shape}")
+        # Debug: Vision normed shape: {vision_normed.shape}
         
         # Handle vision attention mask - ensure it matches vision sequence length
         vision_key_padding_mask = None
         if vision_attention_mask is not None:
-            print(f"🔍 Vision attention mask original shape: {vision_attention_mask.shape}")
+            # Debug removed
             # Ensure vision_attention_mask has the right shape for vision sequence
             vision_seq_len = vision_hidden_states.shape[1]
             if vision_attention_mask.shape[1] != vision_seq_len:
-                print(f"🔍 Vision mask shape mismatch: mask={vision_attention_mask.shape[1]}, seq_len={vision_seq_len}")
+                # Debug removed
                 # Create appropriate mask for vision sequence length
                 vision_key_padding_mask = torch.zeros(
                     vision_hidden_states.shape[0], vision_seq_len,
                     dtype=torch.bool, device=vision_hidden_states.device
                 )
-                print(f"🔍 Created new vision key padding mask: {vision_key_padding_mask.shape}")
+                # Debug removed
             else:
                 vision_key_padding_mask = ~vision_attention_mask
-                print(f"🔍 Using inverted vision attention mask: {vision_key_padding_mask.shape}")
+                # Debug removed
         
         try:
             vision_self_output, vision_self_weights = self.vision_attention(
@@ -584,7 +584,7 @@ class FIBERTransformerBlock(nn.Module):
                 key_padding_mask=vision_key_padding_mask,
                 need_weights=output_attentions
             )
-            print(f"🔍 Vision self-attention successful: {vision_self_output.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ Vision self-attention failed: {e}")
             print(f"   Vision normed shape: {vision_normed.shape}")
@@ -596,21 +596,21 @@ class FIBERTransformerBlock(nn.Module):
             attention_outputs['vision_self_attention'] = vision_self_weights
 
         # Self-attention for text
-        print(f"🔍 Text self-attention - Starting")
+        # Debug removed
         text_normed = self.text_norm1(text_hidden_states)
-        print(f"🔍 Text normed shape: {text_normed.shape}")
+        # Debug removed
         
         # Handle text attention mask - ensure dimensions are correct
         text_key_padding_mask = None
         if text_attention_mask is not None:
-            print(f"🔍 Text attention mask shape: {text_attention_mask.shape}")
-            print(f"🔍 Text hidden states shape: {text_hidden_states.shape[:2]}")
+            # Debug removed
+            # Debug removed
             # text_attention_mask should be [batch_size, seq_len]
             if text_attention_mask.shape != text_hidden_states.shape[:2]:
                 print(f"❌ Text attention mask shape mismatch!")
                 raise ValueError(f"Text attention mask shape {text_attention_mask.shape} doesn't match text features {text_hidden_states.shape[:2]}")
             text_key_padding_mask = ~text_attention_mask
-            print(f"🔍 Text key padding mask shape: {text_key_padding_mask.shape}")
+            # Debug removed
             
         try:
             text_self_output, text_self_weights = self.text_attention(
@@ -618,7 +618,7 @@ class FIBERTransformerBlock(nn.Module):
                 key_padding_mask=text_key_padding_mask,
                 need_weights=output_attentions
             )
-            print(f"🔍 Text self-attention successful: {text_self_output.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ Text self-attention failed: {e}")
             print(f"   Text normed shape: {text_normed.shape}")
@@ -630,10 +630,10 @@ class FIBERTransformerBlock(nn.Module):
             attention_outputs['text_self_attention'] = text_self_weights
 
         # Cross-modal attention (FIBER's core innovation)
-        print(f"🔍 Cross-modal attention - Starting")
+        # Debug removed
         if self.enable_cross_modal:
-            print(f"🔍 Cross-modal enabled, calling cross_modal_layer")
-            print(f"🔍 Before cross-modal: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}")
+            # Debug removed
+            # Debug removed
             
             try:
                 cross_modal_outputs = self.cross_modal_layer(
@@ -643,7 +643,7 @@ class FIBERTransformerBlock(nn.Module):
                     text_attention_mask=text_attention_mask,
                     output_attentions=output_attentions
                 )
-                print(f"🔍 Cross-modal layer successful")
+                # Debug removed
             except Exception as e:
                 print(f"❌ Cross-modal layer failed: {e}")
                 print(f"   Vision input shape: {vision_hidden_states.shape}")
@@ -652,39 +652,39 @@ class FIBERTransformerBlock(nn.Module):
 
             vision_hidden_states = cross_modal_outputs[0]
             text_hidden_states = cross_modal_outputs[1]
-            print(f"🔍 After cross-modal: vision={vision_hidden_states.shape}, text={text_hidden_states.shape}")
+            # Debug removed
 
             if output_attentions:
                 attention_outputs['vision_to_text_attention'] = cross_modal_outputs[2]
                 attention_outputs['text_to_vision_attention'] = cross_modal_outputs[3]
 
         # Feed-forward for vision
-        print(f"🔍 Vision feed-forward - Starting")
+        # Debug removed
         try:
             vision_intermediate_output = self.vision_intermediate(vision_hidden_states)
             vision_intermediate_output = self.activation(vision_intermediate_output)
             vision_layer_output = self.vision_output(vision_intermediate_output)
             vision_layer_output = self.dropout(vision_layer_output)
             vision_hidden_states = self.vision_norm2(vision_layer_output + vision_hidden_states)
-            print(f"🔍 Vision feed-forward successful: {vision_hidden_states.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ Vision feed-forward failed: {e}")
             raise e
 
         # Feed-forward for text
-        print(f"🔍 Text feed-forward - Starting")
+        # Debug removed
         try:
             text_intermediate_output = self.text_intermediate(text_hidden_states)
             text_intermediate_output = self.activation(text_intermediate_output)
             text_layer_output = self.text_output(text_intermediate_output)
             text_layer_output = self.dropout(text_layer_output)
             text_hidden_states = self.text_norm2(text_layer_output + text_hidden_states)
-            print(f"🔍 Text feed-forward successful: {text_hidden_states.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ Text feed-forward failed: {e}")
             raise e
 
-        print(f"🔍 FIBERTransformerBlock - Forward completed successfully")
+        # Debug removed
         return vision_hidden_states, text_hidden_states, attention_outputs
 
 
@@ -815,8 +815,8 @@ class FIBERFusion(nn.Module):
 
         # Pass through FIBER transformer layers
         for layer_idx, layer in enumerate(self.layers):
-            print(f"🔍 FIBER Layer {layer_idx} - Starting")
-            print(f"🔍 FIBER Layer {layer_idx} - Input shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+            # Debug removed
+            # Debug removed
             # FIBER Layer {layer_idx} processing...
             try:
                 vision_hidden, text_hidden, attention_patterns = layer(
@@ -826,7 +826,7 @@ class FIBERFusion(nn.Module):
                     text_attention_mask=text_attention_mask,
                     output_attentions=output_attentions
                 )
-                print(f"🔍 FIBER Layer {layer_idx} - Output shapes: vision={vision_hidden.shape}, text={text_hidden.shape}")
+                # Debug removed
                 # FIBER Layer {layer_idx} completed
             except Exception as e:
                 print(f"❌ FIBER Layer {layer_idx} failed: {e}")
@@ -846,29 +846,29 @@ class FIBERFusion(nn.Module):
                     if key in all_attention_patterns:
                         all_attention_patterns[key].append(value)
 
-        print(f"🔍 FIBER - All layers completed, starting final processing")
+        # Debug removed
 
         # Final normalization
-        print(f"🔍 FIBER - Final normalization")
+        # Debug removed
         try:
             vision_hidden = self.vision_final_norm(vision_hidden)
             text_hidden = self.text_final_norm(text_hidden)
-            print(f"🔍 FIBER - Final norm successful: vision={vision_hidden.shape}, text={text_hidden.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ FIBER - Final normalization failed: {e}")
             raise e
 
         # Output projections
-        print(f"🔍 FIBER - Output projections")
+        # Debug removed
         try:
             enhanced_vision = self.vision_output_projection(vision_hidden)
             enhanced_text = self.text_output_projection(text_hidden)
-            print(f"🔍 FIBER - Output projection successful: vision={enhanced_vision.shape}, text={enhanced_text.shape}")
+            # Debug removed
         except Exception as e:
             print(f"❌ FIBER - Output projection failed: {e}")
             raise e
 
-        print(f"🔍 FIBER - Forward pass completed successfully")
+        # Debug removed
         return enhanced_text, enhanced_vision, all_attention_patterns
 
 

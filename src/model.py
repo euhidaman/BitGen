@@ -337,20 +337,20 @@ class BitNetTextEncoder(nn.Module):
                 # Create a mask where 1 means attend, 0 means don't attend
                 layer_mask = attention_mask.unsqueeze(
                     1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
-                print(f"🔍 DEBUG: Text encoder layer {i} - layer_mask shape: {layer_mask.shape}")
+                # Debug removed
 
             try:
                 x, attn_weights = layer(x, layer_mask)
-                print(f"🔍 DEBUG: Text encoder layer {i} - output shape: {x.shape}")
+                # Debug removed
                 attention_patterns.append(attn_weights)
             except Exception as e:
-                print(f"❌ DEBUG: Text encoder layer {i} failed: {e}")
+                # Debug removed
                 print(f"   Input shape: {x.shape}")
                 print(f"   Mask shape: {layer_mask.shape if layer_mask is not None else None}")
                 raise e
 
         x = self.norm(x)
-        print(f"🔍 DEBUG: Text encoder - final shape: {x.shape}")
+        # Debug removed
         return x, attention_patterns
 
 
@@ -1495,7 +1495,7 @@ class BitMarModel(nn.Module):
         should_debug = (self._loss_debug_count <= 5 or self._loss_debug_count % 200 == 0)
         
         if should_debug:
-            print(f"🔍 LEARNING VERIFICATION [Step {self._loss_debug_count}]:")
+            # Debug removed
             print(f"   Decoder loss: {decoder_loss.item():.6f}" if decoder_loss is not None else "   Decoder loss: None")
             print(f"   Cross-modal loss: {cross_modal_loss.item():.6f}" if cross_modal_loss is not None else "   Cross-modal loss: None")
             
@@ -1675,8 +1675,8 @@ class BitMarModel(nn.Module):
         self.freeze_encoders_conditionally(step)
 
         # 1. Encode text using BitNet encoder
-        print(f"🔍 DEBUG: Starting forward pass")
-        print(f"🔍 DEBUG: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
+        # Debug removed
+        # Debug removed
         
         # 🔍 DATA DIAGNOSTIC: Check if we're seeing different data
         if hasattr(self, '_last_input_hash'):
@@ -1692,31 +1692,31 @@ class BitMarModel(nn.Module):
         
         # Check input data properties
         unique_tokens = torch.unique(input_ids).numel()
-        print(f"🔍 DATA: Unique tokens in batch: {unique_tokens}, Total tokens: {input_ids.numel()}")
+        # Debug removed
         logger.debug(f"🔍 Debug: Input shapes - input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}")
         
         try:
             text_features, text_attention_patterns = self.encode_text(input_ids, attention_mask)
-            print(f"🔍 DEBUG: Text encoding successful - shape: {text_features.shape}")
+            # Debug removed
             logger.debug(f"🔍 Debug: Text features shape: {text_features.shape}")
         except Exception as e:
-            print(f"❌ DEBUG: Text encoding failed: {e}")
+            # Debug removed
             raise e
 
         # 2. Encode vision using quantized vision encoder
-        print(f"🔍 DEBUG: Vision input shape: {vision_features.shape}")
+        # Debug removed
         logger.debug(f"🔍 Debug: Vision input shape: {vision_features.shape}")
         
         try:
             vision_latent = self.encode_vision(vision_features)
-            print(f"🔍 DEBUG: Vision encoding successful - shape: {vision_latent.shape}")
+            # Debug removed
             logger.debug(f"🔍 Debug: Vision latent shape: {vision_latent.shape}")
         except Exception as e:
-            print(f"❌ DEBUG: Vision encoding failed: {e}")
+            # Debug removed
             raise e
 
         # 3. AUTHENTIC FIBER-enhanced cross-modal fusion with proper loss objectives
-        print(f"🔍 DEBUG: Starting AUTHENTIC FIBER fusion")
+        # Debug removed
         logger.debug(f"🔄 Applying AUTHENTIC FIBER fusion - Text: {text_features.shape}, Vision: {vision_latent.shape}")
 
         try:
@@ -1729,10 +1729,10 @@ class BitMarModel(nn.Module):
                 labels=labels,
                 compute_losses=True  # Enable FIBER loss computation
             )
-            print(f"🔍 DEBUG: FIBER fusion successful - shape: {fused_features.shape}")
+            # Debug removed
             logger.debug(f"✅ FIBER fusion completed - Output: {fused_features.shape}")
         except Exception as e:
-            print(f"❌ DEBUG: FIBER fusion failed: {e}")
+            # Debug removed
             print(f"   Text features: {text_features.shape}")
             print(f"   Vision latent: {vision_latent.shape}")
             print(f"   Attention mask: {attention_mask.shape}")
@@ -1772,34 +1772,34 @@ class BitMarModel(nn.Module):
         memory_attention_weights = None
         episode = None
 
-        print(f"🔍 DEBUG: Starting episodic memory processing")
+        # Debug removed
         if self.use_episodic_memory:
-            print(f"🔍 DEBUG: Creating episode")
+            # Debug removed
             try:
                 # Create multimodal episode using FIBER outputs
                 episode = self.create_episode(
                     text_features, vision_latent, fiber_outputs)
-                print(f"🔍 DEBUG: Episode created successfully - shape: {episode.shape}")
+                # Debug removed
             except Exception as e:
-                print(f"❌ DEBUG: Episode creation failed: {e}")
+                # Debug removed
                 raise e
 
-            print(f"🔍 DEBUG: Starting memory read-write operation")
+            # Debug removed
             try:
                 # Memory read-write operation
                 memory_output, memory_attention_weights = self.memory(episode)
-                print(f"🔍 DEBUG: Memory operation successful")
+                # Debug removed
             except Exception as e:
-                print(f"❌ DEBUG: Memory operation failed: {e}")
+                # Debug removed
                 print(f"   Episode shape: {episode.shape}")
                 print(f"   Memory size: {self.memory.memory_size}")
                 print(f"   Episode dim: {self.memory.episode_dim}")
                 raise e
 
-            print(f"🔍 DEBUG: Starting memory projection for decoder")
+            # Debug removed
             try:
                 # Project memory output for decoder - Larimar-style integration
-                print(f"🔍 DEBUG: Memory output raw shape: {memory_output.shape}")
+                # Debug removed
                 
                 # Instead of expanding to sequence length, integrate memory at the latent level
                 # Following Larimar's approach: memory enhances the latent representation
@@ -1810,45 +1810,45 @@ class BitMarModel(nn.Module):
                 
                 # Pool fused features to get a single representation per batch item
                 fused_pooled = torch.mean(fused_features, dim=1)  # [batch, hidden_dim]
-                print(f"🔍 DEBUG: Fused pooled shape: {fused_pooled.shape}")
+                # Debug removed
                 
                 # Combine pooled features with memory output
                 if memory_output.shape == fused_pooled.shape:
                     memory_combined = memory_output + fused_pooled
-                    print(f"🔍 DEBUG: Memory combined shape: {memory_combined.shape}")
+                    # Debug removed
                 else:
                     # Project to matching dimensions
                     memory_proj = self.memory_to_decoder(memory_output)  
-                    print(f"🔍 DEBUG: Memory projected shape: {memory_proj.shape}")
+                    # Debug removed
                     memory_combined = memory_proj + fused_pooled
-                    print(f"🔍 DEBUG: Memory combined shape: {memory_combined.shape}")
+                    # Debug removed
                 
                 # Broadcast the combined representation to all sequence positions
                 memory_broadcast = memory_combined.unsqueeze(1).expand(-1, fused_features.size(1), -1)
-                print(f"🔍 DEBUG: Memory broadcast shape: {memory_broadcast.shape}")
+                # Debug removed
                 
                 # Create decoder input by adding memory to fused features
                 decoder_input = self.decoder_input_proj(fused_features) + memory_broadcast
-                print(f"🔍 DEBUG: Decoder input creation successful - shape: {decoder_input.shape}")
+                # Debug removed
                 
             except Exception as e:
-                print(f"❌ DEBUG: Memory projection failed: {e}")
+                # Debug removed
                 print(f"   Memory output shape: {memory_output.shape}")
                 print(f"   Fused features shape: {fused_features.shape}")
                 import traceback
                 traceback.print_exc()
                 raise e
         else:
-            print(f"🔍 DEBUG: Using direct fusion (no memory)")
+            # Debug removed
             # Direct fusion to decoder (no memory)
             decoder_input = self.direct_fusion_proj(fused_features)
-            print(f"🔍 DEBUG: Direct fusion successful - shape: {decoder_input.shape}")
+            # Debug removed
 
         # 5. Generate text using BitNet decoder
-        print(f"🔍 DEBUG: Starting text decoder")
-        print(f"🔍 DEBUG: Decoder input shape: {decoder_input.shape}")
-        print(f"🔍 DEBUG: Attention mask shape: {attention_mask.shape}")
-        print(f"🔍 DEBUG: Labels shape: {labels.shape if labels is not None else None}")
+        # Debug removed
+        # Debug removed
+        # Debug removed
+        # Debug removed
         
         try:
             decoder_outputs = self.text_decoder(
@@ -1856,9 +1856,9 @@ class BitMarModel(nn.Module):
                 attention_mask=attention_mask,
                 labels=labels
             )
-            print(f"🔍 DEBUG: Text decoder successful")
+            # Debug removed
         except Exception as e:
-            print(f"❌ DEBUG: Text decoder failed: {e}")
+            # Debug removed
             print(f"   Decoder input shape: {decoder_input.shape}")
             print(f"   Attention mask shape: {attention_mask.shape}")
             print(f"   Labels shape: {labels.shape if labels is not None else None}")
@@ -1968,7 +1968,7 @@ class BitMarModel(nn.Module):
         }
         
         # 🔍 LEARNING DIAGNOSTIC: Check if model is actually learning
-        print(f"🔍 LEARNING DIAGNOSTIC:")
+        # Debug removed
         print(f"   Total loss: {loss_dict['total_loss'].item():.6f}")
         print(f"   Loss requires_grad: {loss_dict['total_loss'].requires_grad}")
         if 'decoder_loss' in loss_dict and loss_dict['decoder_loss'] is not None:
@@ -2029,7 +2029,7 @@ class BitMarModel(nn.Module):
             total_grad_norm = (total_grad_norm ** 0.5)
             total_param_norm = (total_param_norm ** 0.5)
             
-            print(f"🔍 GRADIENT FLOW VERIFICATION [Step {self._debug_step_count}]:")
+            # Debug removed
             print(f"   Parameters: {param_count} total, {grad_count} with gradients ({grad_count/param_count*100:.1f}%)")
             print(f"   Total gradient norm: {total_grad_norm:.6f}")
             print(f"   Total parameter norm: {total_param_norm:.6f}")
