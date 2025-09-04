@@ -609,10 +609,14 @@ class RobotReasoningIntegration:
 
         self.robot_selection_head = RobotSelectionHead(hidden_dim)
 
+        # Ensure robot selection head is on the same device as the model
+        device = next(model.parameters()).device
+        self.robot_selection_head = self.robot_selection_head.to(device)
+
         # Add to model
         if not hasattr(model, 'robot_reasoning'):
             model.robot_reasoning = self.robot_selection_head
-            logger.info("✅ Robot reasoning head integrated into BitGen model")
+            logger.info(f"✅ Robot reasoning head integrated into BitGen model (device: {device})")
 
     def prepare_robot_reasoning_training_data(self) -> Dict:
         """Prepare robot reasoning data for training (following deepseek-r1's data preparation)"""

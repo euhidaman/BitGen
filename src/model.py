@@ -1617,7 +1617,7 @@ class BitMarModel(nn.Module):
             total_loss += robot_reasoning_scale * robot_reasoning_loss
 
         # NEW: Add FIBER losses to total loss with reduced scale for stability
-        fiber_scale = config.get('fiber_loss_scale', 0.1)  # Reduced from 1.0 for stability
+        fiber_scale = self.config.get('fiber_loss_scale', 0.1)  # Fixed: use self.config instead of config
         if fiber_losses is not None and fiber_losses.get('fiber_total_loss') is not None:
             total_loss += fiber_scale * fiber_losses['fiber_total_loss']
 
@@ -1908,18 +1908,10 @@ class BitMarModel(nn.Module):
 
                 # Compute robot selection loss if labels are provided and this is a reasoning batch
                 if hasattr(self, '_current_robot_labels') and self._current_robot_labels:
-                    # Ensure robot labels are on the correct device
-                    if isinstance(self._current_robot_labels, torch.Tensor):
-                        robot_labels_device = self._current_robot_labels.to(device)
-                    elif isinstance(self._current_robot_labels, (list, tuple)):
-                        # Convert list to tensor and move to device
-                        robot_labels_device = torch.tensor(self._current_robot_labels, device=device)
-                    else:
-                        robot_labels_device = self._current_robot_labels
-                    
+                    # Robot labels are strings, so we can pass them directly
                     robot_reasoning_loss = self.robot_reasoning_integration.compute_reasoning_loss(
                         outputs={'fused_features': fused_features.to(device)},  # Ensure device consistency
-                        robot_labels=robot_labels_device
+                        robot_labels=self._current_robot_labels  # Keep as strings
                     )
 
             except Exception as e:
