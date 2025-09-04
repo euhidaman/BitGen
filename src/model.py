@@ -1926,7 +1926,7 @@ class BitMarModel(nn.Module):
             self._param_norms_history = []
             self._grad_norms_history = []
             
-        should_debug = (self._debug_step_count <= 10 or self._debug_step_count % 200 == 0)  # Reduced from 50 for speed
+        should_debug = (self._debug_step_count <= 10 or self._debug_step_count % 50 == 0)
         
         if should_debug:  # Show first 10 steps and every 50 steps for monitoring
             param_count = 0
