@@ -1416,7 +1416,7 @@ class UnifiedBitMarTrainer:
                         logger.info(f"  • Vision features shape: {batch['vision_features'].shape}")
                         logger.info(f"  • Has vision: {batch.get('has_vision', 'Not set').sum() if torch.is_tensor(batch.get('has_vision')) else batch.get('has_vision')}")
                         logger.info(f"  • Model components:")
-                        logger.info(f"    - BitNet quantization: {'✅' if hasattr(self.model.text_encoder.layers[0].attention, 'q_proj') and hasattr(self.model.text_encoder.layers[0].attention.q_proj, 'quantize_weights') else '❌'}")
+                        logger.info(f"    - BitNet quantization: {'✅' if hasattr(self.model.text_encoder.layers[0], 'attn') and hasattr(self.model.text_encoder.layers[0].attn, 'q_proj') and hasattr(self.model.text_encoder.layers[0].attn.q_proj, 'quantize_weights') else '❌'}")
                         logger.info(f"    - FIBER fusion: {'✅' if hasattr(self.model, 'fiber_integration') else '❌'}")
                         logger.info(f"    - Episodic memory: {'✅' if self.model.use_episodic_memory else '❌'}")
                         logger.info(f"    - Robot reasoning: {'✅' if self.model.robot_reasoning_integration else '❌'}")
