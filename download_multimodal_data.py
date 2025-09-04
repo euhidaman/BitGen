@@ -14,6 +14,10 @@ import gzip
 import subprocess
 import time
 import shutil
+import hashlib
+import pickle
+import io
+import numpy as np
 from pathlib import Path
 import logging
 from tqdm import tqdm
@@ -1663,6 +1667,343 @@ def main():
         return 1
 
     return 0
+
+
+def download_first_two_shards_with_features(data_dir: str = "./data", 
+                                           max_samples: int = 200000,
+                                           use_gpu: bool = True) -> Dict[str, any]:
+    """
+    Simple function to download first two OpenImages shards, extract images,
+    align with captions, and extract DiNOv2 features.
+    
+    Args:
+        data_dir: Directory to store data
+        max_samples: Maximum number of caption-image pairs to process
+        use_gpu: Whether to use GPU for DiNOv2 feature extraction
+    
+    Returns:
+        Dictionary with statistics and paths
+    """
+    import subprocess
+    import tarfile
+    import time
+    import json
+    import hashlib
+    import pickle
+    import numpy as np
+    from pathlib import Path
+    
+    logger.info(f"🚀 Starting download of first two OpenImages shards with DiNOv2 features")
+    logger.info(f"   Target: {max_samples:,} caption-image pairs")
+    logger.info(f"   Data directory: {data_dir}")
+    
+    data_path = Path(data_dir)
+    data_path.mkdir(exist_ok=True)
+    
+    # Initialize results
+    results = {
+        'captions_processed': 0,
+        'images_downloaded': 0,
+        'features_extracted': 0,
+        'caption_files': [],
+        'image_directory': None,
+        'features_directory': None
+    }
+    
+    try:
+        # Step 1: Download Localized Narratives captions (first two shards worth)
+        logger.info("\n📝 Step 1: Downloading Localized Narratives captions...")
+        
+        ln_dir = data_path / "localized_narratives" / "open_images"
+        ln_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Download first two caption shards (should give us plenty of captions)
+        caption_urls = [
+            'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
+            'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl'
+        ]
+        
+        image_ids_needed = []
+        captions_data = []
+        
+        for i, url in enumerate(caption_urls):
+            filename = f"open_images_train_shard_{i:02d}.jsonl"
+            filepath = ln_dir / filename
+            
+            # Download if not exists
+            if not filepath.exists():
+                logger.info(f"   Downloading {filename}...")
+                import requests
+                response = requests.get(url, stream=True)
+                response.raise_for_status()
+                
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            else:
+                logger.info(f"   {filename} already exists")
+            
+            # Parse captions and collect image IDs
+            logger.info(f"   Processing captions from {filename}...")
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f):
+                    if len(captions_data) >= max_samples:
+                        break
+                    
+                    try:
+                        data = json.loads(line.strip())
+                        image_id = data.get('image_id', '')
+                        caption = data.get('caption', '')
+                        
+                        if image_id and caption:
+                            captions_data.append({
+                                'image_id': image_id,
+                                'caption': caption,
+                                'shard': i
+                            })
+                            image_ids_needed.append(image_id)
+                            
+                    except json.JSONDecodeError:
+                        continue
+                
+                if len(captions_data) >= max_samples:
+                    break
+        
+        results['captions_processed'] = len(captions_data)
+        results['caption_files'] = [str(ln_dir / f"open_images_train_shard_{i:02d}.jsonl") for i in range(len(caption_urls))]
+        
+        logger.info(f"   ✅ Processed {len(captions_data):,} captions")
+        logger.info(f"   📋 Need {len(set(image_ids_needed)):,} unique images")
+        
+        # Step 2: Download OpenImages shards via AWS CLI
+        logger.info("\n📦 Step 2: Downloading OpenImages image shards...")
+        
+        oi_dir = data_path / "open_images"
+        oi_dir.mkdir(exist_ok=True)
+        results['image_directory'] = str(oi_dir)
+        
+        # Check AWS CLI availability
+        try:
+            result = subprocess.run(["aws", "--version"], capture_output=True, text=True)
+            if result.returncode != 0:
+                raise Exception("AWS CLI not available")
+            logger.info(f"   AWS CLI detected: {result.stdout.strip()}")
+        except Exception as e:
+            logger.error(f"   ❌ AWS CLI required but not available: {e}")
+            logger.error("   Install with: pip install awscli")
+            return results
+        
+        # Download and extract first two shards
+        shard_commands = [
+            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
+            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
+        ]
+        
+        extracted_images = 0
+        for i, cmd in enumerate(shard_commands):
+            tar_file = oi_dir / f"train_{i}.tar.gz"
+            
+            # Download shard if not exists
+            if not tar_file.exists():
+                logger.info(f"   Downloading train_{i}.tar.gz (~46GB)...")
+                logger.info("   This may take 30-60 minutes depending on internet speed")
+                
+                try:
+                    process = subprocess.run(cmd.split(), check=True, capture_output=True, text=True)
+                    logger.info(f"   ✅ Downloaded train_{i}.tar.gz")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"   ❌ Failed to download train_{i}.tar.gz: {e}")
+                    continue
+            else:
+                logger.info(f"   train_{i}.tar.gz already exists")
+            
+            # Extract shard
+            if tar_file.exists():
+                logger.info(f"   Extracting train_{i}.tar.gz...")
+                try:
+                    with tarfile.open(tar_file, 'r:gz') as tar:
+                        # Extract all members
+                        tar.extractall(oi_dir)
+                        extracted_images += len(tar.getnames())
+                    
+                    # Remove tar file to save space
+                    tar_file.unlink()
+                    logger.info(f"   ✅ Extracted train_{i}.tar.gz ({extracted_images:,} files so far)")
+                    
+                except Exception as e:
+                    logger.error(f"   ❌ Failed to extract train_{i}.tar.gz: {e}")
+        
+        # Count actual image files
+        image_files = list(oi_dir.glob("**/*.jpg"))
+        results['images_downloaded'] = len(image_files)
+        logger.info(f"   📁 Total images available: {len(image_files):,}")
+        
+        # Step 3: Align captions with available images
+        logger.info("\n🔗 Step 3: Aligning captions with available images...")
+        
+        # Create mapping of image_id to file path
+        image_id_to_path = {}
+        for img_file in image_files:
+            image_id = img_file.stem  # filename without extension
+            image_id_to_path[image_id] = img_file
+        
+        # Filter captions to only those with available images
+        aligned_pairs = []
+        for caption_data in captions_data:
+            image_id = caption_data['image_id']
+            if image_id in image_id_to_path:
+                aligned_pairs.append({
+                    'image_id': image_id,
+                    'image_path': str(image_id_to_path[image_id]),
+                    'caption': caption_data['caption'],
+                    'shard': caption_data['shard']
+                })
+        
+        logger.info(f"   ✅ Aligned {len(aligned_pairs):,} caption-image pairs")
+        
+        # Step 4: Extract DiNOv2 features
+        logger.info("\n🧠 Step 4: Extracting DiNOv2 features...")
+        
+        features_dir = data_path / "vision_features_cache"
+        features_dir.mkdir(exist_ok=True)
+        results['features_directory'] = str(features_dir)
+        
+        # Load DiNOv2 model
+        try:
+            import torch
+            from transformers import Dinov2Model, AutoImageProcessor
+            from PIL import Image
+            
+            logger.info("   Loading DiNOv2 model...")
+            model_name = "facebook/dinov2-base"
+            vision_model = Dinov2Model.from_pretrained(model_name)
+            vision_processor = AutoImageProcessor.from_pretrained(model_name)
+            
+            # Move to GPU if available and requested
+            device = "cpu"
+            if use_gpu and torch.cuda.is_available():
+                vision_model = vision_model.cuda()
+                device = "cuda"
+                logger.info(f"   Using GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                logger.info("   Using CPU for feature extraction")
+            
+            vision_model.eval()
+            
+        except ImportError as e:
+            logger.error(f"   ❌ Vision dependencies not available: {e}")
+            logger.error("   Install with: pip install torch transformers pillow")
+            return results
+        
+        # Extract features for aligned pairs
+        logger.info(f"   Extracting features for {len(aligned_pairs):,} images...")
+        
+        features_extracted = 0
+        batch_size = 16  # Process in batches for efficiency
+        
+        from tqdm import tqdm
+        
+        for i in tqdm(range(0, len(aligned_pairs), batch_size), desc="Extracting features"):
+            batch = aligned_pairs[i:i+batch_size]
+            
+            batch_images = []
+            batch_paths = []
+            
+            # Load batch of images
+            for pair in batch:
+                try:
+                    image = Image.open(pair['image_path']).convert('RGB')
+                    batch_images.append(image)
+                    batch_paths.append(pair['image_path'])
+                except Exception as e:
+                    logger.debug(f"Failed to load {pair['image_path']}: {e}")
+                    continue
+            
+            if not batch_images:
+                continue
+            
+            # Extract features for batch
+            try:
+                inputs = vision_processor(images=batch_images, return_tensors="pt")
+                
+                if device == "cuda":
+                    inputs = {k: v.cuda() for k, v in inputs.items()}
+                
+                with torch.no_grad():
+                    outputs = vision_model(**inputs)
+                    # Global average pooling to get 768-dim features
+                    batch_features = outputs.last_hidden_state.mean(dim=1)  # Shape: [batch_size, 768]
+                
+                # Save individual features
+                for j, (pair, features) in enumerate(zip(batch, batch_features)):
+                    if j >= len(batch_paths):
+                        break
+                    
+                    # Generate cache key
+                    cache_key = hashlib.md5(pair['image_id'].encode()).hexdigest()
+                    feature_file = features_dir / f"{cache_key}.npy"
+                    metadata_file = features_dir / f"{cache_key}.pkl"
+                    
+                    # Save features
+                    features_cpu = features.cpu().numpy()
+                    np.save(feature_file, features_cpu)
+                    
+                    # Save metadata
+                    metadata = {
+                        'image_id': pair['image_id'],
+                        'image_path': pair['image_path'],
+                        'caption': pair['caption'],
+                        'shard': pair['shard'],
+                        'feature_type': 'real_dinov2',
+                        'feature_shape': features_cpu.shape,
+                        'device_used': device
+                    }
+                    
+                    with open(metadata_file, 'wb') as f:
+                        pickle.dump(metadata, f)
+                    
+                    features_extracted += 1
+                    
+            except Exception as e:
+                logger.warning(f"Failed to extract features for batch: {e}")
+                continue
+        
+        results['features_extracted'] = features_extracted
+        
+        # Step 5: Save aligned dataset summary
+        logger.info("\n💾 Step 5: Saving dataset summary...")
+        
+        summary_file = data_path / "aligned_dataset_summary.json"
+        summary = {
+            'total_pairs': len(aligned_pairs),
+            'features_extracted': features_extracted,
+            'shards_downloaded': ['train_0', 'train_1'],
+            'data_paths': {
+                'captions': results['caption_files'],
+                'images': results['image_directory'],
+                'features': results['features_directory']
+            },
+            'sample_pairs': aligned_pairs[:5]  # First 5 as examples
+        }
+        
+        with open(summary_file, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        logger.info(f"   📄 Saved summary to {summary_file}")
+        
+        # Final results
+        logger.info("\n🎉 Download and feature extraction completed!")
+        logger.info(f"   📝 Captions processed: {results['captions_processed']:,}")
+        logger.info(f"   🖼️  Images downloaded: {results['images_downloaded']:,}")
+        logger.info(f"   🧠 Features extracted: {results['features_extracted']:,}")
+        logger.info(f"   🔗 Aligned pairs: {len(aligned_pairs):,}")
+        logger.info(f"   💾 Summary saved: {summary_file}")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"❌ Error in download_first_two_shards_with_features: {e}")
+        return results
 
 
 if __name__ == "__main__":
