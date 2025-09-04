@@ -307,64 +307,64 @@ class AdaptiveTrainingController:
             'vision_weight_multiplier': 1.0  # Can be extended for vision loss adjustment
         }
 
+    def compute_cross_modal_similarity(
+        self,
+        text_features: torch.Tensor,
+        vision_features: torch.Tensor
+    ) -> float:
+        """
+        Compute cross-modal similarity between text and vision features.
+        Handles dimension mismatches by projecting to smaller dimension.
 
-def compute_cross_modal_similarity(
-    text_features: torch.Tensor,
-    vision_features: torch.Tensor
-) -> float:
-    """
-    Compute cross-modal similarity between text and vision features.
-    Handles dimension mismatches by projecting to smaller dimension.
+        Args:
+            text_features: Text feature tensor [batch_size, seq_len, text_dim] or [batch_size, text_dim]
+            vision_features: Vision feature tensor [batch_size, vision_dim]
 
-    Args:
-        text_features: Text feature tensor [batch_size, seq_len, text_dim] or [batch_size, text_dim]
-        vision_features: Vision feature tensor [batch_size, vision_dim]
+        Returns:
+            Average cosine similarity between text and vision features
+        """
+        try:
+            # Handle None inputs
+            if text_features is None or vision_features is None:
+                return 0.0
 
-    Returns:
-        Average cosine similarity between text and vision features
-    """
-    try:
-        # Handle None inputs
-        if text_features is None or vision_features is None:
+            if text_features.numel() == 0 or vision_features.numel() == 0:
+                return 0.0
+
+            # Pool text features if they have sequence dimension
+            if text_features.dim() == 3:  # [batch_size, seq_len, text_dim]
+                text_pooled = text_features.mean(dim=1)  # [batch_size, text_dim]
+            else:  # [batch_size, text_dim]
+                text_pooled = text_features
+
+            # Handle dimension mismatch by projecting to smaller dimension
+            text_dim = text_pooled.shape[-1]
+            vision_dim = vision_features.shape[-1]
+
+            if text_dim != vision_dim:
+                # Project to smaller dimension to maintain compatibility
+                target_dim = min(text_dim, vision_dim)
+
+                if text_dim > vision_dim:
+                    # Project text features to vision dimension (take first N dimensions)
+                    text_pooled = text_pooled[:, :target_dim]
+                else:
+                    # Project vision features to text dimension (take first N dimensions)
+                    vision_features = vision_features[:, :target_dim]
+
+            # Normalize features for cosine similarity
+            text_norm = F.normalize(text_pooled, dim=-1)
+            vision_norm = F.normalize(vision_features, dim=-1)
+
+            # Compute cosine similarity
+            similarity = torch.cosine_similarity(text_norm, vision_norm, dim=-1)
+
+            # Return average similarity across batch
+            avg_similarity = similarity.mean().item()
+
+            # Return finite value only
+            return avg_similarity if np.isfinite(avg_similarity) else 0.0
+
+        except Exception as e:
+            logger.warning(f"Cross-modal similarity computation failed: {e}")
             return 0.0
-
-        if text_features.numel() == 0 or vision_features.numel() == 0:
-            return 0.0
-
-        # Pool text features if they have sequence dimension
-        if text_features.dim() == 3:  # [batch_size, seq_len, text_dim]
-            text_pooled = text_features.mean(dim=1)  # [batch_size, text_dim]
-        else:  # [batch_size, text_dim]
-            text_pooled = text_features
-
-        # Handle dimension mismatch by projecting to smaller dimension
-        text_dim = text_pooled.shape[-1]
-        vision_dim = vision_features.shape[-1]
-
-        if text_dim != vision_dim:
-            # Project to smaller dimension to maintain compatibility
-            target_dim = min(text_dim, vision_dim)
-
-            if text_dim > vision_dim:
-                # Project text features to vision dimension (take first N dimensions)
-                text_pooled = text_pooled[:, :target_dim]
-            else:
-                # Project vision features to text dimension (take first N dimensions)
-                vision_features = vision_features[:, :target_dim]
-
-        # Normalize features for cosine similarity
-        text_norm = F.normalize(text_pooled, dim=-1)
-        vision_norm = F.normalize(vision_features, dim=-1)
-
-        # Compute cosine similarity
-        similarity = torch.cosine_similarity(text_norm, vision_norm, dim=-1)
-
-        # Return average similarity across batch
-        avg_similarity = similarity.mean().item()
-
-        # Return finite value only
-        return avg_similarity if np.isfinite(avg_similarity) else 0.0
-
-    except Exception as e:
-        logger.warning(f"Cross-modal similarity computation failed: {e}")
-        return 0.0

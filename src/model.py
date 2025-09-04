@@ -1758,6 +1758,10 @@ class BitMarModel(nn.Module):
         robot_reasoning_outputs = None
         if self.robot_reasoning_integration is not None:
             try:
+                # Ensure fused_features is on the same device as the model
+                device = next(self.parameters()).device
+                fused_features = fused_features.to(device)
+                
                 # Apply robot reasoning to fused features
                 robot_reasoning_outputs = self.robot_reasoning_integration.robot_selection_head(fused_features)
 
@@ -1770,6 +1774,8 @@ class BitMarModel(nn.Module):
 
             except Exception as e:
                 logger.warning(f"Robot reasoning forward pass failed: {e}")
+                # Continue training without robot reasoning
+                robot_reasoning_loss = None
 
         # Balanced loss computation (enhanced for robot reasoning)
         loss_dict = self.compute_balanced_loss(
