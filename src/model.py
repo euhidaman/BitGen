@@ -1203,11 +1203,15 @@ class BitMarModel(nn.Module):
         self.use_episodic_memory = config.get('use_episodic_memory', True)
         logger.info(f"🧠 Episodic Memory: {'Enabled' if self.use_episodic_memory else 'Disabled (Ablation Study)'}")
 
-        # Loss balancing parameters
-        self.cross_modal_loss_weight = config.get('cross_modal_loss_weight', 0.1)
-        self.text_loss_weight = config.get('text_loss_weight', 1.0)
+        # Loss balancing parameters - use training config values
+        training_config = config.get('training', {})
+        self.cross_modal_loss_weight = training_config.get('cross_modal_loss_weight', 
+                                                          config.get('cross_modal_loss_weight', 0.1))
+        self.text_loss_weight = training_config.get('text_generation_loss_weight', 
+                                                   config.get('text_loss_weight', 1.0))
         self.vision_loss_weight = config.get('vision_loss_weight', 0.1)
-        self.memory_loss_weight = config.get('memory_loss_weight', 0.05) if self.use_episodic_memory else 0.0
+        self.memory_loss_weight = training_config.get('memory_regularization_weight', 
+                                                    config.get('memory_loss_weight', 0.05)) if self.use_episodic_memory else 0.0
 
         # Dynamic loss scaling
         self.adaptive_loss_scaling = config.get('adaptive_loss_scaling', True)
@@ -1537,6 +1541,16 @@ class BitMarModel(nn.Module):
             cross_modal_scale = self.cross_modal_loss_weight
             vision_scale = self.vision_loss_weight
             memory_scale = self.memory_loss_weight
+            robot_reasoning_scale = 1.0
+            
+            # Debug loss weights every few steps
+            if should_debug:
+                print(f"   🔧 LOSS WEIGHTS USED:")
+                print(f"      Text (decoder) weight: {decoder_scale}")
+                print(f"      Cross-modal weight: {cross_modal_scale}")
+                print(f"      Vision weight: {vision_scale}")
+                print(f"      Memory weight: {memory_scale}")
+                print(f"      Robot reasoning weight: {robot_reasoning_scale}")
 
         # Apply adaptive controller modifications if available
         if adaptive_controller is not None:
@@ -1837,9 +1851,19 @@ class BitMarModel(nn.Module):
 
                 # Compute robot selection loss if labels are provided and this is a reasoning batch
                 if hasattr(self, '_current_robot_labels') and self._current_robot_labels:
+                    # Ensure robot labels are on the correct device
+                    device = next(self.parameters()).device
+                    if isinstance(self._current_robot_labels, torch.Tensor):
+                        robot_labels_device = self._current_robot_labels.to(device)
+                    elif isinstance(self._current_robot_labels, (list, tuple)):
+                        # Convert list to tensor and move to device
+                        robot_labels_device = torch.tensor(self._current_robot_labels, device=device)
+                    else:
+                        robot_labels_device = self._current_robot_labels
+                    
                     robot_reasoning_loss = self.robot_reasoning_integration.compute_reasoning_loss(
                         outputs={'fused_features': fused_features},
-                        robot_labels=self._current_robot_labels
+                        robot_labels=robot_labels_device
                     )
 
             except Exception as e:

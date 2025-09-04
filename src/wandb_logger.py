@@ -6,6 +6,7 @@ Comprehensive logging with proper axis labels and visualization
 import wandb
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # Missing F import - fixes FIBER similarity computation
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
