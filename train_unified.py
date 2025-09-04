@@ -1495,7 +1495,9 @@ class UnifiedBitMarTrainer:
                     raise forward_error
 
                 # Handle GRPO training vs standard training
-                if self.enable_grpo_training and is_robot_batch and self.grpo_integration:
+                # Temporarily disable GRPO to avoid tensor indexing issues
+                # if self.enable_grpo_training and is_robot_batch and self.grpo_integration:
+                if False:  # Temporarily disabled
                     # GRPO policy optimization for robot reasoning
                     try:
                         # Prepare data for GRPO

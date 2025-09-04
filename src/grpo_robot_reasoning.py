@@ -424,19 +424,34 @@ class GRPORobotRewardFunctions:
 
         # Compute weighted total reward
         total_rewards = []
-        for i in range(len(responses)):
+        num_responses = len(responses)
+        
+        # Ensure all reward lists have the same length
+        for reward_name, reward_list in rewards.items():
+            if len(reward_list) != num_responses:
+                logger.warning(f"Reward {reward_name} has length {len(reward_list)}, expected {num_responses}")
+                # Pad or truncate to match
+                if len(reward_list) < num_responses:
+                    reward_list.extend([0.0] * (num_responses - len(reward_list)))
+                else:
+                    reward_list = reward_list[:num_responses]
+                rewards[reward_name] = reward_list
+        
+        for i in range(num_responses):
             total_reward = 0.0
-            total_reward += rewards['correctness'][i] * \
+            # Safe indexing with bounds checking
+            total_reward += (rewards['correctness'][i] if i < len(rewards['correctness']) else 0.0) * \
                 self.reward_weights.get('correctness', 0.30)
-            total_reward += rewards['validity'][i] * \
+            total_reward += (rewards['validity'][i] if i < len(rewards['validity']) else 0.0) * \
                 self.reward_weights.get('validity', 0.20)
-            total_reward += (rewards['strict_format'][i] + rewards['soft_format']
-                             [i]) * self.reward_weights.get('format', 0.20)
-            total_reward += rewards['reasoning_quality'][i] * \
+            format_reward = (rewards['strict_format'][i] if i < len(rewards['strict_format']) else 0.0) + \
+                           (rewards['soft_format'][i] if i < len(rewards['soft_format']) else 0.0)
+            total_reward += format_reward * self.reward_weights.get('format', 0.20)
+            total_reward += (rewards['reasoning_quality'][i] if i < len(rewards['reasoning_quality']) else 0.0) * \
                 self.reward_weights.get('reasoning_quality', 0.15)
-            total_reward += rewards['top_n_efficiency'][i] * \
+            total_reward += (rewards['top_n_efficiency'][i] if i < len(rewards['top_n_efficiency']) else 0.0) * \
                 self.reward_weights.get('top_n_efficiency', 0.15)
-            total_reward += rewards['diversity_bonus'][i] * 0.05  # Small bonus
+            total_reward += (rewards['diversity_bonus'][i] if i < len(rewards['diversity_bonus']) else 0.0) * 0.05  # Small bonus
 
             total_rewards.append(total_reward)
 
