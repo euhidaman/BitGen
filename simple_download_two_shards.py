@@ -57,28 +57,38 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
             response.raise_for_status()
             with open(filepath, 'wb') as f:
                 f.write(response.content)
+            logger.info(f"   ✅ Downloaded {filename}")
+        else:
+            logger.info(f"   📁 {filename} already exists")
         
-        # Parse captions
-        logger.info(f"   Processing {filename}...")
+        # Count and parse captions from this shard
+        logger.info(f"   📊 Counting captions in {filename}...")
         shard_captions = 0
+        shard_valid_captions = 0
+        
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
-                if len(captions) >= max_samples:
-                    break
-                try:
-                    data = json.loads(line.strip())
-                    if data.get('image_id') and data.get('caption'):
-                        captions.append({
-                            'image_id': data['image_id'],
-                            'caption': data['caption']
-                        })
-                        shard_captions += 1
-                except:
-                    continue
+                if line.strip():
+                    shard_captions += 1
+                    
+                    # Only process if we haven't hit our limit
+                    if len(captions) < max_samples:
+                        try:
+                            data = json.loads(line.strip())
+                            if data.get('image_id') and data.get('caption'):
+                                captions.append({
+                                    'image_id': data['image_id'],
+                                    'caption': data['caption']
+                                })
+                                shard_valid_captions += 1
+                        except:
+                            continue
         
-        logger.info(f"     → Got {shard_captions:,} captions from this shard")
+        logger.info(f"     → Total lines in shard: {shard_captions:,}")
+        logger.info(f"     → Valid captions added: {shard_valid_captions:,}")
         
         if len(captions) >= max_samples:
+            logger.info(f"     → Reached max_samples limit ({max_samples:,}), stopping...")
             break
     
     logger.info(f"   ✅ Got {len(captions):,} captions")
