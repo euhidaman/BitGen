@@ -114,8 +114,16 @@ class LocalizedNarrativesCOCODataset(Dataset):
         # Create indices for dataset
         self.indices = list(range(len(self.all_captions)))
 
+        # FINAL DATASET SUMMARY - Show exactly what we're training with
+        logger.info("🎯 FINAL DATASET SUMMARY:")
+        logger.info(f"   📝 Total captions: {len(self.all_captions):,}")
+        logger.info(f"   🧠 Total features: {len(self.all_features):,}" if hasattr(self, 'all_features') else "   🧠 No features loaded!")
+        logger.info(f"   📊 Training indices: {len(self.indices):,}")
+        if hasattr(self, 'all_features'):
+            logger.info(f"   🔢 Feature shape: {self.all_features.shape}")
+            logger.info(f"   📈 Features per sample: {self.all_features.shape[1] if len(self.all_features.shape) > 1 else 'unknown'}")
         logger.info(
-            f"✅ Loaded {len(self.indices):,} image-caption pairs from Localized Narratives + COCO")
+            f"✅ Final dataset ready: {len(self.indices):,} image-caption pairs from Localized Narratives + COCO")
 
     def _load_datasets(self):
         """Load HuggingFace LocalizedNarratives and COCO datasets"""
@@ -167,6 +175,9 @@ class LocalizedNarrativesCOCODataset(Dataset):
             try:
                 logger.info(
                     f"🚀 Loading features from simple download format: {simple_features_file}")
+                logger.info(f"   🔍 Checking file sizes:")
+                logger.info(f"     Features file size: {simple_features_file.stat().st_size / (1024**2):.1f} MB")
+                logger.info(f"     Pairs file size: {simple_pairs_file.stat().st_size / (1024**2):.1f} MB")
 
                 # Load features directly
                 self.all_features = np.load(simple_features_file)
@@ -177,8 +188,15 @@ class LocalizedNarrativesCOCODataset(Dataset):
                 
                 logger.info(
                     f"✅ Loaded {len(self.all_features):,} features from simple download")
-                logger.info(f"   Feature shape: {self.all_features.shape}")
-                logger.info(f"   Aligned pairs: {len(aligned_pairs):,}")
+                logger.info(f"   🧠 Feature shape: {self.all_features.shape}")
+                logger.info(f"   📝 Aligned pairs: {len(aligned_pairs):,}")
+                logger.info(f"   🔢 Features per sample: {self.all_features.shape[1] if len(self.all_features.shape) > 1 else 'unknown'}")
+                
+                # Verify alignment between features and pairs
+                if len(self.all_features) != len(aligned_pairs):
+                    logger.warning(f"⚠️  MISMATCH: {len(self.all_features):,} features but {len(aligned_pairs):,} pairs!")
+                else:
+                    logger.info(f"   ✅ Perfect alignment: {len(self.all_features):,} features = {len(aligned_pairs):,} pairs")
                 
                 # Update captions and image data to match aligned pairs
                 if len(aligned_pairs) > 0:
@@ -757,6 +775,19 @@ class LocalizedNarrativesCOCODataModule:
                 persistent_workers=self.config.get('persistent_workers', True),
                 drop_last=True
             )
+            
+            # CRITICAL: Log exact training details
+            total_samples = len(self.dataset)
+            batch_size = self.config['batch_size']
+            batches_per_epoch = total_samples // batch_size  # drop_last=True means we lose the remainder
+            
+            logger.info("🚀 TRAINING DATALOADER CREATED:")
+            logger.info(f"   📊 Total samples in dataset: {total_samples:,}")
+            logger.info(f"   📦 Batch size: {batch_size}")
+            logger.info(f"   🔄 Batches per epoch: {batches_per_epoch:,}")
+            logger.info(f"   📉 Samples dropped (remainder): {total_samples % batch_size}")
+            logger.info(f"   🎯 Effective samples per epoch: {batches_per_epoch * batch_size:,}")
+            
         return self.train_loader
 
     def val_dataloader(self) -> List[DataLoader]:
