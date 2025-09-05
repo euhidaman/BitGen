@@ -115,9 +115,9 @@ def download_coco_dataset(data_dir: str = "./data") -> Dict:
     logger.info("🚀 Downloading COCO dataset from Kaggle...")
     
     try:
-        # Download the dataset - this will download to kagglehub cache
+        # Use the correct kagglehub API - dataset_download
         logger.info("📦 Downloading COCO image-caption dataset...")
-        downloaded_path = kagglehub.download("nikhil7280/coco-image-caption")
+        downloaded_path = kagglehub.dataset_download("nikhil7280/coco-image-caption")
         logger.info(f"✅ Dataset downloaded to: {downloaded_path}")
         
         # Copy to our data directory structure
@@ -177,7 +177,65 @@ def download_coco_dataset(data_dir: str = "./data") -> Dict:
         
     except Exception as e:
         logger.error(f"❌ Failed to download COCO dataset: {e}")
-        return None
+        # Try alternative API if available
+        try:
+            logger.info("🔄 Trying alternative kagglehub API...")
+            downloaded_path = kagglehub.download("nikhil7280/coco-image-caption")
+            logger.info(f"✅ Dataset downloaded with alternative API to: {downloaded_path}")
+            
+            # Copy files with alternative path structure
+            source_path = Path(downloaded_path)
+            
+            # Copy all images to unified directory
+            all_images_dest = coco_dir / "images"
+            all_images_dest.mkdir(exist_ok=True)
+            
+            # Copy train2014 images
+            train_source = source_path / "train2014" / "train2014"
+            if train_source.exists():
+                logger.info("📂 Copying train2014 images to unified directory...")
+                for img_file in train_source.glob("*.jpg"):
+                    dest_path = all_images_dest / img_file.name
+                    if not dest_path.exists():
+                        shutil.copy2(img_file, dest_path)
+                logger.info("✅ train2014 images copied")
+            
+            # Copy val2017 images to the same unified directory
+            val_source = source_path / "val2017" / "val2017"
+            if val_source.exists():
+                logger.info("📂 Copying val2017 images to unified directory...")
+                for img_file in val_source.glob("*.jpg"):
+                    dest_path = all_images_dest / img_file.name
+                    if not dest_path.exists():
+                        shutil.copy2(img_file, dest_path)
+                logger.info("✅ val2017 images copied")
+            
+            # Copy annotations
+            ann_source = source_path / "annotations_trainval2014" / "annotations"
+            ann_dest = coco_dir / "annotations_trainval2014"
+            
+            if ann_source.exists() and not ann_dest.exists():
+                logger.info("📂 Copying annotations_trainval2014...")
+                shutil.copytree(ann_source, ann_dest)
+                logger.info("✅ annotations_trainval2014 copied")
+            
+            # Copy val2017 annotations
+            ann_source_2017 = source_path / "annotations_trainval2017" / "annotations"
+            ann_dest_2017 = coco_dir / "annotations_trainval2017"
+            
+            if ann_source_2017.exists() and not ann_dest_2017.exists():
+                logger.info("📂 Copying annotations_trainval2017...")
+                shutil.copytree(ann_source_2017, ann_dest_2017)
+                logger.info("✅ annotations_trainval2017 copied")
+            
+            return {
+                'downloaded_path': downloaded_path,
+                'coco_dir': str(coco_dir),
+                'success': True
+            }
+        except Exception as e2:
+            logger.error(f"❌ Alternative API also failed: {e2}")
+            return None
 
 
 def process_coco_captions(data_dir: str = "./data") -> List[Dict]:
