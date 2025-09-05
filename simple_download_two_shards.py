@@ -2,7 +2,9 @@
 """
 Simple script: Download OpenImages shard + ALL caption shards + extract DiNOv2 features
 Downloads to ./data/ with proper structure for train_unified.py
-Maximizes caption coverage by downloading all 10 caption shards
+Maximizes caption coverage by downloading all 10 caption s        logger.info(f"   ✅ Aligned {len(aligned_pairs):,} caption-image pairs ({alignment_percentage:.1f}% coverage)")
+
+    # Step 4: Extract DiNOv2 featuresds
 """
 
 import os
@@ -32,11 +34,126 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
     data_path = Path(data_dir)
     data_path.mkdir(exist_ok=True)
 
-    logger.info("🚀 Starting simple one-shard download with DiNOv2 features")
+    logger.info("🚀 Starting download: images first, then captions for optimal space usage")
 
-    # Step 1: Download Localized Narratives captions for OpenImages
-    logger.info(
-        "📝 Step 1: Download OpenImages captions from Localized Narratives")
+    # Step 1: Check for existing images, download if needed (PRIORITIZE IMAGES FIRST)
+    logger.info("📦 Step 1: Check for existing OpenImages and download additional shards")
+
+    oi_dir = data_path / "open_images"
+    oi_dir.mkdir(exist_ok=True)
+
+    # Check if images already exist
+    image_extensions = ['*.jpg', '*.jpeg', '*.png',
+                        '*.JPG', '*.JPEG', '*.PNG', '*.webp', '*.WEBP']
+    existing_images = []
+    format_counts = {}
+    for ext in image_extensions:
+        found_files = list(oi_dir.glob(f"**/{ext}"))
+        if found_files:
+            format_counts[ext] = len(found_files)
+        existing_images.extend(found_files)
+
+    if existing_images:
+        logger.info(f"   ✅ Found {len(existing_images):,} existing images (likely train_0 already extracted)")
+        if format_counts:
+            format_info = ", ".join(
+                [f"{ext}: {count}" for ext, count in format_counts.items()])
+            logger.info(f"   📊 Formats found: {format_info}")
+        
+        # Check if we should add train_1 to complement existing train_0 images
+        train_1_extracted = len(list(oi_dir.glob("**/train_1/**"))) > 0
+        has_enough_images = len(existing_images) > 400000  # If we have more than 400K, we probably have both shards
+        
+        if not train_1_extracted and not has_enough_images:
+            logger.info("   → Detected train_0 images only, adding train_1 shard for better coverage...")
+            train_1_tar = oi_dir / "train_1.tar.gz"
+            
+            # Download train_1.tar.gz
+            if not train_1_tar.exists():
+                logger.info("   📦 Downloading train_1.tar.gz...")
+                cmd = f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
+                try:
+                    subprocess.run(cmd.split(), check=True)
+                    logger.info("   ✅ Downloaded train_1.tar.gz")
+                except subprocess.CalledProcessError:
+                    logger.error("   ❌ Failed to download train_1.tar.gz")
+                    image_files = existing_images  # Use existing images if download fails
+                    return
+            
+            # Extract train_1.tar.gz and DELETE TAR immediately to save space
+            if train_1_tar.exists():
+                logger.info("   📂 Extracting train_1.tar.gz...")
+                with tarfile.open(train_1_tar, 'r:gz') as tar:
+                    tar.extractall(oi_dir)
+                train_1_tar.unlink()  # Delete tar IMMEDIATELY after extraction
+                logger.info("   ✅ Extracted train_1.tar.gz and deleted tar file to save space")
+                
+                # Recount all images after adding train_1
+                all_images = []
+                for ext in image_extensions:
+                    all_images.extend(oi_dir.glob(f"**/{ext}"))
+                logger.info(f"   📊 Total images after adding train_1: {len(all_images):,}")
+                image_files = all_images
+            else:
+                image_files = existing_images
+        else:
+            if train_1_extracted:
+                logger.info("   → train_1 already extracted, using all existing images")
+            else:
+                logger.info("   → Sufficient images detected, using existing set")
+            image_files = existing_images
+    else:
+        logger.info("   No existing images found, downloading train_0.tar.gz and train_1.tar.gz...")
+        
+        # AWS commands for first TWO shards to maximize image coverage
+        shard_commands = [
+            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
+            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
+        ]
+
+        for i, cmd in enumerate(shard_commands):
+            tar_file = oi_dir / f"train_{i}.tar.gz"
+
+            # Download if not exists
+            if not tar_file.exists():
+                logger.info(
+                    f"   Downloading train_{i}.tar.gz (this will take time)...")
+                try:
+                    subprocess.run(cmd.split(), check=True)
+                    logger.info(f"   ✅ Downloaded train_{i}.tar.gz")
+                except subprocess.CalledProcessError:
+                    logger.error(f"   ❌ Failed to download train_{i}.tar.gz")
+                    continue
+            else:
+                logger.info(f"   train_{i}.tar.gz already exists")
+
+            # Extract shard and DELETE TAR immediately to save space
+            if tar_file.exists():
+                logger.info(f"   Extracting train_{i}.tar.gz...")
+                with tarfile.open(tar_file, 'r:gz') as tar:
+                    tar.extractall(oi_dir)
+
+                # Delete tar file IMMEDIATELY after extraction to save space
+                tar_file.unlink()
+                logger.info(f"   ✅ Extracted train_{i}.tar.gz and deleted tar file to save space")
+
+        # Count extracted images (support multiple formats)
+        image_files = []
+        format_counts = {}
+        for ext in image_extensions:
+            found_files = list(oi_dir.glob(f"**/{ext}"))
+            if found_files:
+                format_counts[ext] = len(found_files)
+            image_files.extend(found_files)
+
+        logger.info(f"   📁 Total images extracted: {len(image_files):,}")
+        if format_counts:
+            format_info = ", ".join(
+                [f"{ext}: {count}" for ext, count in format_counts.items()])
+            logger.info(f"   📊 Formats found: {format_info}")
+
+    # Step 2: NOW download captions (after freeing up space from tar deletions)
+    logger.info("📝 Step 2: Download OpenImages captions from Localized Narratives")
 
     ln_dir = data_path / "localized_narratives" / "open_images"
     ln_dir.mkdir(parents=True, exist_ok=True)
@@ -105,115 +222,6 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
             break
 
     logger.info(f"   ✅ Got {len(captions):,} captions")
-
-    # Step 2: Check for existing images, download if needed
-    logger.info("📦 Step 2: Check for existing OpenImages")
-
-    oi_dir = data_path / "open_images"
-    oi_dir.mkdir(exist_ok=True)
-
-    # Check if images already exist
-    image_extensions = ['*.jpg', '*.jpeg', '*.png',
-                        '*.JPG', '*.JPEG', '*.PNG', '*.webp', '*.WEBP']
-    existing_images = []
-    format_counts = {}
-    for ext in image_extensions:
-        found_files = list(oi_dir.glob(f"**/{ext}"))
-        if found_files:
-            format_counts[ext] = len(found_files)
-        existing_images.extend(found_files)
-
-    if existing_images:
-        logger.info(f"   ✅ Found {len(existing_images):,} existing images")
-        if format_counts:
-            format_info = ", ".join(
-                [f"{ext}: {count}" for ext, count in format_counts.items()])
-            logger.info(f"   📊 Formats found: {format_info}")
-        logger.info("   → Checking for additional image shards to download...")
-        
-        # Check if we need to download train_1.tar.gz to add more images
-        train_1_tar = oi_dir / "train_1.tar.gz"
-        train_1_extracted = len(list(oi_dir.glob("**/train_1/**"))) > 0 or len(existing_images) > 200000
-        
-        if not train_1_extracted:
-            logger.info("   📦 Downloading train_1.tar.gz to add more images...")
-            cmd = f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
-            
-            if not train_1_tar.exists():
-                try:
-                    subprocess.run(cmd.split(), check=True)
-                    logger.info("   ✅ Downloaded train_1.tar.gz")
-                except subprocess.CalledProcessError:
-                    logger.error("   ❌ Failed to download train_1.tar.gz")
-            
-            # Extract train_1.tar.gz
-            if train_1_tar.exists():
-                logger.info("   📂 Extracting train_1.tar.gz...")
-                with tarfile.open(train_1_tar, 'r:gz') as tar:
-                    tar.extractall(oi_dir)
-                train_1_tar.unlink()  # Remove tar to save space
-                logger.info("   ✅ Extracted train_1.tar.gz")
-                
-                # Recount all images after adding train_1
-                all_images = []
-                for ext in image_extensions:
-                    all_images.extend(oi_dir.glob(f"**/{ext}"))
-                logger.info(f"   📊 Total images after adding train_1: {len(all_images):,}")
-                image_files = all_images
-            else:
-                image_files = existing_images
-        else:
-            logger.info("   → train_1 already extracted or sufficient images present")
-            image_files = existing_images
-    else:
-        logger.info("   No existing images found, downloading train_0.tar.gz and train_1.tar.gz...")
-        
-        # AWS commands for first TWO shards to maximize image coverage
-        shard_commands = [
-            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
-            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
-        ]
-
-        for i, cmd in enumerate(shard_commands):
-            tar_file = oi_dir / f"train_{i}.tar.gz"
-
-            # Download if not exists
-            if not tar_file.exists():
-                logger.info(
-                    f"   Downloading train_{i}.tar.gz (this will take time)...")
-                try:
-                    subprocess.run(cmd.split(), check=True)
-                    logger.info(f"   ✅ Downloaded train_{i}.tar.gz")
-                except subprocess.CalledProcessError:
-                    logger.error(f"   ❌ Failed to download train_{i}.tar.gz")
-                    continue
-            else:
-                logger.info(f"   train_{i}.tar.gz already exists")
-
-            # Extract shard
-            if tar_file.exists():
-                logger.info(f"   Extracting train_{i}.tar.gz...")
-                with tarfile.open(tar_file, 'r:gz') as tar:
-                    tar.extractall(oi_dir)
-
-                # Remove tar file to save space
-                tar_file.unlink()
-                logger.info(f"   ✅ Extracted train_{i}.tar.gz")
-
-        # Count extracted images (support multiple formats)
-        image_files = []
-        format_counts = {}
-        for ext in image_extensions:
-            found_files = list(oi_dir.glob(f"**/{ext}"))
-            if found_files:
-                format_counts[ext] = len(found_files)
-            image_files.extend(found_files)
-
-        logger.info(f"   📁 Total images extracted: {len(image_files):,}")
-        if format_counts:
-            format_info = ", ".join(
-                [f"{ext}: {count}" for ext, count in format_counts.items()])
-            logger.info(f"   📊 Formats found: {format_info}")
 
     # Step 3: Align captions with available images
     logger.info("🔗 Step 3: Align captions with images")
