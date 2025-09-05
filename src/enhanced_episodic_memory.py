@@ -262,8 +262,18 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         
         if pseudoinverse:
             # Use pseudoinverse for more stable computation
-            M_reshaped = M.transpose(1, 2)  # [batch_size, episode_dim, memory_size]
-            w = torch.bmm(z.transpose(0, 1), torch.pinverse(M_reshaped))  # [batch_size, episode_size, memory_size]
+            # M: [batch_size, memory_size, episode_dim]
+            # We want to solve: z * M^T = w, so w = z * pinv(M^T)
+            # M^T: [batch_size, episode_dim, memory_size]
+            M_T = M.transpose(1, 2)  # [batch_size, episode_dim, memory_size]
+            
+            # z_transposed: [batch_size, episode_size, episode_dim]
+            z_transposed = z.transpose(0, 1)
+            
+            # For each batch, solve: z_i @ pinv(M_T_i) = w_i
+            # z_i: [episode_size, episode_dim], M_T_i: [episode_dim, memory_size]
+            # pinv(M_T_i): [memory_size, episode_dim], result: [episode_size, memory_size]
+            w = torch.bmm(z_transposed, torch.pinverse(M_T).transpose(1, 2))  # [batch_size, episode_size, memory_size]
             w = w.transpose(0, 1)  # [episode_size, batch_size, memory_size]
         else:
             # Direct least squares solution
