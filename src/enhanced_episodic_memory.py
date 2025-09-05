@@ -446,15 +446,26 @@ class LarimarInspiredEpisodicMemory(nn.Module):
             # Direct writing approach (faster)
             w = self._solve_w_mean(episodes_noisy, current_state[0], pseudoinverse=True)
             
-            # Approximate pseudoinverse for direct update
-            # Use simple attention-based approach instead of pseudoinverse
-            attention_weights = torch.nn.functional.softmax(
-                torch.bmm(episodes_noisy, w.transpose(0, 1).transpose(1, 2)) / (w.size(-1) ** 0.5), 
-                dim=-1
-            )
+            # Shape verification and adjustment
+            episode_size, batch_size, episode_dim = episodes_noisy.shape
+            memory_size = current_state[0].shape[1]  # [batch_size, memory_size, episode_dim]
             
-            # Direct memory update using attention
-            new_memory_mean = torch.bmm(attention_weights, episodes_noisy)
+            # Ensure w has correct shape [episode_size, batch_size, memory_size]
+            if w.shape != (episode_size, batch_size, memory_size):
+                self.logger.warning(f"Reshaping w from {w.shape} to ({episode_size}, {batch_size}, {memory_size})")
+                w = w.view(episode_size, batch_size, memory_size)
+            
+            # Use simple attention mechanism for memory update
+            # Reshape for batch matrix multiplication
+            episodes_reshaped = episodes_noisy.view(episode_size * batch_size, episode_dim)  # [episode_size*batch_size, episode_dim]
+            w_reshaped = w.view(episode_size * batch_size, memory_size)  # [episode_size*batch_size, memory_size]
+            
+            # Compute attention weights using matrix multiplication instead of bmm
+            attention_weights = torch.nn.functional.softmax(w_reshaped, dim=-1)  # [episode_size*batch_size, memory_size]
+            
+            # Direct memory update using attention-weighted episodes
+            new_memory_mean = torch.mm(attention_weights.T, episodes_reshaped)  # [memory_size, episode_dim]
+            new_memory_mean = new_memory_mean.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, memory_size, episode_dim]
             new_memory_state = (new_memory_mean, current_state[1])
         else:
             # Iterative Larimar-style update
