@@ -367,18 +367,44 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         # Simplified KL divergence computation for Gaussian distributions
         mean_diff = posterior_mean - prior_mean
         
-        # Compute trace terms (simplified)
-        trace_term = torch.trace(torch.bmm(torch.inverse(prior_cov + EPSILON * torch.eye(self.memory_size, device=prior_cov.device)), posterior_cov)).mean()
+        # Add regularization for numerical stability
+        reg_eye = EPSILON * torch.eye(self.memory_size, device=prior_cov.device)
+        prior_cov_reg = prior_cov + reg_eye
+        
+        # Use batched inverse operation (torch.linalg.inv supports batched tensors)
+        try:
+            prior_cov_inv = torch.linalg.inv(prior_cov_reg)
+        except RuntimeError:
+            # Fallback: process each batch element separately
+            prior_cov_inv_list = []
+            for i in range(prior_cov_reg.shape[0]):
+                try:
+                    inv_i = torch.inverse(prior_cov_reg[i])
+                except RuntimeError:
+                    # Ultimate fallback: use pseudo-inverse
+                    inv_i = torch.pinverse(prior_cov_reg[i])
+                prior_cov_inv_list.append(inv_i)
+            prior_cov_inv = torch.stack(prior_cov_inv_list, dim=0)
+        
+        # Compute trace terms
+        trace_term = torch.trace(torch.bmm(prior_cov_inv, posterior_cov)).mean()
         
         # Mean difference term
         mean_term = torch.bmm(
             mean_diff.unsqueeze(-2), 
-            torch.bmm(torch.inverse(prior_cov + EPSILON * torch.eye(self.memory_size, device=prior_cov.device)), 
-                     mean_diff.unsqueeze(-1))
+            torch.bmm(prior_cov_inv, mean_diff.unsqueeze(-1))
         ).mean()
         
-        # Log determinant term (simplified)
-        logdet_term = torch.logdet(prior_cov + EPSILON).mean() - torch.logdet(posterior_cov + EPSILON).mean()
+        # Log determinant term (use slogdet for numerical stability)
+        try:
+            logdet_prior = torch.linalg.slogdet(prior_cov_reg)[1].mean()
+            logdet_posterior = torch.linalg.slogdet(posterior_cov + reg_eye)[1].mean()
+        except RuntimeError:
+            # Fallback to logdet with regularization
+            logdet_prior = torch.logdet(prior_cov_reg + reg_eye).mean()
+            logdet_posterior = torch.logdet(posterior_cov + reg_eye).mean()
+        
+        logdet_term = logdet_prior - logdet_posterior
         
         kl_div = 0.5 * (trace_term + mean_term + logdet_term - self.memory_size)
         
