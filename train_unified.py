@@ -977,6 +977,15 @@ class UnifiedBitMarTrainer:
 
         # GPU Performance Optimizations
         if self.device.type == 'cuda':
+            # Enable TensorFloat32 for better performance on Ampere+ GPUs
+            torch.set_float32_matmul_precision('high')
+            logger.info("🚀 Enabled TensorFloat32 for better GPU performance")
+            
+            # Force all operations to stay on GPU
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            logger.info("🚀 Enabled TF32 for cuDNN and cuBLAS operations")
+            
             # Enable cuDNN benchmark for consistent input sizes
             if self.config.get('memory_optimization', {}).get('cudnn_benchmark', True):
                 torch.backends.cudnn.benchmark = True
@@ -996,9 +1005,25 @@ class UnifiedBitMarTrainer:
 
         # Verify model is on correct device
         logger.info(f"🎮 Device Verification:")
-        logger.info(
-            f"  • Model device: {next(self.model.parameters()).device}")
+        model_device = next(self.model.parameters()).device
+        logger.info(f"  • Model device: {model_device}")
         logger.info(f"  • Expected device: {self.device}")
+        
+        # Ensure all components are on GPU
+        if self.device.type == 'cuda' and model_device.type != 'cuda':
+            logger.error(f"❌ Model moved to CPU! Re-moving to GPU...")
+            self.model = self.model.to(self.device)
+            model_device = next(self.model.parameters()).device
+            logger.info(f"  • Model device after re-move: {model_device}")
+        
+        # Verify specific components
+        if hasattr(self.model, 'memory'):
+            memory_device = next(self.model.memory.parameters()).device if hasattr(self.model.memory, 'parameters') else 'N/A'
+            logger.info(f"  • Memory device: {memory_device}")
+        
+        if hasattr(self.model, 'fusion'):
+            fusion_device = next(self.model.fusion.parameters()).device if hasattr(self.model.fusion, 'parameters') else 'N/A'
+            logger.info(f"  • Fusion device: {fusion_device}")
 
         if self.device.type == 'cuda':
             logger.info(
@@ -1323,31 +1348,9 @@ class UnifiedBitMarTrainer:
         total_batches = 0
         batch_start_time = time.time()
 
-        # Create progress bar with smoothed ETA tracking
-        class SmoothedProgressBar(tqdm):
-            def __init__(self, iterable, trainer, **kwargs):
-                super().__init__(iterable, **kwargs)
-                self.trainer = trainer
-                self.start_time = time.time()
-                
-            def update(self, n=1):
-                super().update(n)
-                # Update smoothed time estimate
-                current_time = time.time()
-                if self.n > 0:
-                    current_rate = self.n / (current_time - self.start_time)
-                    if self.trainer.smoothed_time_per_batch is None:
-                        self.trainer.smoothed_time_per_batch = 1.0 / current_rate if current_rate > 0 else 1.0
-                    else:
-                        new_time_per_batch = 1.0 / current_rate if current_rate > 0 else self.trainer.smoothed_time_per_batch
-                        self.trainer.smoothed_time_per_batch = (
-                            self.trainer.eta_smoothing_factor * new_time_per_batch + 
-                            (1 - self.trainer.eta_smoothing_factor) * self.trainer.smoothed_time_per_batch
-                        )
-
-        progress_bar = SmoothedProgressBar(
+        # Use standard progress bar to avoid dimension issues
+        progress_bar = tqdm(
             train_loader, 
-            trainer=self,
             desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,} | Features: {len(train_loader.dataset):,}",
             smoothing=0.1  # Reduce ETA fluctuation
         )

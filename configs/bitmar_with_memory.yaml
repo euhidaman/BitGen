@@ -166,7 +166,7 @@ data:
   cache_vision_features: false # DISABLED: No caching, process fresh features
 
   # DataLoader settings - Optimized for GPU training and faster processing
-  batch_size: 64 # Increased from 48 for better GPU utilization
+  batch_size: 56 # Conservative increase from 48 for better GPU utilization
   num_workers: 8 # Increased from 6 for maximum data loading throughput
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
@@ -273,11 +273,11 @@ memory_optimization:
   use_fp16: true # Mixed precision training
   use_int8_vision: false # Keep vision in fp16 for quality
   empty_cache_frequency: 50 # Reduced frequency for better performance
-  max_memory_slots_in_ram: 32 # Increased from 16 for better GPU utilization
+  max_memory_slots_in_ram: 24 # Conservative increase from 16
   compress_episodic_memory: false # Disabled for faster memory access
   
   # GPU optimization settings
-  torch_compile: true # Enable PyTorch 2.0 compilation
+  torch_compile: false # Disabled temporarily due to dimension errors
   cudnn_benchmark: true # Optimize cuDNN for consistent input sizes
   cuda_empty_cache: false # Disable frequent cache clearing for speed
   prefetch_factor: 4 # Increase data prefetching
