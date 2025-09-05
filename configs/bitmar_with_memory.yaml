@@ -145,9 +145,9 @@ data:
   use_dummy_vision: false # Use real features for proper multimodal learning
   cache_vision_features: false # DISABLED: No caching, process fresh features
 
-  # DataLoader settings - Optimized for on-the-fly processing
-  batch_size: 16 # Smaller batch for on-the-fly image processing
-  num_workers: 4 # Reduced workers for stability
+  # DataLoader settings - Optimized for on-the-fly processing and faster training
+  batch_size: 32 # Increased from 16 for faster training (GPU permitting)
+  num_workers: 6 # Increased from 4 for better data loading throughput
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
 
