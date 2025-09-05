@@ -112,9 +112,20 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
             tar_file.unlink()
             logger.info(f"   ✅ Extracted train_{i}.tar.gz")
     
-    # Count extracted images
-    image_files = list(oi_dir.glob("**/*.jpg"))
+    # Count extracted images (support multiple formats)
+    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG', '*.webp', '*.WEBP']
+    image_files = []
+    format_counts = {}
+    for ext in image_extensions:
+        found_files = list(oi_dir.glob(f"**/{ext}"))
+        if found_files:
+            format_counts[ext] = len(found_files)
+        image_files.extend(found_files)
+    
     logger.info(f"   📁 Total images extracted: {len(image_files):,}")
+    if format_counts:
+        format_info = ", ".join([f"{ext}: {count}" for ext, count in format_counts.items()])
+        logger.info(f"   📊 Formats found: {format_info}")
     
     # Step 3: Align captions with available images
     logger.info("🔗 Step 3: Align captions with images")
@@ -180,8 +191,9 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
                 try:
                     img = Image.open(pair['image_path']).convert('RGB')
                     batch_images.append(img)
-                except:
-                    # Skip broken images
+                except Exception as e:
+                    # Skip broken/unsupported images
+                    logger.debug(f"Skipping image {pair['image_path']}: {e}")
                     continue
             
             if not batch_images:
