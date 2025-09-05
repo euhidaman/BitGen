@@ -157,9 +157,44 @@ class LocalizedNarrativesCOCODataset(Dataset):
             f"✅ Total loaded: {len(self.all_captions):,} image-caption pairs")
 
     def _load_or_create_vision_features(self):
-        """Load cached vision features - prioritize download cache, never create during training"""
+        """Load cached vision features - prioritize simple download format, then legacy caches"""
 
-        # Priority 1: Look for download cache (created by download_multimodal_data.py)
+        # Priority 1: Look for simple download script format (features.npy + aligned_pairs.json)
+        simple_features_file = self.dataset_dir / "features.npy"
+        simple_pairs_file = self.dataset_dir / "aligned_pairs.json"
+        
+        if simple_features_file.exists() and simple_pairs_file.exists():
+            try:
+                logger.info(
+                    f"🚀 Loading features from simple download format: {simple_features_file}")
+
+                # Load features directly
+                self.all_features = np.load(simple_features_file)
+                
+                # Load aligned pairs to get the mapping
+                with open(simple_pairs_file, 'r') as f:
+                    aligned_pairs = json.load(f)
+                
+                logger.info(
+                    f"✅ Loaded {len(self.all_features):,} features from simple download")
+                logger.info(f"   Feature shape: {self.all_features.shape}")
+                logger.info(f"   Aligned pairs: {len(aligned_pairs):,}")
+                
+                # Update captions and image data to match aligned pairs
+                if len(aligned_pairs) > 0:
+                    self.all_captions = [pair['caption'] for pair in aligned_pairs]
+                    self.all_image_ids = [pair['image_id'] for pair in aligned_pairs]
+                    self.all_image_urls = [pair.get('image_path', '') for pair in aligned_pairs]
+                    self.dataset_sources = ['simple_download'] * len(aligned_pairs)
+                    
+                    logger.info(f"   📝 Updated dataset to use {len(self.all_captions):,} aligned samples")
+                
+                return
+
+            except Exception as e:
+                logger.warning(f"Failed to load simple download format: {e}")
+
+        # Priority 2: Look for download cache (created by download_multimodal_data.py)
         if self.download_cache_file.exists() and self.download_metadata_file.exists():
             try:
                 logger.info(
@@ -182,7 +217,7 @@ class LocalizedNarrativesCOCODataset(Dataset):
             except Exception as e:
                 logger.warning(f"Failed to load download cache: {e}")
 
-        # Priority 2: Look for training cache (legacy)
+        # Priority 3: Look for training cache (legacy)
         if (self.cache_vision_features and not self.force_rebuild_cache and
                 self.training_cache_file.exists() and self.training_metadata_file.exists()):
             try:
@@ -208,10 +243,16 @@ class LocalizedNarrativesCOCODataset(Dataset):
             except Exception as e:
                 logger.warning(f"Failed to load training cache: {e}")
 
-        # Priority 3: Error - no cache available and we don't create features during training
+        # Priority 4: Error - no cache available and we don't create features during training
         logger.error("❌ No pre-cached vision features found!")
-        logger.error(
-            "   Please run download script with --cache_vision_features first:")
+        logger.error("   Expected one of:")
+        logger.error(f"   1. Simple format: {simple_features_file} + {simple_pairs_file}")
+        logger.error(f"   2. Download cache: {self.download_cache_file}")
+        logger.error(f"   3. Training cache: {self.training_cache_file}")
+        logger.error("")
+        logger.error("   To create features, run:")
+        logger.error("   python simple_download_two_shards.py")
+        logger.error("   OR")
         logger.error(
             "   python download_multimodal_data.py --dataset both --data_dir ./data --cache_vision_features")
         logger.error(

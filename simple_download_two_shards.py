@@ -34,10 +34,12 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
     data_path = Path(data_dir)
     data_path.mkdir(exist_ok=True)
 
-    logger.info("🚀 Starting download: images first, then captions for optimal space usage")
+    logger.info(
+        "🚀 Starting download: images first, then captions for optimal space usage")
 
     # Step 1: Check for existing images, download if needed (PRIORITIZE IMAGES FIRST)
-    logger.info("📦 Step 1: Check for existing OpenImages and download additional shards")
+    logger.info(
+        "📦 Step 1: Check for existing OpenImages and download additional shards")
 
     oi_dir = data_path / "open_images"
     oi_dir.mkdir(exist_ok=True)
@@ -54,20 +56,23 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
         existing_images.extend(found_files)
 
     if existing_images:
-        logger.info(f"   ✅ Found {len(existing_images):,} existing images (likely train_0 already extracted)")
+        logger.info(
+            f"   ✅ Found {len(existing_images):,} existing images (likely train_0 already extracted)")
         if format_counts:
             format_info = ", ".join(
                 [f"{ext}: {count}" for ext, count in format_counts.items()])
             logger.info(f"   📊 Formats found: {format_info}")
-        
+
         # Check if we should add train_1 to complement existing train_0 images
         train_1_extracted = len(list(oi_dir.glob("**/train_1/**"))) > 0
-        has_enough_images = len(existing_images) > 400000  # If we have more than 400K, we probably have both shards
-        
+        # If we have more than 400K, we probably have both shards
+        has_enough_images = len(existing_images) > 400000
+
         if not train_1_extracted and not has_enough_images:
-            logger.info("   → Detected train_0 images only, adding train_1 shard for better coverage...")
+            logger.info(
+                "   → Detected train_0 images only, adding train_1 shard for better coverage...")
             train_1_tar = oi_dir / "train_1.tar.gz"
-            
+
             # Download train_1.tar.gz
             if not train_1_tar.exists():
                 logger.info("   📦 Downloading train_1.tar.gz...")
@@ -79,32 +84,37 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
                     logger.error("   ❌ Failed to download train_1.tar.gz")
                     image_files = existing_images  # Use existing images if download fails
                     return
-            
+
             # Extract train_1.tar.gz and DELETE TAR immediately to save space
             if train_1_tar.exists():
                 logger.info("   📂 Extracting train_1.tar.gz...")
                 with tarfile.open(train_1_tar, 'r:gz') as tar:
                     tar.extractall(oi_dir)
                 train_1_tar.unlink()  # Delete tar IMMEDIATELY after extraction
-                logger.info("   ✅ Extracted train_1.tar.gz and deleted tar file to save space")
-                
+                logger.info(
+                    "   ✅ Extracted train_1.tar.gz and deleted tar file to save space")
+
                 # Recount all images after adding train_1
                 all_images = []
                 for ext in image_extensions:
                     all_images.extend(oi_dir.glob(f"**/{ext}"))
-                logger.info(f"   📊 Total images after adding train_1: {len(all_images):,}")
+                logger.info(
+                    f"   📊 Total images after adding train_1: {len(all_images):,}")
                 image_files = all_images
             else:
                 image_files = existing_images
         else:
             if train_1_extracted:
-                logger.info("   → train_1 already extracted, using all existing images")
+                logger.info(
+                    "   → train_1 already extracted, using all existing images")
             else:
-                logger.info("   → Sufficient images detected, using existing set")
+                logger.info(
+                    "   → Sufficient images detected, using existing set")
             image_files = existing_images
     else:
-        logger.info("   No existing images found, downloading train_0.tar.gz and train_1.tar.gz...")
-        
+        logger.info(
+            "   No existing images found, downloading train_0.tar.gz and train_1.tar.gz...")
+
         # AWS commands for first TWO shards to maximize image coverage
         shard_commands = [
             f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
@@ -135,7 +145,8 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
 
                 # Delete tar file IMMEDIATELY after extraction to save space
                 tar_file.unlink()
-                logger.info(f"   ✅ Extracted train_{i}.tar.gz and deleted tar file to save space")
+                logger.info(
+                    f"   ✅ Extracted train_{i}.tar.gz and deleted tar file to save space")
 
         # Count extracted images (support multiple formats)
         image_files = []
@@ -153,7 +164,8 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
             logger.info(f"   📊 Formats found: {format_info}")
 
     # Step 2: NOW download captions (after freeing up space from tar deletions)
-    logger.info("📝 Step 2: Download OpenImages captions from Localized Narratives")
+    logger.info(
+        "📝 Step 2: Download OpenImages captions from Localized Narratives")
 
     ln_dir = data_path / "localized_narratives" / "open_images"
     ln_dir.mkdir(parents=True, exist_ok=True)
@@ -250,6 +262,39 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
     logger.info(
         f"   ✅ Aligned {len(aligned_pairs):,} caption-image pairs ({alignment_percentage:.1f}% coverage)")
 
+    # Step 3.5: Clean up unaligned images to save space
+    logger.info("🗑️ Step 3.5: Clean up images without captions to save space")
+    
+    # Get set of aligned image IDs for fast lookup
+    aligned_image_ids = {pair['image_id'] for pair in aligned_pairs}
+    
+    # Find images that don't have captions
+    unaligned_images = []
+    for img_file in image_files:
+        image_id = img_file.stem
+        if image_id not in aligned_image_ids:
+            unaligned_images.append(img_file)
+    
+    if unaligned_images:
+        logger.info(f"   🗑️ Found {len(unaligned_images):,} images without captions")
+        logger.info(f"   💾 This will save significant disk space...")
+        
+        deleted_count = 0
+        for img_file in unaligned_images:
+            try:
+                img_file.unlink()  # Delete the file
+                deleted_count += 1
+            except Exception as e:
+                logger.debug(f"Failed to delete {img_file}: {e}")
+        
+        logger.info(f"   ✅ Deleted {deleted_count:,} unaligned images")
+        logger.info(f"   📊 Kept {len(aligned_pairs):,} images with captions ({alignment_percentage:.1f}% of original)")
+        
+        # Update image_files list to reflect deletions
+        image_files = [Path(pair['image_path']) for pair in aligned_pairs]
+    else:
+        logger.info("   ✅ All images have captions, no cleanup needed")
+
     # Step 4: Extract DiNOv2 features
     logger.info("🧠 Step 4: Extract DiNOv2 features")
 
@@ -318,24 +363,50 @@ def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000
                 logger.warning(f"Failed to extract features for batch: {e}")
                 continue
 
-        # Save everything
-        logger.info("💾 Step 5: Save results")
+        # Save everything in the format expected by training
+        logger.info("💾 Step 5: Save results in training-compatible format")
 
-        # Save aligned pairs
+        # Create vision features cache directory (required by training)
+        cache_dir = data_path / "vision_features_cache"
+        cache_dir.mkdir(exist_ok=True)
+
+        # Save aligned pairs (legacy format)
         pairs_file = data_path / "aligned_pairs.json"
         with open(pairs_file, 'w') as f:
             json.dump(aligned_pairs[:len(all_features)], f, indent=2)
 
-        # Save features
-        features_file = data_path / "features.npy"
+        # Save features in the expected cache format for training
         features_array = np.array(all_features)
-        np.save(features_file, features_array)
+        
+        # Training expects: ./data/vision_features_cache/all_features.npy
+        training_features_file = cache_dir / "all_features.npy"
+        np.save(training_features_file, features_array)
+        
+        # Also save metadata for training compatibility
+        import pickle
+        metadata = {
+            'num_samples': len(all_features),
+            'feature_shape': features_array.shape[1:],
+            'feature_type': 'real_dinov2',
+            'vision_model': 'facebook/dinov2-base',
+            'use_dummy_vision': False,
+            'extract_vision_features': True,
+            'created_by': 'simple_download_two_shards.py'
+        }
+        
+        metadata_file = cache_dir / "cache_metadata.pkl"
+        with open(metadata_file, 'wb') as f:
+            pickle.dump(metadata, f)
+
+        # Save legacy features file for compatibility
+        legacy_features_file = data_path / "features.npy"
+        np.save(legacy_features_file, features_array)
 
         # Save summary
         shards_used = ['train_0']
         if len(image_files) > 200000:  # Approximate threshold for two shards
             shards_used.append('train_1')
-            
+
         summary = {
             'total_images': len(image_files),
             'aligned_pairs': len(aligned_pairs),
