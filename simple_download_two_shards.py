@@ -38,9 +38,12 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
     ln_dir = data_path / "localized_narratives" / "open_images"
     ln_dir.mkdir(parents=True, exist_ok=True)
     
-    # Download first caption shard only (enough for one image shard)
+    # Download first few caption shards (need multiple shards to cover one image shard)
     caption_urls = [
-        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl'
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00002-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00003-of-00010.jsonl'
     ]
     
     captions = []
@@ -57,6 +60,7 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
         
         # Parse captions
         logger.info(f"   Processing {filename}...")
+        shard_captions = 0
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 if len(captions) >= max_samples:
@@ -68,67 +72,91 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
                             'image_id': data['image_id'],
                             'caption': data['caption']
                         })
+                        shard_captions += 1
                 except:
                     continue
+        
+        logger.info(f"     → Got {shard_captions:,} captions from this shard")
         
         if len(captions) >= max_samples:
             break
     
     logger.info(f"   ✅ Got {len(captions):,} captions")
     
-    # Step 2: Download first OpenImages shard only
-    logger.info("📦 Step 2: Download first OpenImages shard")
+    # Step 2: Check for existing images, download if needed
+    logger.info("📦 Step 2: Check for existing OpenImages")
     
     oi_dir = data_path / "open_images"
     oi_dir.mkdir(exist_ok=True)
     
-    # AWS command for first shard only
-    shard_commands = [
-        f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/"
-    ]
-    
-    for i, cmd in enumerate(shard_commands):
-        tar_file = oi_dir / f"train_{i}.tar.gz"
-        
-        # Download if not exists
-        if not tar_file.exists():
-            logger.info(f"   Downloading train_{i}.tar.gz (this will take time)...")
-            try:
-                subprocess.run(cmd.split(), check=True)
-                logger.info(f"   ✅ Downloaded train_{i}.tar.gz")
-            except subprocess.CalledProcessError:
-                logger.error(f"   ❌ Failed to download train_{i}.tar.gz")
-                continue
-        else:
-            logger.info(f"   train_{i}.tar.gz already exists")
-        
-        # Extract shard
-        if tar_file.exists():
-            logger.info(f"   Extracting train_{i}.tar.gz...")
-            with tarfile.open(tar_file, 'r:gz') as tar:
-                tar.extractall(oi_dir)
-            
-            # Remove tar file to save space
-            tar_file.unlink()
-            logger.info(f"   ✅ Extracted train_{i}.tar.gz")
-    
-    # Count extracted images (support multiple formats)
+    # Check if images already exist
     image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG', '*.webp', '*.WEBP']
-    image_files = []
+    existing_images = []
     format_counts = {}
     for ext in image_extensions:
         found_files = list(oi_dir.glob(f"**/{ext}"))
         if found_files:
             format_counts[ext] = len(found_files)
-        image_files.extend(found_files)
+        existing_images.extend(found_files)
     
-    logger.info(f"   📁 Total images extracted: {len(image_files):,}")
-    if format_counts:
-        format_info = ", ".join([f"{ext}: {count}" for ext, count in format_counts.items()])
-        logger.info(f"   📊 Formats found: {format_info}")
+    if existing_images:
+        logger.info(f"   ✅ Found {len(existing_images):,} existing images")
+        if format_counts:
+            format_info = ", ".join([f"{ext}: {count}" for ext, count in format_counts.items()])
+            logger.info(f"   📊 Formats found: {format_info}")
+        logger.info("   → Skipping image download, using existing images")
+        image_files = existing_images
+    else:
+        logger.info("   No existing images found, downloading train_0.tar.gz...")
+        
+        # AWS command for first shard only
+        shard_commands = [
+            f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/"
+        ]
+        
+        for i, cmd in enumerate(shard_commands):
+            tar_file = oi_dir / f"train_{i}.tar.gz"
+            
+            # Download if not exists
+            if not tar_file.exists():
+                logger.info(f"   Downloading train_{i}.tar.gz (this will take time)...")
+                try:
+                    subprocess.run(cmd.split(), check=True)
+                    logger.info(f"   ✅ Downloaded train_{i}.tar.gz")
+                except subprocess.CalledProcessError:
+                    logger.error(f"   ❌ Failed to download train_{i}.tar.gz")
+                    continue
+            else:
+                logger.info(f"   train_{i}.tar.gz already exists")
+            
+            # Extract shard
+            if tar_file.exists():
+                logger.info(f"   Extracting train_{i}.tar.gz...")
+                with tarfile.open(tar_file, 'r:gz') as tar:
+                    tar.extractall(oi_dir)
+                
+                # Remove tar file to save space
+                tar_file.unlink()
+                logger.info(f"   ✅ Extracted train_{i}.tar.gz")
+        
+        # Count extracted images (support multiple formats)
+        image_files = []
+        format_counts = {}
+        for ext in image_extensions:
+            found_files = list(oi_dir.glob(f"**/{ext}"))
+            if found_files:
+                format_counts[ext] = len(found_files)
+            image_files.extend(found_files)
+        
+        logger.info(f"   📁 Total images extracted: {len(image_files):,}")
+        if format_counts:
+            format_info = ", ".join([f"{ext}: {count}" for ext, count in format_counts.items()])
+            logger.info(f"   📊 Formats found: {format_info}")
     
     # Step 3: Align captions with available images
     logger.info("🔗 Step 3: Align captions with images")
+    logger.info(f"   📊 Available images: {len(image_files):,}")
+    logger.info(f"   📝 Available captions: {len(captions):,}")
     
     # Create image_id to path mapping
     image_map = {}
@@ -147,7 +175,8 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
                 'caption': caption_data['caption']
             })
     
-    logger.info(f"   ✅ Aligned {len(aligned_pairs):,} caption-image pairs")
+    alignment_percentage = (len(aligned_pairs) / len(image_files)) * 100 if image_files else 0
+    logger.info(f"   ✅ Aligned {len(aligned_pairs):,} caption-image pairs ({alignment_percentage:.1f}% coverage)")
     
     # Step 4: Extract DiNOv2 features
     logger.info("🧠 Step 4: Extract DiNOv2 features")
