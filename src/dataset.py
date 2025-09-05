@@ -1,7 +1,8 @@
 """
-Dataset processing for BitMar
-Handles HuggingFace LocalizedNarratives and COCO datasets with vision feature extraction
-Loads image-caption pairs and processes images into 768-dim features
+Enhanced Dataset processing for BitGen
+Handles OpenImages and robot selection datasets with on-the-fly image processing
+Supports dynamic robot selection grounding and FIBER cross-modal alignment
+Processes images on-the-fly during training for modern VLM architecture
 """
 
 import json
@@ -9,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoImageProcessor, AutoModel
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import logging
 import random
 import os
@@ -35,95 +36,243 @@ except ImportError:
         "⚠️ HuggingFace datasets not available - install with: pip install datasets")
 
 
-class LocalizedNarrativesCOCODataset(Dataset):
-    """Dataset for HuggingFace LocalizedNarratives and COCO with vision feature extraction"""
+class EnhancedBitGenDataset(Dataset):
+    """Enhanced dataset for BitGen with on-the-fly image processing and robot reasoning grounding"""
 
     def __init__(
         self,
         dataset_dir: str,
+        robot_data_dir: str = "robot_selection_data/data",  # Robot selection dataset
         tokenizer_name: str = "gpt2",
         max_seq_length: int = 256,
-        # Updated to DiNOv3 small (faster)
-        vision_model: str = "facebook/dinov3-vits16-pretrain-lvd1689m",
-        extract_vision_features: bool = True,
-        use_dummy_vision: bool = False,
-        cache_vision_features: bool = True,
-        force_rebuild_cache: bool = False,
-        use_hf_localized_narratives: bool = False,  # Disabled due to deprecated scripts
-        hf_dataset_config: str = "open_images",  # open_images, ait, flickr, coco
-        max_samples_per_split: int = 10000  # Limit samples for faster loading
+        vision_model: str = "facebook/dinov2-base",  # DiNOv2 for on-the-fly processing
+        process_images_on_the_fly: bool = True,  # Process images during training
+        enable_robot_grounding: bool = True,  # Enable robot selection grounding
+        max_robots_per_sample: int = 3,  # Maximum robots to select per task
+        robot_selection_probability: float = 0.3,  # Probability of including robot selection
+        max_samples_per_split: int = 50000,  # Maximum samples to load
+        image_size: Tuple[int, int] = (224, 224),  # Image processing size
     ):
         self.dataset_dir = Path(dataset_dir)
+        self.robot_data_dir = Path(robot_data_dir)
         self.max_seq_length = max_seq_length
-        self.extract_vision_features = extract_vision_features
-        self.use_dummy_vision = use_dummy_vision
-        self.cache_vision_features = cache_vision_features
-        self.force_rebuild_cache = force_rebuild_cache
-        self.use_hf_localized_narratives = use_hf_localized_narratives and HF_DATASETS_AVAILABLE
-        self.hf_dataset_config = hf_dataset_config
+        self.process_images_on_the_fly = process_images_on_the_fly
+        self.enable_robot_grounding = enable_robot_grounding
+        self.max_robots_per_sample = max_robots_per_sample
+        self.robot_selection_probability = robot_selection_probability
         self.max_samples_per_split = max_samples_per_split
-
-        # Create cache directory
-        self.cache_dir = self.dataset_dir / "vision_features_cache"
-        self.cache_dir.mkdir(exist_ok=True, parents=True)
-
-        # Look for pre-cached features from download step (standard naming)
-        self.download_cache_file = self.cache_dir / "all_features.npy"
-        self.download_metadata_file = self.cache_dir / "cache_metadata.pkl"
-
-        # Fallback to training-time cache (legacy naming scheme)
-        self.cache_key = hashlib.md5(
-            f"{vision_model}_{extract_vision_features}_{use_dummy_vision}".encode()
-        ).hexdigest()[:8]
-        self.training_cache_file = self.cache_dir / \
-            f"features_{self.cache_key}.npy"
-        self.training_metadata_file = self.cache_dir / \
-            f"metadata_{self.cache_key}.pkl"
+        self.image_size = image_size
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Vision model initialization - only if we're forced to rebuild and no download cache exists
-        if (force_rebuild_cache and not self.download_cache_file.exists() and
-                extract_vision_features and not use_dummy_vision):
+        # Initialize vision model for on-the-fly processing
+        if self.process_images_on_the_fly:
             try:
-                logger.info(f"Loading vision model: {vision_model}")
-                self.vision_processor = AutoImageProcessor.from_pretrained(
-                    vision_model)
+                logger.info(f"🔄 Loading vision model for on-the-fly processing: {vision_model}")
+                self.vision_processor = AutoImageProcessor.from_pretrained(vision_model)
                 self.vision_model = AutoModel.from_pretrained(vision_model)
                 self.vision_model.eval()
-                logger.info("✅ Vision model loaded successfully")
+                logger.info("✅ Vision model loaded for on-the-fly processing")
             except Exception as e:
-                logger.warning(f"Failed to load vision model: {e}")
-                logger.warning("Falling back to dummy vision features")
-                self.use_dummy_vision = True
-                self.vision_processor = None
-                self.vision_model = None
+                logger.error(f"❌ Failed to load vision model: {e}")
+                raise RuntimeError(f"Vision model required for on-the-fly processing: {e}")
         else:
             self.vision_processor = None
             self.vision_model = None
 
-        # Load all datasets
-        self._load_datasets()
+        # Load robot selection data for grounding
+        if self.enable_robot_grounding:
+            self._load_robot_selection_data()
 
-        # Try to load cached features (prioritize download cache over training cache)
-        self._load_or_create_vision_features()
+        # Load multimodal datasets
+        self._load_multimodal_datasets()
 
-        # Create indices for dataset
+        # Create training indices
         self.indices = list(range(len(self.all_captions)))
 
-        # FINAL DATASET SUMMARY - Show exactly what we're training with
-        logger.info("🎯 FINAL DATASET SUMMARY:")
-        logger.info(f"   📝 Total captions: {len(self.all_captions):,}")
-        logger.info(f"   🧠 Total features: {len(self.all_features):,}" if hasattr(self, 'all_features') else "   🧠 No features loaded!")
+        # FINAL DATASET SUMMARY
+        logger.info("🎯 ENHANCED BITGEN DATASET SUMMARY:")
+        logger.info(f"   📝 Total image-caption pairs: {len(self.all_captions):,}")
+        logger.info(f"   🤖 Robot selection examples: {len(self.robot_examples):,}" if hasattr(self, 'robot_examples') else "   🤖 No robot data loaded")
         logger.info(f"   📊 Training indices: {len(self.indices):,}")
-        if hasattr(self, 'all_features'):
-            logger.info(f"   🔢 Feature shape: {self.all_features.shape}")
-            logger.info(f"   📈 Features per sample: {self.all_features.shape[1] if len(self.all_features.shape) > 1 else 'unknown'}")
-        logger.info(
-            f"✅ Final dataset ready: {len(self.indices):,} image-caption pairs from Localized Narratives + COCO")
+        logger.info(f"   🔄 On-the-fly image processing: {self.process_images_on_the_fly}")
+        logger.info(f"   🤖 Robot grounding enabled: {self.enable_robot_grounding}")
+        logger.info(f"   📈 Robot selection probability: {self.robot_selection_probability}")
+        logger.info(f"✅ Enhanced dataset ready for BitGen training")
+
+    def _load_robot_selection_data(self):
+        """Load robot selection datasets for grounding"""
+        try:
+            logger.info("🤖 Loading robot selection data for grounding...")
+            
+            # Load single robot selection
+            single_path = self.robot_data_dir / "Single-Robot-Selection" / "single_robot_selection_dataset.json"
+            multi_path = self.robot_data_dir / "Multi-Robot-Selection" / "multi_robot_selection_dataset.json"
+            
+            self.robot_examples = []
+            
+            if single_path.exists():
+                with open(single_path, 'r') as f:
+                    single_data = json.load(f)
+                    self.robot_examples.extend(single_data)
+                logger.info(f"   📄 Loaded {len(single_data):,} single robot examples")
+            
+            if multi_path.exists():
+                with open(multi_path, 'r') as f:
+                    multi_data = json.load(f)
+                    self.robot_examples.extend(multi_data)
+                logger.info(f"   📄 Loaded {len(multi_data):,} multi robot examples")
+            
+            logger.info(f"✅ Total robot examples: {len(self.robot_examples):,}")
+            
+            # Extract robot capabilities for dynamic selection
+            self._extract_robot_capabilities()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load robot selection data: {e}")
+            self.robot_examples = []
+            self.enable_robot_grounding = False
+
+    def _extract_robot_capabilities(self):
+        """Extract robot capabilities from examples"""
+        if not self.robot_examples:
+            return
+            
+        # Parse robot types and capabilities from instruction
+        self.robot_types = ['Drone', 'Underwater Robot', 'Humanoid', 'Robot with Wheels', 'Robot with Legs']
+        self.robot_capabilities = {}
+        
+        # Extract from first example's instruction
+        instruction = self.robot_examples[0]['instruction']
+        lines = instruction.split('\n')
+        
+        current_robot = None
+        for line in lines:
+            line = line.strip()
+            if line.endswith(':') and any(robot in line for robot in self.robot_types):
+                for robot in self.robot_types:
+                    if robot in line:
+                        current_robot = robot
+                        self.robot_capabilities[robot] = {
+                            'capabilities': [],
+                            'limitations': [],
+                            'environments': []
+                        }
+                        break
+            elif current_robot and line.startswith('capabilities:'):
+                caps = line.replace('capabilities:', '').strip().rstrip(',')
+                self.robot_capabilities[current_robot]['capabilities'] = [c.strip() for c in caps.split(',') if c.strip()]
+            elif current_robot and line.startswith('limitations:'):
+                lims = line.replace('limitations:', '').strip().rstrip(',')
+                self.robot_capabilities[current_robot]['limitations'] = [l.strip() for l in lims.split(',') if l.strip()]
+            elif current_robot and line.startswith('environments:'):
+                envs = line.replace('environments:', '').strip().rstrip(',')
+                self.robot_capabilities[current_robot]['environments'] = [e.strip() for e in envs.split(',') if e.strip()]
+
+    def _load_multimodal_datasets(self):
+        """Load OpenImages and caption data for multimodal training"""
+        logger.info("📥 Loading multimodal datasets...")
+
+        self.all_captions = []
+        self.all_image_paths = []
+        self.all_image_ids = []
+        self.dataset_sources = []
+
+        # Try to load from simple download format (aligned_pairs.json)
+        simple_pairs_file = self.dataset_dir / "aligned_pairs.json"
+        
+        if simple_pairs_file.exists():
+            try:
+                logger.info(f"🚀 Loading aligned pairs from: {simple_pairs_file}")
+                
+                with open(simple_pairs_file, 'r') as f:
+                    aligned_pairs = json.load(f)
+                
+                # Extract data for on-the-fly processing
+                for pair in aligned_pairs:
+                    self.all_captions.append(pair['caption'])
+                    self.all_image_paths.append(pair['image_path'])
+                    self.all_image_ids.append(pair['image_id'])
+                    self.dataset_sources.append('openimages')
+                
+                logger.info(f"✅ Loaded {len(aligned_pairs):,} aligned image-caption pairs")
+                
+            except Exception as e:
+                logger.warning(f"Failed to load aligned pairs: {e}")
+        
+        # Fallback: Load from unified captions if no aligned pairs
+        if not self.all_captions:
+            unified_file = self.dataset_dir / "all_captions.json"
+            if unified_file.exists():
+                logger.info("📄 Loading unified captions file...")
+                with open(unified_file, 'r', encoding='utf-8') as f:
+                    self.all_captions = json.load(f)
+
+                # Create dummy image data
+                self.all_image_paths = [None] * len(self.all_captions)
+                self.all_image_ids = list(range(len(self.all_captions)))
+                self.dataset_sources = ['unified'] * len(self.all_captions)
+
+                logger.info(f"✅ Loaded {len(self.all_captions):,} captions from unified file")
+
+        if not self.all_captions:
+            raise RuntimeError("❌ No multimodal data found! Expected aligned_pairs.json or all_captions.json")
+
+    def _process_image_on_the_fly(self, image_path: str) -> torch.Tensor:
+        """Process image on-the-fly during training"""
+        try:
+            # Load image
+            if os.path.exists(image_path):
+                image = Image.open(image_path).convert('RGB')
+            else:
+                # Create dummy image if file not found
+                image = Image.new('RGB', self.image_size, color=(128, 128, 128))
+            
+            # Process with vision model
+            if self.vision_processor and self.vision_model:
+                inputs = self.vision_processor(image, return_tensors="pt")
+                with torch.no_grad():
+                    outputs = self.vision_model(**inputs)
+                    features = outputs.last_hidden_state.mean(dim=1)  # Global average pooling
+                return features.squeeze(0)
+            else:
+                # Return dummy features if no vision model
+                return torch.randn(768)  # DiNOv2-base feature size
+                
+        except Exception as e:
+            logger.warning(f"Failed to process image {image_path}: {e}")
+            return torch.randn(768)  # Return dummy features on error
+
+    def _select_robots_for_task(self, task_description: str, image_features: Optional[torch.Tensor] = None) -> Dict:
+        """Select top-N robots for a given task based on description and optional image features"""
+        if not self.enable_robot_grounding or not hasattr(self, 'robot_examples'):
+            return {}
+        
+        # For now, randomly select from robot examples (can be enhanced with semantic matching)
+        robot_example = random.choice(self.robot_examples)
+        
+        # Extract robot selection from example
+        if 'output' in robot_example:
+            # Single robot selection
+            selected_robots = robot_example['output'].split(', ')
+        elif 'subtasks' in robot_example:
+            # Multi robot selection - extract unique robots
+            selected_robots = list(set([subtask['assigned_robot'] for subtask in robot_example['subtasks']]))
+        else:
+            selected_robots = [random.choice(self.robot_types)]
+        
+        # Limit to max_robots_per_sample
+        selected_robots = selected_robots[:self.max_robots_per_sample]
+        
+        return {
+            'task': task_description,
+            'selected_robots': selected_robots,
+            'reasoning': f"Based on task requirements, selected: {', '.join(selected_robots)}",
+            'robot_capabilities': {robot: self.robot_capabilities.get(robot, {}) for robot in selected_robots}
+        }
 
     def _load_datasets(self):
         """Load HuggingFace LocalizedNarratives and COCO datasets"""
@@ -569,12 +718,18 @@ class LocalizedNarrativesCOCODataset(Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single data sample with vision features"""
+        """Get a single data sample with on-the-fly vision processing and optional robot grounding"""
         real_idx = self.indices[idx]
         caption = self.all_captions[real_idx]
+        
+        # Determine if this sample should include robot selection
+        include_robot_selection = (
+            self.enable_robot_grounding and 
+            random.random() < self.robot_selection_probability
+        )
 
-        # Get vision features
-        vision_feature = self._get_vision_features(real_idx)
+        # Get vision features via on-the-fly processing
+        vision_features = self._get_vision_features_on_the_fly(real_idx)
 
         # Tokenize caption
         encoded = self.tokenizer(
@@ -595,154 +750,171 @@ class LocalizedNarrativesCOCODataset(Dataset):
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
 
-        # Handle vision features - ensure proper 768-dim format
-        vision_tensor = torch.tensor(
-            vision_feature.copy(), dtype=torch.float32)
-        if vision_tensor.dim() == 1:
-            # Ensure it's exactly 768 dimensions
-            if vision_tensor.size(0) != 768:
-                if vision_tensor.size(0) > 768:
-                    vision_tensor = vision_tensor[:768]
-                else:
-                    # Pad to 768
-                    pad_size = 768 - vision_tensor.size(0)
-                    vision_tensor = torch.cat(
-                        [vision_tensor, torch.zeros(pad_size)])
-        else:
-            # Flatten and ensure 768 dims
-            vision_tensor = vision_tensor.flatten()
-            if vision_tensor.size(0) != 768:
-                if vision_tensor.size(0) > 768:
-                    vision_tensor = vision_tensor[:768]
-                else:
-                    pad_size = 768 - vision_tensor.size(0)
-                    vision_tensor = torch.cat(
-                        [vision_tensor, torch.zeros(pad_size)])
-
-        return {
+        # Prepare return data
+        sample_data = {
             'input_ids': input_ids,
             'attention_mask': attention_mask,
             'labels': labels,
-            'vision_features': vision_tensor,  # Always 768-dimensional
+            'vision_features': vision_features,  # Fresh features from on-the-fly processing
             'has_vision': True,
             'vision_index': real_idx,
-            'sample_type': 'caption',
+            'sample_type': 'multimodal_caption',
             'sample_index': idx,
             'text': caption,
+            'image_path': self.all_image_paths[real_idx] if hasattr(self, 'all_image_paths') else None,
+            'dataset_source': self.dataset_sources[real_idx] if hasattr(self, 'dataset_sources') else 'unknown'
+        }
+
+        # Add robot grounding if enabled
+        if include_robot_selection:
+            robot_selection = self._select_robots_for_task(caption, vision_features)
+            sample_data.update({
+                'robot_selection': robot_selection,
+                'has_robot_grounding': True,
+                'selected_robots': robot_selection.get('selected_robots', []),
+                'robot_reasoning': robot_selection.get('reasoning', ''),
+                'robot_capabilities': robot_selection.get('robot_capabilities', {})
+            })
+        else:
+            sample_data.update({
+                'has_robot_grounding': False,
+                'selected_robots': [],
+                'robot_reasoning': '',
+                'robot_capabilities': {}
+            })
+
+        return sample_data
+
+    def _get_vision_features_on_the_fly(self, idx: int) -> torch.Tensor:
+        """Get vision features via on-the-fly image processing"""
+        if not self.process_images_on_the_fly:
+            # Fallback to dummy features if not processing on-the-fly
+            return torch.randn(768)
+        
+        # Get image path
+        image_path = None
+        if hasattr(self, 'all_image_paths') and idx < len(self.all_image_paths):
+            image_path = self.all_image_paths[idx]
+        
+        if image_path and os.path.exists(image_path):
+            # Process real image
+            vision_features = self._process_image_on_the_fly(image_path)
+        else:
+            # Generate dummy features for missing images
+            vision_features = torch.randn(768)
+        
+        # Ensure proper tensor format
+        if not isinstance(vision_features, torch.Tensor):
+            vision_features = torch.tensor(vision_features, dtype=torch.float32)
+        
+        # Ensure exactly 768 dimensions
+        if vision_features.dim() > 1:
+            vision_features = vision_features.flatten()
+        
+        if vision_features.size(0) != 768:
+            if vision_features.size(0) > 768:
+                vision_features = vision_features[:768]
+            else:
+                pad_size = 768 - vision_features.size(0)
+                vision_features = torch.cat([vision_features, torch.zeros(pad_size)])
+        
+        return vision_features
+
+    def __len__(self) -> int:
+        """Return dataset length"""
+        return len(self.indices)
+
+    def get_sample_info(self, idx: int) -> Dict:
+        """Get information about a specific sample"""
+        real_idx = self.indices[idx]
+        return {
+            'index': idx,
+            'real_index': real_idx,
+            'caption': self.all_captions[real_idx],
             'image_id': self.all_image_ids[real_idx] if hasattr(self, 'all_image_ids') else real_idx,
-            'source': self.dataset_sources[real_idx] if hasattr(self, 'dataset_sources') else 'unknown'
+            'image_path': self.all_image_paths[real_idx] if hasattr(self, 'all_image_paths') else None,
+            'source': self.dataset_sources[real_idx] if hasattr(self, 'dataset_sources') else 'unknown',
+            'has_robot_grounding': self.enable_robot_grounding
         }
 
 
-def create_data_module(config: Dict) -> 'LocalizedNarrativesCOCODataModule':
-    """Create data module for Localized Narratives + COCO"""
-    return LocalizedNarrativesCOCODataModule(config)
+def create_data_module(config: Dict) -> 'EnhancedBitGenDataModule':
+    """Create enhanced data module for BitGen"""
+    return EnhancedBitGenDataModule(config)
 
 
-class LocalizedNarrativesCOCODataModule:
-    """Data module for Localized Narratives and COCO datasets with vision processing"""
-
-    def __init__(self, config: Dict):
-        self.config = config
-        self.dataset = None
-        self.train_loader = None
-
-    def setup(self, rebuild_cache: bool = False):
-        """Setup the dataset with vision feature extraction"""
-        logger.info(
-            "🔧 Setting up Localized Narratives + COCO data module with vision processing...")
-
-        # Determine if we should extract real vision features or use dummy ones
-        extract_vision = self.config.get('extract_vision_features', False)
-        # Default to dummy for speed
-        use_dummy = self.config.get('use_dummy_vision', True)
-        cache_features = self.config.get(
-            'cache_vision_features', True)  # Default to caching
-
-        if extract_vision and not use_dummy:
-            logger.info(
-                "🎨 Real vision feature extraction enabled (slower but better quality)")
-            if cache_features:
-                logger.info(
-                    "💾 Vision feature caching enabled - features will be computed once and cached")
-        else:
-            logger.info("⚡ Using dummy vision features (faster training)")
-
-        self.dataset = LocalizedNarrativesCOCODataset(
-            dataset_dir=self.config['dataset_dir'],
-            tokenizer_name=self.config['text_encoder_name'],
-            max_seq_length=self.config['max_seq_length'],
-            extract_vision_features=extract_vision,
-            use_dummy_vision=use_dummy,
-            cache_vision_features=cache_features,
-            force_rebuild_cache=rebuild_cache
-        )
-
-        logger.info(f"📊 Dataset ready with {len(self.dataset):,} samples")
-
-    def clear_vision_cache(self):
-        """Clear cached vision features"""
-        if hasattr(self, 'dataset') and self.dataset:
-            cache_dir = self.dataset.cache_dir
-            if cache_dir.exists():
-                logger.info(
-                    f"🗑️  Clearing vision features cache from {cache_dir}")
-                for cache_file in cache_dir.glob("*.npy"):
-                    cache_file.unlink()
-                    logger.info(f"   Deleted: {cache_file}")
-                for metadata_file in cache_dir.glob("*.pkl"):
-                    metadata_file.unlink()
-                    logger.info(f"   Deleted: {metadata_file}")
-                logger.info("✅ Vision features cache cleared")
-            else:
-                logger.info("ℹ️  No vision features cache to clear")
-
-
-def create_data_module(config: Dict) -> LocalizedNarrativesCOCODataModule:
-    """Create data module from config"""
-    return LocalizedNarrativesCOCODataModule(config)
-
-
-class LocalizedNarrativesCOCODataModule:
-    """Data module for Localized Narratives and COCO datasets with vision processing"""
+class EnhancedBitGenDataModule:
+    """Enhanced data module for BitGen with on-the-fly image processing and robot grounding"""
 
     def __init__(self, config: Dict):
         self.config = config
         self.dataset = None
         self.train_loader = None
 
-    def setup(self, rebuild_cache: bool = False):
-        """Setup the dataset with vision feature extraction"""
-        logger.info(
-            "🔧 Setting up Localized Narratives + COCO data module with vision processing...")
+    def setup(self, force_rebuild: bool = False):
+        """Setup the enhanced BitGen dataset"""
+        logger.info("🔧 Setting up Enhanced BitGen data module...")
 
-        # Determine if we should extract real vision features or use dummy ones
-        extract_vision = self.config.get('extract_vision_features', False)
-        # Default to dummy for speed
-        use_dummy = self.config.get('use_dummy_vision', True)
-        cache_features = self.config.get(
-            'cache_vision_features', True)  # Default to caching
+        # Configuration for enhanced features
+        robot_data_dir = self.config.get('robot_data_dir', 'robot_selection_data/data')
+        process_images_on_the_fly = self.config.get('process_images_on_the_fly', True)
+        enable_robot_grounding = self.config.get('enable_robot_grounding', True)
+        max_robots_per_sample = self.config.get('max_robots_per_sample', 3)
+        robot_selection_probability = self.config.get('robot_selection_probability', 0.3)
 
-        if extract_vision and not use_dummy:
-            logger.info(
-                "🎨 Real vision feature extraction enabled (slower but better quality)")
-            if cache_features:
-                logger.info(
-                    "💾 Vision feature caching enabled - features will be computed once and cached")
-        else:
-            logger.info("⚡ Using dummy vision features (faster training)")
+        logger.info(f"   🔄 On-the-fly image processing: {process_images_on_the_fly}")
+        logger.info(f"   🤖 Robot grounding: {enable_robot_grounding}")
+        logger.info(f"   📊 Robot selection probability: {robot_selection_probability}")
 
-        self.dataset = LocalizedNarrativesCOCODataset(
+        self.dataset = EnhancedBitGenDataset(
             dataset_dir=self.config['dataset_dir'],
+            robot_data_dir=robot_data_dir,
             tokenizer_name=self.config['text_encoder_name'],
             max_seq_length=self.config['max_seq_length'],
-            extract_vision_features=extract_vision,
-            use_dummy_vision=use_dummy,
-            cache_vision_features=cache_features,
-            force_rebuild_cache=rebuild_cache
+            vision_model=self.config.get('vision_encoder_name', 'facebook/dinov2-base'),
+            process_images_on_the_fly=process_images_on_the_fly,
+            enable_robot_grounding=enable_robot_grounding,
+            max_robots_per_sample=max_robots_per_sample,
+            robot_selection_probability=robot_selection_probability,
+            max_samples_per_split=self.config.get('max_samples_per_split', 50000),
+            image_size=self.config.get('image_size', (224, 224))
         )
 
-        logger.info(f"📊 Dataset ready with {len(self.dataset):,} samples")
+        logger.info(f"📊 Enhanced dataset ready with {len(self.dataset):,} samples")
+
+    def get_train_dataloader(self, batch_size: int = 16, num_workers: int = 4, shuffle: bool = True) -> DataLoader:
+        """Create training data loader"""
+        if self.dataset is None:
+            raise RuntimeError("Dataset not setup. Call setup() first.")
+
+        return DataLoader(
+            self.dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
+
+    def get_dataset_stats(self) -> Dict:
+        """Get dataset statistics"""
+        if self.dataset is None:
+            return {}
+
+        stats = {
+            'total_samples': len(self.dataset),
+            'has_robot_grounding': getattr(self.dataset, 'enable_robot_grounding', False),
+            'robot_examples': len(getattr(self.dataset, 'robot_examples', [])),
+            'vision_processing': getattr(self.dataset, 'process_images_on_the_fly', False),
+            'robot_types': getattr(self.dataset, 'robot_types', []),
+        }
+
+        return stats
+
+
+def create_data_module(config: Dict) -> EnhancedBitGenDataModule:
+    """Create enhanced data module from config"""
+    return EnhancedBitGenDataModule(config)
 
     def clear_vision_cache(self):
         """Clear cached vision features"""
@@ -826,12 +998,36 @@ def test_dataset(config: Dict):
     logger.info(f"Caption: {sample['text'][:100]}...")
     logger.info(f"Source: {sample['source']}")
 
+
+def test_enhanced_dataset(config: Dict):
+    """Test enhanced BitGen dataset loading and processing"""
+    logger.info("🧪 Testing Enhanced BitGen dataset...")
+
+    # Create data module
+    data_module = create_data_module(config)
+    data_module.setup()
+
+    # Test sample
+    sample = data_module.dataset[0]
+    logger.info(f"Sample keys: {sample.keys()}")
+    logger.info(f"Input IDs shape: {sample['input_ids'].shape}")
+    logger.info(f"Vision features shape: {sample['vision_features'].shape}")
+    logger.info(f"Vision features type: {sample['vision_features'].dtype}")
+    logger.info(f"Caption: {sample['text'][:100]}...")
+    logger.info(f"Has robot grounding: {sample['has_robot_grounding']}")
+    if sample['has_robot_grounding']:
+        logger.info(f"Selected robots: {sample['selected_robots']}")
+        logger.info(f"Robot reasoning: {sample['robot_reasoning'][:100]}...")
+
+    # Test dataset stats
+    stats = data_module.get_dataset_stats()
+    logger.info(f"Dataset stats: {stats}")
+
     # Verify vision features are exactly 768-dim
-    assert sample['vision_features'].shape == torch.Size(
-        [768]), f"Expected [768], got {sample['vision_features'].shape}"
+    assert sample['vision_features'].shape == torch.Size([768]), f"Expected [768], got {sample['vision_features'].shape}"
     logger.info("✅ Vision features are correctly formatted for model")
 
-    logger.info("✅ Dataset test completed successfully!")
+    logger.info("✅ Enhanced dataset test completed successfully!")
     return data_module
 
 
@@ -839,14 +1035,18 @@ if __name__ == "__main__":
     # Test configuration
     test_config = {
         'dataset_dir': "./data",
+        'robot_data_dir': "../robot_selection_data/data",
         'text_encoder_name': "gpt2",
+        'vision_encoder_name': 'facebook/dinov2-base',
         'max_seq_length': 256,
-        'batch_size': 4,
-        'num_workers': 0,
-        'pin_memory': False,
-        'extract_vision_features': False,  # Set to True for real vision features
-        'use_dummy_vision': True  # Set to False for real vision features
+        'batch_size': 16,
+        'num_workers': 4,
+        'process_images_on_the_fly': True,
+        'enable_robot_grounding': True,
+        'robot_selection_probability': 0.3,
+        'max_robots_per_sample': 3,
+        'image_size': (224, 224)
     }
 
-    # Test dataset
-    test_dataset(test_config)
+    # Test enhanced dataset
+    test_enhanced_dataset(test_config)

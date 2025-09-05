@@ -111,43 +111,51 @@ vision_feature_reduction:
   preserve_spatial_info: true # Keep spatial relationships
 
 data:
-  # Dataset configuration - HuggingFace LocalizedNarratives + COCO + Robot Reasoning (hybrid training)
+  # Enhanced Dataset configuration - OpenImages + Robot Selection with on-the-fly processing
   dataset_dir: "./data" # Dataset directory
+  robot_data_dir: "../robot_selection_data/data" # Robot selection data
   text_encoder_name: "gpt2"
+  vision_encoder_name: "facebook/dinov2-base" # DiNOv2 for on-the-fly processing
   max_seq_length: 256 # Balanced sequence length
 
-  # HuggingFace LocalizedNarratives configuration
+  # Enhanced BitGen features
+  process_images_on_the_fly: true # Process images during training (no pre-extraction)
+  enable_robot_grounding: true # Enable robot selection grounding
+  robot_selection_probability: 0.3 # 30% of samples include robot grounding
+  max_robots_per_sample: 3 # Maximum robots to select per task
+  image_size: [224, 224] # Image processing size
+
+  # Legacy HuggingFace configuration (deprecated)
   use_hf_localized_narratives: false # Disabled - HuggingFace scripts deprecated
   hf_dataset_config: "open_images" # Options: open_images, ait, flickr, coco
-  max_samples_per_split: null # USE ALL DATA - No artificial limits (was 15000)
+  max_samples_per_split: 50000 # Limit samples for faster training
 
-  # Robot reasoning data integration (after multimodal training)
+  # Robot reasoning data integration
   include_robot_data: true # Include robot selection examples for reasoning grounding
   robot_data_ratio: 0.3 # 30% robot selection, 70% multimodal data
-  robot_data_dir: "../robot_selection_data/data" # Robot selection data path
   reasoning_augmentation: true # Augment training with reasoning format
 
   # Training phases configuration
-  multimodal_epochs: 15 # First train on multimodal data (localized narratives + COCO)
+  multimodal_epochs: 15 # First train on multimodal data (OpenImages)
   reasoning_epochs: 5 # Then ground reasoning on robot selection tasks
   hybrid_training: true # Enable hybrid multimodal + reasoning training
 
-  # Vision processing options
-  extract_vision_features: true # ENABLED: Extract real vision features for proper training
+  # Vision processing options (ENHANCED - no pre-extraction)
+  extract_vision_features: false # DISABLED: Process images on-the-fly
   use_dummy_vision: false # Use real features for proper multimodal learning
-  cache_vision_features: true # ENABLED: Look for pre-cached features from download
-  vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m" # DiNOv3 small (faster)
+  cache_vision_features: false # DISABLED: No caching, process fresh features
 
-  # DataLoader settings - Optimized for multimodal alignment
-  batch_size: 16 # Smaller batch for better alignment quality and stable gradients
+  # DataLoader settings - Optimized for on-the-fly processing
+  batch_size: 16 # Smaller batch for on-the-fly image processing
   num_workers: 4 # Reduced workers for stability
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
 
-  # Data strategy - PERFECT IMAGE-CAPTION ALIGNMENT GUARANTEED
+  # Data strategy - FRESH IMAGE PROCESSING WITH ROBOT GROUNDING
   shuffle_datasets: true # Shuffle for better mixing
   ensure_alignment: true # CRITICAL: Ensure perfect image-caption alignment
   validate_alignment: true # Validate alignment before training
+  robot_grounding_enabled: true # Enable situational robot selection
   alignment_verification: "strict" # Strict alignment verification
   never_break_pairs: true # NEVER separate image-caption pairs
   alignment_check_frequency: 1000 # Check alignment every 1000 samples
