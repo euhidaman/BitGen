@@ -64,18 +64,18 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         self.observation_noise_std = getattr(config, 'observation_noise_std', 0.1)
         
         # External storage configuration
-        self.external_storage = getattr(config, 'external_memory_storage', False)
+        self.external_storage = getattr(config, 'external_storage', False)
         self.memory_storage_path = Path(getattr(config, 'memory_storage_path', './external_memory'))
         self.memory_storage_path.mkdir(parents=True, exist_ok=True)
-        self.compression_enabled = getattr(config, 'memory_compression_enabled', True)
-        self.lazy_loading = getattr(config, 'memory_lazy_loading', True)
+        self.compression_enabled = getattr(config, 'compression_enabled', True)
+        self.lazy_loading = getattr(config, 'lazy_loading', True)
         
         # Memory state tracking
         self._memory_loaded = False
         self._memory_version = 1
         self._last_save_time = time.time()
-        self._save_queue = queue.Queue() if getattr(config, 'memory_async_save', False) else None
-        self._save_executor = ThreadPoolExecutor(max_workers=1) if getattr(config, 'memory_async_save', False) else None
+        self._save_queue = queue.Queue() if getattr(config, 'async_save', False) else None
+        self._save_executor = ThreadPoolExecutor(max_workers=1) if getattr(config, 'async_save', False) else None
         
         # Larimar-inspired memory parameters (learnable)
         self.register_parameter('memory_mean_prior', 
@@ -84,7 +84,7 @@ class LarimarInspiredEpisodicMemory(nn.Module):
                               nn.Parameter(torch.zeros(1)))
         
         # Multi-modal memory components
-        if getattr(config, 'memory_cross_modal_fusion', False):
+        if getattr(config, 'cross_modal_fusion', False):
             # Separate memory banks for different modalities
             self.text_memory_weight = getattr(config, 'text_memory_weight', 0.7)
             self.vision_memory_weight = getattr(config, 'vision_memory_weight', 0.3)
@@ -174,11 +174,17 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         logger.info(f"  • Episode dimension: {self.episode_dim}")
         logger.info(f"  • External storage: {self.external_storage}")
         logger.info(f"  • Storage path: {self.memory_storage_path}")
-        logger.info(f"  • Cross-modal fusion: {getattr(config, 'memory_cross_modal_fusion', False)}")
+        logger.info(f"  • Cross-modal fusion: {getattr(config, 'cross_modal_fusion', False)}")
         logger.info(f"  • Lazy loading: {self.lazy_loading}")
 
     def _initialize_memory_buffers(self):
         """Initialize memory buffers in device memory"""
+        # Check if already initialized to prevent double registration
+        if hasattr(self, 'memory_mean') and self.memory_mean is not None:
+            logger.info("Memory buffers already initialized, skipping...")
+            self._memory_loaded = True
+            return
+            
         # Larimar-style memory initialization
         self.register_buffer('memory_mean', 
                            torch.randn(self.memory_size, self.episode_dim) * 0.02)
@@ -195,12 +201,20 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         self.register_buffer('update_count', torch.tensor(0, dtype=torch.long))
         
         # Cross-modal memory tracking
-        if getattr(self.config, 'memory_cross_modal_fusion', False):
+        if getattr(self.config, 'cross_modal_fusion', False):
             self.register_buffer('text_memory_contributions', torch.zeros(self.memory_size))
             self.register_buffer('vision_memory_contributions', torch.zeros(self.memory_size))
+        
+        # Mark as loaded to prevent re-initialization
+        self._memory_loaded = True
+        logger.info(f"Memory buffers initialized successfully: {self.memory_size} slots, dim={self.episode_dim}")
 
     def _ensure_memory_loaded(self):
         """Ensure memory is loaded into device memory"""
+        # If already loaded, skip
+        if self._memory_loaded and hasattr(self, 'memory_mean') and self.memory_mean is not None:
+            return
+            
         if self.external_storage and self.lazy_loading and not self._memory_loaded:
             # Try to load external memory, if fails, initialize buffers
             if not self.load_external_memory():
@@ -373,7 +387,7 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         )
         
         # Process multi-modal features if provided
-        if getattr(self.config, 'memory_cross_modal_fusion', False) and text_features is not None and vision_features is not None:
+        if getattr(self.config, 'cross_modal_fusion', False) and text_features is not None and vision_features is not None:
             # Encode modality-specific features
             text_encoded = self.text_to_memory(text_features)
             vision_encoded = self.vision_to_memory(vision_features)
@@ -460,7 +474,7 @@ class LarimarInspiredEpisodicMemory(nn.Module):
         episode_size, batch_size = query.shape[:2]
         
         # Process multi-modal queries if provided
-        if getattr(self.config, 'memory_cross_modal_fusion', False) and text_query is not None and vision_query is not None:
+        if getattr(self.config, 'cross_modal_fusion', False) and text_query is not None and vision_query is not None:
             # Encode modality-specific queries
             text_encoded = self.text_to_memory(text_query)
             vision_encoded = self.vision_to_memory(vision_query)
@@ -607,7 +621,7 @@ class LarimarInspiredEpisodicMemory(nn.Module):
                 'episode_dim': self.episode_dim,
                 'alpha': self.alpha,
                 'direct_writing': self.direct_writing,
-                'cross_modal_fusion': getattr(self.config, 'memory_cross_modal_fusion', False),
+                'cross_modal_fusion': getattr(self.config, 'cross_modal_fusion', False),
                 'text_memory_weight': self.text_memory_weight if hasattr(self, 'text_memory_weight') else 0.7,
                 'vision_memory_weight': self.vision_memory_weight if hasattr(self, 'vision_memory_weight') else 0.3,
             },
