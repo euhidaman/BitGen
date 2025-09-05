@@ -971,3 +971,83 @@ class BitMarWandbLogger:
             logger.warning(f"Failed to create alignment summary plot: {e}")
             if 'fig' in locals():
                 plt.close(fig)
+
+    def log_attention_visualization(self, step: int, visualization_data: Dict):
+        """Log comprehensive attention visualization data"""
+        try:
+            # Log attention head visualizations
+            if 'attention_head_plots' in visualization_data:
+                for layer_idx, plot_data in visualization_data['attention_head_plots'].items():
+                    wandb.log({
+                        f"Attention/Layer_{layer_idx}_Heads": wandb.Image(plot_data),
+                        "step": step
+                    }, step=step)
+            
+            # Log cross-modal attention
+            if 'cross_modal_plot' in visualization_data:
+                wandb.log({
+                    "Attention/Cross_Modal_Attention": wandb.Image(visualization_data['cross_modal_plot']),
+                    "step": step
+                }, step=step)
+            
+            # Log memory attention patterns
+            if 'memory_attention_plot' in visualization_data:
+                wandb.log({
+                    "Attention/Memory_Attention_Patterns": wandb.Image(visualization_data['memory_attention_plot']),
+                    "step": step
+                }, step=step)
+            
+            # Log attention statistics
+            if 'attention_stats' in visualization_data:
+                stats = visualization_data['attention_stats']
+                wandb.log({
+                    "Attention/Stats/Mean_Attention": stats.get('mean_attention', 0),
+                    "Attention/Stats/Attention_Entropy": stats.get('attention_entropy', 0),
+                    "Attention/Stats/Cross_Modal_Correlation": stats.get('cross_modal_correlation', 0),
+                    "step": step
+                }, step=step)
+                
+            logger.info(f"✅ Attention visualization logged for step {step}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to log attention visualization: {e}")
+
+    def log_memory_attention_analysis(self, step: int, analysis_data: Dict):
+        """Log memory-attention correlation analysis"""
+        try:
+            # Log correlation heatmaps
+            if 'correlation_heatmap' in analysis_data:
+                wandb.log({
+                    "Memory/Attention_Memory_Correlation": wandb.Image(analysis_data['correlation_heatmap']),
+                    "step": step
+                }, step=step)
+            
+            # Log memory utilization patterns
+            if 'memory_utilization_plot' in analysis_data:
+                wandb.log({
+                    "Memory/Utilization_Patterns": wandb.Image(analysis_data['memory_utilization_plot']),
+                    "step": step
+                }, step=step)
+            
+            # Log dynamic analysis
+            if 'dynamic_analysis_plot' in analysis_data:
+                wandb.log({
+                    "Memory/Dynamic_Analysis": wandb.Image(analysis_data['dynamic_analysis_plot']),
+                    "step": step
+                }, step=step)
+            
+            # Log memory statistics
+            if 'memory_stats' in analysis_data:
+                stats = analysis_data['memory_stats']
+                wandb.log({
+                    "Memory/Stats/Memory_Attention_Correlation": stats.get('memory_attention_correlation', 0),
+                    "Memory/Stats/Memory_Utilization": stats.get('memory_utilization', 0),
+                    "Memory/Stats/Memory_Diversity": stats.get('memory_diversity', 0),
+                    "Memory/Stats/Retrieval_Efficiency": stats.get('retrieval_efficiency', 0),
+                    "step": step
+                }, step=step)
+                
+            logger.info(f"✅ Memory-attention analysis logged for step {step}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to log memory-attention analysis: {e}")

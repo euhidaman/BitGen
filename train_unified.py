@@ -1011,6 +1011,7 @@ class UnifiedBitMarTrainer:
         self.setup_attention_analyzer()
         self.setup_memory_visualization()
         self.setup_reasoning_visualization()
+        self.setup_advanced_attention_visualization()
         self.setup_flops_tracking()
         self.setup_adaptive_training()
 
@@ -1116,6 +1117,55 @@ class UnifiedBitMarTrainer:
         except Exception as e:
             logger.warning(f"⚠️  Failed to initialize reasoning visualization: {e}")
             self.reasoning_viz = None
+
+    def setup_advanced_attention_visualization(self):
+        """Setup advanced attention visualization system"""
+        try:
+            from src.advanced_attention_visualizer import create_attention_visualizer
+            from src.memory_attention_integration import create_memory_attention_analyzer
+            
+            # Create attention visualizer
+            viz_config = {
+                'save_dir': "./attention_visualizations",
+                'use_wandb': self.use_wandb,
+                'save_interactive': True,
+                'save_static': True,
+                'attention_threshold': 0.1,
+                'memory_attention_threshold': 0.05,
+                'color_scheme': 'viridis',
+                'max_heads_per_plot': 12
+            }
+            
+            self.attention_visualizer = create_attention_visualizer(
+                self.model, 
+                getattr(self.model, 'tokenizer', None),
+                viz_config,
+                self.wandb_logger if self.use_wandb else None
+            )
+            
+            # Create memory-attention analyzer
+            analyzer_config = {
+                'save_dir': "./memory_attention_analysis",
+                'analysis_frequency': 100,
+                'memory_attention_threshold': 0.1,
+                'cross_modal_threshold': 0.15
+            }
+            
+            self.memory_attention_analyzer = create_memory_attention_analyzer(
+                self.model,
+                getattr(self.model, 'tokenizer', None),
+                analyzer_config,
+                self.wandb_logger if self.use_wandb else None
+            )
+            
+            logger.info("✅ Advanced attention visualization system initialized")
+            logger.info(f"  • Attention visualizer: {self.attention_visualizer is not None}")
+            logger.info(f"  • Memory-attention analyzer: {self.memory_attention_analyzer is not None}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize advanced attention visualization: {e}")
+            self.attention_visualizer = None
+            self.memory_attention_analyzer = None
 
     def setup_flops_tracking(self):
         """Setup FLOPS tracking system"""
@@ -1458,7 +1508,10 @@ class UnifiedBitMarTrainer:
                         step=self.global_step,
                         has_vision=batch.get('has_vision', torch.ones(
                             batch['input_ids'].size(0), dtype=torch.bool)),
-                        adaptive_controller=self.adaptive_controller
+                        adaptive_controller=self.adaptive_controller,
+                        output_attentions=True,
+                        output_hidden_states=True,
+                        return_dict=True
                     )
                     
                     # ONE-TIME TIMING DIAGNOSTIC
@@ -1536,6 +1589,58 @@ class UnifiedBitMarTrainer:
                         print()  # Empty line for clarity
                     logger.debug(
                         f"Forward pass completed successfully for step {self.global_step}")
+                    
+                    # 🔍 ADVANCED ATTENTION VISUALIZATION
+                    if (self.attention_visualizer and 
+                        self.global_step % 100 == 0 and 
+                        hasattr(outputs, 'attentions') and 
+                        outputs.attentions is not None):
+                        try:
+                            # Generate comprehensive attention visualizations
+                            visualization_data = self.attention_visualizer.create_comprehensive_visualization(
+                                attention_weights=outputs.attentions,
+                                input_ids=batch['input_ids'],
+                                step=self.global_step,
+                                include_memory_attention=hasattr(outputs, 'memory_attention_weights'),
+                                include_cross_modal=batch.get('has_vision', torch.zeros(1)).any().item()
+                            )
+                            
+                            if self.use_wandb and visualization_data:
+                                self.wandb_logger.log_attention_visualization(
+                                    step=self.global_step,
+                                    visualization_data=visualization_data
+                                )
+                                
+                            logger.info(f"✅ Attention visualization generated for step {self.global_step}")
+                            
+                        except Exception as viz_error:
+                            logger.warning(f"⚠️ Attention visualization failed: {viz_error}")
+                    
+                    # 🔍 MEMORY-ATTENTION CORRELATION ANALYSIS
+                    if (self.memory_attention_analyzer and 
+                        self.global_step % 200 == 0 and
+                        hasattr(outputs, 'memory_state') and 
+                        outputs.memory_state is not None):
+                        try:
+                            # Analyze memory-attention dynamics
+                            correlation_data = self.memory_attention_analyzer.analyze_memory_attention_correlation(
+                                attention_weights=getattr(outputs, 'attentions', None),
+                                memory_state=outputs.memory_state,
+                                input_sequence=batch['input_ids'],
+                                step=self.global_step
+                            )
+                            
+                            if self.use_wandb and correlation_data:
+                                self.wandb_logger.log_memory_attention_analysis(
+                                    step=self.global_step,
+                                    analysis_data=correlation_data
+                                )
+                                
+                            logger.info(f"✅ Memory-attention analysis completed for step {self.global_step}")
+                            
+                        except Exception as analysis_error:
+                            logger.warning(f"⚠️ Memory-attention analysis failed: {analysis_error}")
+                    
                 except Exception as forward_error:
                     logger.error(
                         f"Forward pass failed at step {self.global_step}: {forward_error}")

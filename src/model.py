@@ -406,7 +406,10 @@ class BitNetTextDecoder(nn.Module):
         input_ids: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None
+        labels: Optional[torch.Tensor] = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True
     ) -> Dict[str, torch.Tensor]:
 
         if input_ids is not None:
@@ -449,9 +452,14 @@ class BitNetTextDecoder(nn.Module):
 
         # Transform through BitNet layers
         attention_patterns = []
+        hidden_states = []
+        
         for layer in self.layers:
+            if output_hidden_states:
+                hidden_states.append(x)
             x, attn_weights = layer(x, mask)
-            attention_patterns.append(attn_weights)
+            if output_attentions:
+                attention_patterns.append(attn_weights)
 
         x = self.norm(x)
         logits = self.lm_head(x)
@@ -467,11 +475,20 @@ class BitNetTextDecoder(nn.Module):
                 ignore_index=-100
             )
 
-        return {
+        result = {
             'logits': logits,
             'loss': loss,
-            'attention_patterns': attention_patterns
         }
+        
+        if output_attentions:
+            result['attentions'] = attention_patterns
+            result['attention_patterns'] = attention_patterns  # Keep backward compatibility
+            
+        if output_hidden_states:
+            hidden_states.append(x)  # Add final hidden state
+            result['hidden_states'] = hidden_states
+
+        return result
 
 
 class EpisodicMemory(nn.Module):
@@ -1310,14 +1327,36 @@ class BitMarModel(nn.Module):
             'mlp_ratio': config.get('fiber_mlp_ratio', 4.0)
         }
 
-        # Episodic memory with BitNet quantization (OPTIONAL for ablation study)
+        # Enhanced Episodic memory with BitNet quantization (OPTIONAL for ablation study)
         if self.use_episodic_memory:
-            self.memory = EpisodicMemory(
+            from .enhanced_episodic_memory import create_enhanced_episodic_memory, EpisodicMemoryConfig
+            
+            # Create enhanced memory configuration
+            memory_config = EpisodicMemoryConfig(
                 memory_size=config['memory_size'],
                 episode_dim=config['episode_dim'],
                 alpha=config['memory_alpha'],
-                direct_writing=config['direct_writing']
+                direct_writing=config['direct_writing'],
+                external_storage=config.get('external_memory_storage', True),
+                memory_storage_path=config.get('memory_storage_path', './episodic_memory'),
+                compression_enabled=config.get('memory_compression', True),
+                lazy_loading=config.get('memory_lazy_loading', True),
+                cross_modal_fusion=config.get('memory_cross_modal_fusion', True),
+                vision_memory_weight=config.get('vision_memory_weight', 0.3),
+                text_memory_weight=config.get('text_memory_weight', 0.7),
+                max_memory_age=config.get('max_memory_age', 10000),
+                memory_consolidation_threshold=config.get('memory_consolidation_threshold', 0.8),
+                async_save=config.get('memory_async_save', True)
             )
+            
+            self.memory = create_enhanced_episodic_memory(memory_config.__dict__)
+            logger.info(f"🧠 Enhanced Episodic Memory initialized (Larimar-inspired):")
+            logger.info(f"  • Memory size: {config['memory_size']}")
+            logger.info(f"  • Episode dimension: {config['episode_dim']}")
+            logger.info(f"  • Alpha: {config['memory_alpha']}")
+            logger.info(f"  • External storage: {config.get('external_memory_storage', True)}")
+            logger.info(f"  • Cross-modal fusion: {config.get('memory_cross_modal_fusion', True)}")
+            logger.info(f"  • Lazy loading: {config.get('memory_lazy_loading', True)}")
 
             # Memory projection layers (only if memory is enabled)
             self.text_to_episode = BitNetLinear(
@@ -1344,6 +1383,7 @@ class BitMarModel(nn.Module):
             logger.info(f"✅ Episodic Memory initialized: {config['memory_size']} slots, {config['episode_dim']} dimensions")
         else:
             self.memory = None
+            logger.info("🧠 Enhanced Episodic Memory disabled for ablation study")
             self.text_to_episode = None
             self.vision_to_episode = None
             self.memory_to_decoder = None
@@ -1668,8 +1708,11 @@ class BitMarModel(nn.Module):
         labels: Optional[torch.Tensor] = None,
         step: int = 0,
         has_vision: Optional[torch.Tensor] = None,
-        adaptive_controller=None  # NEW: Adaptive training controller
-    ) -> Dict[str, torch.Tensor]:
+        adaptive_controller=None,  # Adaptive training controller
+        output_attentions: bool = False,  # NEW: For attention visualization
+        output_hidden_states: bool = False,  # NEW: For hidden state analysis
+        return_dict: bool = False  # NEW: For structured output
+    ) -> Union[Dict[str, torch.Tensor], torch.Tensor]:
         """
         Forward pass with FIBER-enhanced cross-modal fusion
         """
@@ -1771,33 +1814,59 @@ class BitMarModel(nn.Module):
             logger.debug(f"   • ITM: {fiber_itm_loss.item():.4f}")
             logger.debug(f"   • MLM: {fiber_mlm_loss.item():.4f}")
 
-        # 4. Episodic memory processing (OPTIONAL for ablation study)
+        # 4. Enhanced Episodic memory processing (OPTIONAL for ablation study)
         memory_output = None
         memory_attention_weights = None
+        memory_metadata = {}
         episode = None
 
-        logger.info(f"🧠 Memory enabled: {self.use_episodic_memory}")
+        logger.info(f"🧠 Enhanced Memory enabled: {self.use_episodic_memory}")
         if self.use_episodic_memory:
-            logger.info(f"🧠 Starting episodic memory processing")
+            logger.info(f"🧠 Starting enhanced episodic memory processing")
             try:
                 # Create multimodal episode using FIBER outputs
                 episode = self.create_episode(
                     text_features, vision_latent, fiber_outputs)
                 logger.info(f"🧠 Episode created: {episode.shape}")
+                
+                # Enhanced memory processing with cross-modal features
+                text_episode = self.text_to_episode(text_features.mean(dim=1))  # Pool text features
+                vision_episode = self.vision_to_episode(vision_latent)
+                
+                # Use enhanced memory with multi-modal support
+                if hasattr(self.memory, 'write_to_memory'):
+                    # Write to enhanced memory with modality-specific features
+                    memory_state, kl_div = self.memory.write_to_memory(
+                        episodes=episode.unsqueeze(0),  # Add episode dimension
+                        text_features=text_episode.unsqueeze(0),
+                        vision_features=vision_episode.unsqueeze(0)
+                    )
+                    
+                    # Read from enhanced memory
+                    memory_output, memory_attention_weights, memory_metadata = self.memory.read_from_memory(
+                        query=episode.unsqueeze(0),
+                        text_query=text_episode.unsqueeze(0),
+                        vision_query=vision_episode.unsqueeze(0),
+                        return_attention=output_attentions
+                    )
+                    
+                    # Remove episode dimension for downstream processing
+                    if memory_output is not None:
+                        memory_output = memory_output.squeeze(0)
+                    if memory_attention_weights is not None:
+                        memory_attention_weights = memory_attention_weights.squeeze(0)
+                        
+                    logger.info(f"🧠 Enhanced memory processing completed: {memory_output.shape if memory_output is not None else 'None'}")
+                else:
+                    # Fallback to original memory
+                    memory_output, memory_attention_weights = self.memory(episode)
+                    
             except Exception as e:
-                logger.error(f"🧠 Episode creation failed: {e}")
-                raise e
-
-            logger.info(f"🧠 Calling memory with episode shape: {episode.shape}")
-            try:
-                # Memory read-write operation
-                memory_output, memory_attention_weights = self.memory(episode)
-                logger.info(f"🧠 Memory output: {memory_output.shape if memory_output is not None else 'None'}")
-            except Exception as e:
-                # Debug removed
+                logger.error(f"🧠 Enhanced memory processing failed: {e}")
                 print(f"   Episode shape: {episode.shape}")
-                print(f"   Memory size: {self.memory.memory_size}")
-                print(f"   Episode dim: {self.memory.episode_dim}")
+                if hasattr(self.memory, 'memory_size'):
+                    print(f"   Memory size: {self.memory.memory_size}")
+                    print(f"   Episode dim: {self.memory.episode_dim}")
                 raise e
 
             # Debug removed
@@ -1948,6 +2017,43 @@ class BitMarModel(nn.Module):
             adaptive_controller=adaptive_controller
         )
 
+        # Collect attention patterns for visualization if requested
+        attention_outputs = {}
+        if output_attentions:
+            # Text encoder attention patterns
+            attention_outputs['text_attentions'] = text_attention_patterns
+            
+            # Text decoder attention patterns
+            attention_outputs['decoder_attentions'] = decoder_outputs.get('attention_patterns', [])
+            
+            # FIBER fusion attention patterns
+            if 'attention_patterns' in fiber_outputs:
+                attention_outputs['fiber_attentions'] = fiber_outputs['attention_patterns']
+            
+            # Cross-modal attention patterns
+            if 'cross_attention_weights' in fiber_outputs:
+                attention_outputs['cross_attentions'] = fiber_outputs['cross_attention_weights']
+            
+            # Episodic memory attention patterns
+            if memory_attention_weights is not None:
+                attention_outputs['memory_attention'] = memory_attention_weights
+                
+            # Memory usage patterns
+            if memory_metadata:
+                attention_outputs['memory_usage'] = memory_metadata.get('memory_usage')
+                attention_outputs['memory_metadata'] = memory_metadata
+
+        # Collect hidden states if requested
+        hidden_states_outputs = {}
+        if output_hidden_states:
+            hidden_states_outputs['text_hidden_states'] = text_features
+            hidden_states_outputs['vision_hidden_states'] = vision_latent
+            hidden_states_outputs['fused_hidden_states'] = fused_features
+            if enhanced_vision is not None:
+                hidden_states_outputs['enhanced_vision_states'] = enhanced_vision
+            if memory_output is not None:
+                hidden_states_outputs['memory_states'] = memory_output
+
         # Return comprehensive outputs
         outputs = {
             'loss': loss_dict['total_loss'],
@@ -1964,12 +2070,29 @@ class BitMarModel(nn.Module):
             'memory_output': memory_output,
             'memory_state': memory_output,  # Add memory state for diagnostics
             'memory_attention_weights': memory_attention_weights,
+            'memory_metadata': memory_metadata,  # Enhanced memory metadata
             'loss_components': loss_dict,
             'fiber_config': self.fiber_config,
             # NEW: Robot reasoning outputs (similar to deepseek-r1's structured outputs)
             'robot_reasoning_outputs': robot_reasoning_outputs,
-            'robot_reasoning_loss': robot_reasoning_loss
+            'robot_reasoning_loss': robot_reasoning_loss,
+            # NEW: Attention and hidden states for visualization
+            **attention_outputs,
+            **hidden_states_outputs
         }
+        
+        # Enhanced cross-modal similarity for visualization
+        if output_attentions and text_features is not None and vision_latent is not None:
+            text_pooled = text_features.mean(dim=1)
+            vision_pooled = vision_latent
+            cross_modal_similarity = torch.cosine_similarity(text_pooled, vision_pooled, dim=-1).mean()
+            outputs['cross_modal_similarity'] = cross_modal_similarity
+        
+        # Return structured output if requested
+        if return_dict:
+            return outputs
+        else:
+            return outputs['loss']  # Backward compatibility
         
         # Log metrics to wandb if available (instead of printing)
         if hasattr(self, 'use_wandb') and self.use_wandb and hasattr(self, 'wandb_logger') and self.wandb_logger:

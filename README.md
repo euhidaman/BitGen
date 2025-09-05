@@ -86,25 +86,61 @@ ls ./data/vision_features_cache/
 python -c "import numpy as np; print('Vision cache shape:', np.load('./data/vision_features_cache/all_features.npy').shape)"
 ```
 
-## Step 6: Start Training
+## Step 6: Setup Enhanced Features
 
-### With episodic memory:
-
-```powershell
-python train_unified.py --config configs/bitmar_with_memory.yaml
-```
-
-### Without episodic memory:
+### Install Visualization Dependencies
 
 ```powershell
-python train_unified.py --config configs/bitmar_without_memory.yaml
+# Install attention visualization dependencies
+python setup_attention_visualization.py
 ```
 
-## Step 7: Monitor Training
+### Create External Memory Storage
 
-1. Check Weights & Biases dashboard
-2. Monitor `training.log` file
-3. Check `./security_logs/` directory
+```powershell
+# Create directories for enhanced features
+mkdir external_episodic_memory
+mkdir attention_visualizations
+mkdir memory_attention_analysis
+```
+
+## Step 7: Start Training with Enhanced Features
+
+### With Enhanced Episodic Memory and Attention Visualization
+
+```powershell
+python train_unified.py configs/bitmar_with_memory.yaml
+```
+
+This will:
+- Train with Larimar-inspired episodic memory
+- Generate attention visualizations every 100 steps
+- Perform memory-attention analysis every 200 steps
+- Save memory to external storage with compression
+- Log interactive visualizations to WandB
+
+### Without Episodic Memory (Baseline)
+
+```powershell
+python train_unified.py configs/bitmar_without_memory.yaml
+```
+
+## Step 8: Monitor Enhanced Training
+
+### Real-time Monitoring
+1. **Weights & Biases Dashboard**: Interactive attention visualizations and memory analysis
+2. **Training Logs**: Check `training.log` for detailed attention pattern analysis
+3. **Security Logs**: Monitor `./security_logs/` directory
+
+### Generated Visualizations
+4. **Attention Visualizations**: Check `./attention_visualizations/` for interactive HTML plots
+5. **Memory Storage**: Monitor `./external_episodic_memory/` for compressed memory files
+6. **Memory-Attention Analysis**: View `./memory_attention_analysis/` for correlation reports
+
+### Key Training Events
+- **Every 100 Steps**: Attention visualization generated and logged to WandB
+- **Every 200 Steps**: Memory-attention correlation analysis performed
+- **Continuous**: Episodic memory saved to external storage with compression
 
 ---
 
@@ -316,10 +352,22 @@ BitGen/
 
 - **BitNet Quantization**: 1.58-bit weight quantization for efficient inference
 - **FIBER Backbone Fusion**: Microsoft Research's FIBER implementation for superior cross-modal understanding
-- **Episodic Memory**: Larimar-inspired memory mechanism for multimodal associations
+- **Episodic Memory**: Larimar-inspired memory mechanism for multimodal associations with enhanced features:
+  - **Gaussian Process Memory (GPM)**: Advanced memory architecture based on Larimar paper
+  - **External Storage**: Memory persistence on external devices with compression
+  - **Cross-Modal Fusion**: Separate text and vision memory banks with attention-based fusion
+  - **Memory Consolidation**: Importance-based pruning and memory consolidation
+  - **Lazy Loading**: Efficient memory management with on-demand loading
+  - **Asynchronous Saving**: Non-blocking memory saves during training
 - **Robot Reasoning**: deepseek-r1 inspired structured reasoning for robot selection and task planning
 - **Security Guard**: LLM Guard integration with input/output validation and memory anomaly detection
 - **Attention Sinks**: Support for unlimited sequence generation
+- **Attention Visualization**: Comprehensive attention pattern analysis and visualization:
+  - **BertViz-style Visualizations**: Multi-head attention pattern plots
+  - **Interactive Plotly Charts**: Real-time attention pattern exploration
+  - **Cross-Modal Attention Analysis**: Text-vision attention correlation tracking
+  - **Memory-Attention Integration**: Episodic memory and attention pattern correlation
+  - **WandB Integration**: Real-time visualization logging during training
 - **Adaptive Training**: Intelligent cross-modal similarity monitoring and intervention
 - **Unified Training**: Single script for multimodal data + robot reasoning + security monitoring
 - **Edge Deployment**: Optimized for deployment with memory compression and external storage

@@ -85,13 +85,33 @@ model:
   fiber_cross_attention_dropout: 0.1 # Dropout for cross-modal attention layers
   fiber_enable_gradient_checkpointing: true # Enable gradient checkpointing for FIBER layers
 
-  # Episodic Memory (ENHANCED for better reasoning)
-  memory_size: 64 # Increased from 32 for more memory capacity
+  # Episodic Memory (ENHANCED for better reasoning with Larimar-inspired features)
+  memory_size: 128 # Increased from 64 for more memory capacity
   episode_dim: 192 # Match fusion dimension for consistency
-  memory_alpha: 0.2 # Balanced adaptation rate
+  memory_alpha: 0.16 # Balanced adaptation rate (Larimar-inspired)
   direct_writing: true
   memory_compression: true # Enable memory compression
   enable_adaptive_training: true # Enable adaptive cross-modal training
+  
+  # Enhanced Episodic Memory Configuration (Larimar-inspired)
+  enhanced_episodic_memory: true # Enable enhanced memory with Larimar features
+  external_memory_storage: true # Store memory on external device
+  memory_storage_path: "./external_episodic_memory" # External storage path
+  memory_compression_enabled: true # Enable memory compression
+  memory_compression_ratio: 0.8 # Compression ratio for storage
+  memory_lazy_loading: true # Enable lazy loading for efficiency
+  memory_async_save: true # Asynchronous saving for performance
+  
+  # Cross-modal memory fusion (Larimar-inspired)
+  memory_cross_modal_fusion: true # Enable cross-modal memory fusion
+  memory_text_weight: 0.7 # Weight for text features in memory
+  memory_vision_weight: 0.3 # Weight for vision features in memory
+  memory_gp_size: 256 # Gaussian Process memory size
+  memory_similarity_threshold: 0.7 # Similarity threshold for retrieval
+  memory_consolidation_threshold: 0.8 # Threshold for memory consolidation
+  memory_decay_rate: 0.99 # Memory decay rate
+  memory_importance_threshold: 0.1 # Importance threshold for pruning
+  memory_max_age: 15000 # Maximum age of memory entries
 
   # Model configuration
   max_seq_len: 256 # Balanced sequence length
@@ -166,7 +186,7 @@ data:
   max_samples: null # No sample limit
   train_only: true # Use all data for training
 
-# Attention analysis (Focused on cross-modal understanding)
+# Attention analysis (Enhanced with visualization capabilities)
 attention_analysis:
   track_top_k: 5 # Track top 5 attention heads
   log_every_n_steps: 200 # Regular logging
@@ -175,6 +195,21 @@ attention_analysis:
   analyze_memory_attention: true # Monitor episodic memory
   analyze_cross_modal: true # Critical for alignment
   track_token_alignment: true # Track image-text token alignment
+  
+  # Enhanced Attention Visualization (KDnuggets-style, BertViz-inspired)
+  attention_visualization_enabled: true # Enable advanced attention visualization
+  attention_visualization_frequency: 100 # Generate visualizations every 100 steps
+  attention_save_interactive: true # Save interactive Plotly visualizations
+  attention_save_static: true # Save static matplotlib plots
+  attention_threshold: 0.1 # Threshold for attention visualization
+  memory_attention_threshold: 0.05 # Threshold for memory attention
+  attention_color_scheme: "viridis" # Color scheme for visualizations
+  max_heads_per_plot: 12 # Maximum attention heads per visualization
+  
+  # Memory-Attention Correlation Analysis
+  memory_attention_analysis_enabled: true # Enable memory-attention analysis
+  memory_attention_analysis_frequency: 200 # Analysis every 200 steps
+  cross_modal_attention_threshold: 0.15 # Threshold for cross-modal analysis
 
 # Adaptive training configuration
 adaptive_training:
