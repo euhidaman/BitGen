@@ -11,6 +11,7 @@ from src.robot_reasoning import ReasoningFormatValidator, create_robot_reasoning
 from src.robot_reasoning_dataset import create_robot_reasoning_data_module, create_robot_reasoning_trainer_integration
 from src.memory_visualization_integration import setup_memory_visualization
 from src.attention_visualizer import AttentionHeadAnalyzer
+from src.reasoning_visualizer import RobotReasoningVisualizer
 from src.wandb_logger import BitMarWandbLogger
 from src.model import create_bitmar_model, count_parameters
 from src.dataset import create_data_module
@@ -1009,6 +1010,7 @@ class UnifiedBitMarTrainer:
         # Setup optional components
         self.setup_attention_analyzer()
         self.setup_memory_visualization()
+        self.setup_reasoning_visualization()
         self.setup_flops_tracking()
         self.setup_adaptive_training()
 
@@ -1101,6 +1103,19 @@ class UnifiedBitMarTrainer:
             logger.warning(
                 f"⚠️  Failed to initialize memory visualization: {e}")
             self.memory_viz = None
+
+    def setup_reasoning_visualization(self):
+        """Setup robot reasoning visualization for W&B"""
+        try:
+            if self.use_wandb:
+                self.reasoning_viz = RobotReasoningVisualizer()
+                logger.info("✅ Robot reasoning visualization initialized")
+            else:
+                self.reasoning_viz = None
+                logger.warning("⚠️  W&B not available - reasoning visualization disabled")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize reasoning visualization: {e}")
+            self.reasoning_viz = None
 
     def setup_flops_tracking(self):
         """Setup FLOPS tracking system"""
@@ -1892,6 +1907,29 @@ class UnifiedBitMarTrainer:
                                         log_dict[f'robot_reasoning/{robot_key}_avg_prob'] = probs.mean(
                                         ).item()
 
+                                # Log robot reasoning visualizations
+                                if self.reasoning_viz and 'reasoning_metrics' in locals():
+                                    try:
+                                        # Extract robot data from batch
+                                        robot_labels = batch.get('robot_labels', [])
+                                        robot_tasks = batch.get('robot_tasks', [])
+                                        
+                                        # Generate visualizations
+                                        viz_data = self.reasoning_viz.log_batch_metrics(
+                                            predictions=robot_outputs.get('robot_selections', {}),
+                                            targets=robot_labels,
+                                            tasks=robot_tasks,
+                                            step=self.global_step,
+                                            loss_components=loss_components
+                                        )
+                                        
+                                        # Add visualization data to log
+                                        if viz_data:
+                                            log_dict.update(viz_data)
+                                            
+                                    except Exception as e:
+                                        logger.warning(f"Failed to generate reasoning visualizations: {e}")
+
                             # Add security metrics
                             if self.security_guard:
                                 security_stats = self.security_guard.get_security_statistics()
@@ -2039,6 +2077,18 @@ class UnifiedBitMarTrainer:
                 f"  • Robot reasoning accuracy: {epoch_metrics['robot_reasoning_accuracy']:.4f}")
             logger.info(
                 f"  • Reasoning format accuracy: {epoch_metrics['reasoning_format_accuracy']:.4f}")
+
+            # Generate epoch-level reasoning visualizations
+            if self.reasoning_viz:
+                try:
+                    viz_data = self.reasoning_viz.log_epoch_summary(
+                        epoch=epoch,
+                        epoch_metrics=epoch_metrics,
+                        total_batches=reasoning_batches
+                    )
+                    logger.info("✅ Epoch reasoning visualizations generated")
+                except Exception as e:
+                    logger.warning(f"Failed to generate epoch reasoning visualizations: {e}")
 
             # Log GRPO metrics if enabled
             if self.enable_grpo_training:

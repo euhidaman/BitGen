@@ -26,32 +26,32 @@ model:
   # Episodic Memory Control for Ablation Study
   use_episodic_memory: true # ENABLED for this config (full model)
 
-  # BitNet Text Encoder
+  # BitNet Text Encoder - Enhanced for better reasoning
   vocab_size: 50257 # GPT-2 vocabulary
-  text_encoder_dim: 128 # Balanced size
-  text_encoder_layers: 4 # More layers for better understanding
-  text_encoder_heads: 4 # More heads for cross-modal alignment
+  text_encoder_dim: 192 # Increased from 128 for better reasoning capacity
+  text_encoder_layers: 8 # Increased from 4 for deeper understanding
+  text_encoder_heads: 8 # Increased from 4 for better attention patterns
 
-  # BitNet Text Decoder
-  text_decoder_dim: 128 # Match encoder dimension
-  text_decoder_layers: 4 # Sufficient for text generation
-  text_decoder_heads: 4 # Balance between quality and efficiency
+  # BitNet Text Decoder - Enhanced for reasoning output
+  text_decoder_dim: 192 # Match encoder dimension
+  text_decoder_layers: 6 # Increased from 4 for better generation
+  text_decoder_heads: 8 # Match encoder heads
 
-  # Vision processing
+  # Vision processing - Enhanced
   vision_encoder_dim: 768 # Generic vision feature dimension
-  vision_latent_size: 128 # Match text encoder dim for consistency
-  vision_hidden_size: 64 # Intermediate processing
+  vision_latent_size: 192 # Match text encoder dim for consistency
+  vision_hidden_size: 96 # Increased from 64 for better processing
   vision_compression_method: "learned_compression" # Best for cross-modal alignment
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
 
-  # Cross-modal fusion with AUTHENTIC FIBER
-  fusion_hidden_size: 128 # Match text encoder dim for consistency
-  fusion_num_heads: 4 # More heads for better alignment
+  # Cross-modal fusion with ENHANCED FIBER
+  fusion_hidden_size: 192 # Match text encoder dim for consistency
+  fusion_num_heads: 8 # Increased from 4 for better alignment
   
-  # AUTHENTIC FIBER Configuration (following Microsoft Research implementation)
-  num_fiber_fusion_layers: 6 # Number of layers with cross-modal fusion
-  num_fiber_layers: 6 # Total FIBER transformer layers
+  # ENHANCED FIBER Configuration (following Microsoft Research implementation)
+  num_fiber_fusion_layers: 8 # Increased from 6 for deeper reasoning
+  num_fiber_layers: 8 # Total FIBER transformer layers
   fiber_dropout: 0.1 # Dropout for FIBER layers
   
   # FIBER Loss Objectives (ITC + ITM + MLM) - Reduced for stability
@@ -66,14 +66,14 @@ model:
   fiber_momentum: 0.995 # Momentum coefficient for queue updates
   fusion_num_layers: 2 # Deeper fusion for understanding
 
-  # FIBER-specific configuration
-  num_fiber_fusion_layers: 6 # Number of layers with FIBER-style cross-modal fusion
+  # Enhanced FIBER-specific configuration
+  num_fiber_fusion_layers: 8 # Increased from 6 for deeper cross-modal reasoning
   fiber_learnable_alpha: true # Enable learnable fusion strength parameters
   fiber_bidirectional_fusion: true # Enable bidirectional text<->vision fusion
 
-  # Advanced FIBER configuration
-  fiber_text_fusion_layers: 4 # Number of text layers with cross-modal fusion
-  fiber_vision_fusion_layers: 2 # Number of vision layers with cross-modal fusion
+  # Advanced FIBER configuration - Enhanced
+  fiber_text_fusion_layers: 6 # Increased from 4 for better text understanding
+  fiber_vision_fusion_layers: 4 # Increased from 2 for better vision processing
   fiber_backbone_integration: true # Enable deep backbone fusion instead of late fusion
   fiber_attention_temperature: 1.0 # Temperature for FIBER attention mechanisms
   fiber_residual_connection: true # Enable residual connections in FIBER blocks
@@ -85,9 +85,9 @@ model:
   fiber_cross_attention_dropout: 0.1 # Dropout for cross-modal attention layers
   fiber_enable_gradient_checkpointing: true # Enable gradient checkpointing for FIBER layers
 
-  # Episodic Memory (ENABLED for this config)
-  memory_size: 32 # 32 memory slots for balanced storage
-  episode_dim: 128 # Match fusion dimension for consistency
+  # Episodic Memory (ENHANCED for better reasoning)
+  memory_size: 64 # Increased from 32 for more memory capacity
+  episode_dim: 192 # Match fusion dimension for consistency
   memory_alpha: 0.2 # Balanced adaptation rate
   direct_writing: true
   memory_compression: true # Enable memory compression
@@ -145,9 +145,9 @@ data:
   use_dummy_vision: false # Use real features for proper multimodal learning
   cache_vision_features: false # DISABLED: No caching, process fresh features
 
-  # DataLoader settings - Optimized for on-the-fly processing and faster training
-  batch_size: 32 # Increased from 16 for faster training (GPU permitting)
-  num_workers: 6 # Increased from 4 for better data loading throughput
+  # DataLoader settings - Optimized for GPU training and faster processing
+  batch_size: 48 # Increased from 32 for better GPU utilization
+  num_workers: 8 # Increased from 6 for maximum data loading throughput
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
 
