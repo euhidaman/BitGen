@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Simple script: Download first OpenImages shard + extract DiNOv2 features
+Simple script: Download OpenImages shard + ALL caption shards + extract DiNOv2 features
 Downloads to ./data/ with proper structure for train_unified.py
+Maximizes caption coverage by downloading all 10 caption shards
 """
 
 import os
@@ -17,7 +18,7 @@ import requests
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-def download_one_shard_with_features(data_dir: str = "./data", max_samples: int = 200000):
+def download_with_all_captions(data_dir: str = "./data", max_samples: int = 1000000):
     """
     Simple function:
     1. Download train_0.tar.gz (first OpenImages shard only)
@@ -38,15 +39,23 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
     ln_dir = data_path / "localized_narratives" / "open_images"
     ln_dir.mkdir(parents=True, exist_ok=True)
     
-    # Download first few caption shards (need multiple shards to cover one image shard)
+    # Download ALL caption shards (00000-00009) to maximize coverage for existing images
     caption_urls = [
         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl',
         'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00002-of-00010.jsonl',
-        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00003-of-00010.jsonl'
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00003-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00004-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00005-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00006-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00007-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00008-of-00010.jsonl',
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00009-of-00010.jsonl'
     ]
     
     captions = []
+    logger.info(f"   📥 Processing {len(caption_urls)} caption shards for maximum coverage...")
+    
     for i, url in enumerate(caption_urls):
         filename = f"open_images_train_shard_{i:02d}.jsonl"
         filepath = ln_dir / filename
@@ -296,9 +305,9 @@ def download_one_shard_with_features(data_dir: str = "./data", max_samples: int 
 
 if __name__ == "__main__":
     # Simple usage - downloads to ./data which training expects
-    summary = download_one_shard_with_features(
+    summary = download_with_all_captions(
         data_dir="./data",
-        max_samples=200000
+        max_samples=1000000  # Allow up to 1M captions for maximum coverage
     )
     
     if summary:
