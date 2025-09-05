@@ -1927,7 +1927,8 @@ class BitMarModel(nn.Module):
             decoder_outputs = self.text_decoder(
                 inputs_embeds=decoder_input,
                 attention_mask=attention_mask,
-                labels=labels
+                labels=labels,
+                output_attentions=True  # Ensure attention patterns are returned
             )
             # Debug removed
         except Exception as e:
@@ -2065,7 +2066,7 @@ class BitMarModel(nn.Module):
             'fiber_outputs': fiber_outputs,  # AUTHENTIC FIBER outputs with attention patterns and losses
             'fiber_losses': fiber_losses_dict,  # FIBER losses for easy access
             'text_attention_patterns': text_attention_patterns,
-            'decoder_attention_patterns': decoder_outputs['attention_patterns'],
+            'decoder_attention_patterns': decoder_outputs.get('attention_patterns', []),
             'episode': episode,
             'memory_output': memory_output,
             'memory_state': memory_output,  # Add memory state for diagnostics
