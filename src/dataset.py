@@ -258,11 +258,8 @@ class LocalizedNarrativesCOCODataset(Dataset):
         logger.error(
             "   Or use the manage_vision_cache.py script to create cache")
 
-        # Create dummy features as absolute fallback to prevent crashes
-        logger.warning(
-            "⚠️  Creating dummy features as fallback - training may not work properly")
-        self.all_features = np.random.randn(
-            len(self.all_captions), 768).astype(np.float32)
+        # FAIL HARD - no dummy features allowed
+        raise RuntimeError("❌ No pre-cached vision features found! Training cannot proceed without real features.")
 
     def _save_vision_features_cache(self):
         """Save vision features to disk cache"""
