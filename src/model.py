@@ -1682,17 +1682,16 @@ class BitMarModel(nn.Module):
         # Debug removed
         # Debug removed
         
-        # 🔍 DATA DIAGNOSTIC: Check if we're seeing different data
+        # 🔍 DATA DIAGNOSTIC: Check if we're seeing different data (reduced logging)
         if hasattr(self, '_last_input_hash'):
             current_hash = hash(input_ids.sum().item())
             if current_hash == self._last_input_hash:
-                print(f"⚠️ WARNING: Same input data as previous batch - training may be stuck!")
-            else:
-                print(f"✅ DATA: Different input data from previous batch")
+                logger.warning(f"⚠️ Same input data as previous batch - training may be stuck!")
+            # Remove noisy "Different input data" messages
             self._last_input_hash = current_hash
         else:
             self._last_input_hash = hash(input_ids.sum().item())
-            print(f"✅ DATA: First batch processed")
+            logger.debug(f"✅ First batch processed")
         
         # Check input data properties
         unique_tokens = torch.unique(input_ids).numel()

@@ -138,9 +138,9 @@ data:
   cache_vision_features: true # ENABLED: Look for pre-cached features from download
   vision_model: "facebook/dinov3-vits16-pretrain-lvd1689m" # DiNOv3 small (faster)
 
-  # DataLoader settings
-  batch_size: 64 # Increased batch size for faster training
-  num_workers: 6 # Efficient data loading
+  # DataLoader settings - Optimized for multimodal alignment
+  batch_size: 16 # Smaller batch for better alignment quality and stable gradients
+  num_workers: 4 # Reduced workers for stability
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
 
