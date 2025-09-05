@@ -1234,7 +1234,7 @@ class UnifiedBitMarTrainer:
         total_batches = 0
 
         progress_bar = tqdm(
-            train_loader, desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,}")
+            train_loader, desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,} | Features: {len(train_loader.dataset):,}")
 
         for batch_idx, batch in enumerate(progress_bar):
             # Count tokens in this batch for logging purposes
@@ -1813,7 +1813,9 @@ class UnifiedBitMarTrainer:
                 # Update progress bar with enhanced metrics
                 progress_info = {
                     'loss': f"{loss.item():.1f}",
-                    'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}"
+                    'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}",
+                    'tokens': f"{self.tokens_processed:,}",
+                    'features': f"{len(train_loader.dataset):,}"
                 }
 
                 # Add FIBER cross-modal metrics from model outputs
@@ -2300,6 +2302,55 @@ class UnifiedBitMarTrainer:
 
         # Setup model and data
         self.setup_model_and_data()
+
+        # 🎯 COMPREHENSIVE TRAINING SUMMARY
+        logger.info("=" * 80)
+        logger.info("🎯 COMPREHENSIVE TRAINING SUMMARY")
+        logger.info("=" * 80)
+        
+        # Dataset information
+        if hasattr(self.data_module, 'dataset') and self.data_module.dataset:
+            dataset = self.data_module.dataset
+            total_samples = len(dataset)
+            batch_size = self.config['data']['batch_size']
+            batches_per_epoch = total_samples // batch_size
+            
+            logger.info(f"📊 DATASET STATISTICS:")
+            logger.info(f"   • Total samples: {total_samples:,}")
+            logger.info(f"   • Batch size: {batch_size}")
+            logger.info(f"   • Batches per epoch: {batches_per_epoch:,}")
+            logger.info(f"   • Effective samples per epoch: {batches_per_epoch * batch_size:,}")
+            
+            # Feature information
+            if hasattr(dataset, 'all_features'):
+                logger.info(f"   • Vision features: {len(dataset.all_features):,} x {dataset.all_features.shape[1]}")
+                logger.info(f"   • Feature memory: {dataset.all_features.nbytes / (1024**2):.1f} MB")
+            
+            # Token information
+            if hasattr(dataset, 'all_captions'):
+                total_captions = len(dataset.all_captions)
+                logger.info(f"   • Total captions: {total_captions:,}")
+                
+                # Estimate tokens (rough calculation)
+                avg_tokens_per_caption = 50  # Rough estimate
+                estimated_total_tokens = total_captions * avg_tokens_per_caption
+                tokens_per_epoch = batches_per_epoch * batch_size * avg_tokens_per_caption
+                
+                logger.info(f"   • Estimated total tokens: {estimated_total_tokens:,}")
+                logger.info(f"   • Estimated tokens per epoch: {tokens_per_epoch:,}")
+        
+        # Training configuration
+        total_epochs = self.config['training']['max_epochs']
+        logger.info(f"🎯 TRAINING CONFIGURATION:")
+        logger.info(f"   • Total epochs: {total_epochs}")
+        logger.info(f"   • Learning rate: {self.config['training']['learning_rate']}")
+        logger.info(f"   • Model components:")
+        logger.info(f"     - BitNet quantization: {'✅' if self.config['model'].get('use_bitnet', True) else '❌'}")
+        logger.info(f"     - FIBER fusion: {'✅' if self.config['model'].get('use_fiber', True) else '❌'}")
+        logger.info(f"     - Episodic memory: {'✅' if self.config['model'].get('use_episodic_memory', True) else '❌'}")
+        logger.info(f"     - Robot reasoning: {'✅' if self.enable_robot_reasoning else '❌'}")
+        
+        logger.info("=" * 80)
 
         try:
             # Check if hybrid training is enabled
