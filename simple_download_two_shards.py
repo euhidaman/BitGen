@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple script: Download first two OpenImages shards + extract DiNOv2 features
-Just does what's needed - no complexity.
+Simple script: Download first OpenImages shard + extract DiNOv2 features
+Downloads to ./data/ with proper structure for train_unified.py
 """
 
 import os
@@ -17,11 +17,11 @@ import requests
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-def download_two_shards_with_features(data_dir: str = "./data", max_samples: int = 200000):
+def download_one_shard_with_features(data_dir: str = "./data", max_samples: int = 200000):
     """
     Simple function:
-    1. Download train_0.tar.gz + train_1.tar.gz (first two OpenImages shards)
-    2. Extract images
+    1. Download train_0.tar.gz (first OpenImages shard only)
+    2. Extract images  
     3. Download OpenImages captions from Localized Narratives
     4. Align captions with images
     5. Extract DiNOv2 features
@@ -30,23 +30,22 @@ def download_two_shards_with_features(data_dir: str = "./data", max_samples: int
     data_path = Path(data_dir)
     data_path.mkdir(exist_ok=True)
     
-    logger.info("🚀 Starting simple two-shard download with DiNOv2 features")
+    logger.info("🚀 Starting simple one-shard download with DiNOv2 features")
     
     # Step 1: Download Localized Narratives captions for OpenImages
     logger.info("📝 Step 1: Download OpenImages captions from Localized Narratives")
     
-    ln_dir = data_path / "localized_narratives"
-    ln_dir.mkdir(exist_ok=True)
+    ln_dir = data_path / "localized_narratives" / "open_images"
+    ln_dir.mkdir(parents=True, exist_ok=True)
     
-    # Download first two caption shards (enough for our image shards)
+    # Download first caption shard only (enough for one image shard)
     caption_urls = [
-        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl',
-        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00001-of-00010.jsonl'
+        'https://storage.googleapis.com/localized-narratives/annotations/open_images_train_v6_localized_narratives-00000-of-00010.jsonl'
     ]
     
     captions = []
     for i, url in enumerate(caption_urls):
-        filename = f"captions_shard_{i}.jsonl"
+        filename = f"open_images_train_shard_{i:02d}.jsonl"
         filepath = ln_dir / filename
         
         if not filepath.exists():
@@ -77,16 +76,15 @@ def download_two_shards_with_features(data_dir: str = "./data", max_samples: int
     
     logger.info(f"   ✅ Got {len(captions):,} captions")
     
-    # Step 2: Download first two OpenImages shards
-    logger.info("📦 Step 2: Download first two OpenImages shards")
+    # Step 2: Download first OpenImages shard only
+    logger.info("📦 Step 2: Download first OpenImages shard")
     
     oi_dir = data_path / "open_images"
     oi_dir.mkdir(exist_ok=True)
     
-    # AWS commands for first two shards
+    # AWS command for first shard only
     shard_commands = [
-        f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/",
-        f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_1.tar.gz {oi_dir}/"
+        f"aws s3 --no-sign-request cp s3://open-images-dataset/tar/train_0.tar.gz {oi_dir}/"
     ]
     
     for i, cmd in enumerate(shard_commands):
@@ -224,7 +222,7 @@ def download_two_shards_with_features(data_dir: str = "./data", max_samples: int
             'aligned_pairs': len(aligned_pairs),
             'features_extracted': len(all_features),
             'feature_shape': features_array.shape,
-            'shards_downloaded': ['train_0', 'train_1']
+            'shards_downloaded': ['train_0']
         }
         
         summary_file = data_path / "summary.json"
@@ -246,9 +244,9 @@ def download_two_shards_with_features(data_dir: str = "./data", max_samples: int
 
 
 if __name__ == "__main__":
-    # Simple usage
-    summary = download_two_shards_with_features(
-        data_dir="./data_simple",
+    # Simple usage - downloads to ./data which training expects
+    summary = download_one_shard_with_features(
+        data_dir="./data",
         max_samples=200000
     )
     
@@ -256,4 +254,5 @@ if __name__ == "__main__":
         print(f"\n✅ SUCCESS:")
         print(f"  • {summary['features_extracted']:,} image-caption pairs with DiNOv2 features")
         print(f"  • Features shape: {summary['feature_shape']}")
-        print(f"  • Files saved to: ./data_simple/")
+        print(f"  • Files saved to: ./data/ (ready for training)")
+        print(f"  • You can now run: python train_unified.py --config configs/bitmar_with_memory.yaml")
