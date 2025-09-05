@@ -184,30 +184,36 @@ class LarimarInspiredEpisodicMemory(nn.Module):
             logger.info("Memory buffers already initialized, skipping...")
             self._memory_loaded = True
             return
-            
-        # Larimar-style memory initialization
+        
+        # Determine device from existing parameters
+        try:
+            device = next(self.parameters()).device
+        except StopIteration:
+            device = torch.device('cpu')
+        
+        # Larimar-style memory initialization on correct device
         self.register_buffer('memory_mean', 
-                           torch.randn(self.memory_size, self.episode_dim) * 0.02)
+                           torch.randn(self.memory_size, self.episode_dim, device=device) * 0.02)
         self.register_buffer('memory_logvar', 
-                           torch.zeros(self.memory_size, self.episode_dim))
+                           torch.zeros(self.memory_size, self.episode_dim, device=device))
         self.register_buffer('memory_cov', 
-                           torch.eye(self.memory_size).unsqueeze(0))  # [1, memory_size, memory_size]
+                           torch.eye(self.memory_size, device=device).unsqueeze(0))  # [1, memory_size, memory_size]
         
-        # Additional tracking buffers
-        self.register_buffer('memory_age', torch.zeros(self.memory_size))
-        self.register_buffer('memory_usage', torch.zeros(self.memory_size))
-        self.register_buffer('memory_importance', torch.ones(self.memory_size))
-        self.register_buffer('memory_quality', torch.zeros(self.memory_size))
-        self.register_buffer('update_count', torch.tensor(0, dtype=torch.long))
+        # Additional tracking buffers on correct device
+        self.register_buffer('memory_age', torch.zeros(self.memory_size, device=device))
+        self.register_buffer('memory_usage', torch.zeros(self.memory_size, device=device))
+        self.register_buffer('memory_importance', torch.ones(self.memory_size, device=device))
+        self.register_buffer('memory_quality', torch.zeros(self.memory_size, device=device))
+        self.register_buffer('update_count', torch.tensor(0, dtype=torch.long, device=device))
         
-        # Cross-modal memory tracking
+        # Cross-modal memory tracking on correct device
         if getattr(self.config, 'cross_modal_fusion', False):
-            self.register_buffer('text_memory_contributions', torch.zeros(self.memory_size))
-            self.register_buffer('vision_memory_contributions', torch.zeros(self.memory_size))
+            self.register_buffer('text_memory_contributions', torch.zeros(self.memory_size, device=device))
+            self.register_buffer('vision_memory_contributions', torch.zeros(self.memory_size, device=device))
         
         # Mark as loaded to prevent re-initialization
         self._memory_loaded = True
-        logger.info(f"Memory buffers initialized successfully: {self.memory_size} slots, dim={self.episode_dim}")
+        logger.info(f"Memory buffers initialized successfully on {device}: {self.memory_size} slots, dim={self.episode_dim}")
 
     def _ensure_memory_loaded(self):
         """Ensure memory is loaded into device memory"""
