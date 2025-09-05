@@ -132,6 +132,11 @@ class UnifiedBitMarTrainer:
         # Control debug output verbosity
         self.debug_mode = False  # Set to True for detailed debugging
         
+        # ETA smoothing for stable time estimates
+        self.batch_times = []  # Track processing times
+        self.smoothed_time_per_batch = None  # Smoothed average
+        self.eta_smoothing_factor = 0.1  # EMA factor for time smoothing
+        
         # Load configuration with validation
         try:
             with open(config_path, 'r') as f:
@@ -836,6 +841,9 @@ class UnifiedBitMarTrainer:
             persistent_workers = getattr(
                 self.data_module, 'persistent_workers', self.config['data'].get('persistent_workers', True))
 
+            # Get prefetch_factor from config
+            prefetch_factor = self.config.get('memory_optimization', {}).get('prefetch_factor', 2)
+            
             return DataLoader(
                 dataset,
                 batch_size=batch_size,
@@ -844,7 +852,8 @@ class UnifiedBitMarTrainer:
                 pin_memory=pin_memory,
                 persistent_workers=persistent_workers if num_workers > 0 else False,
                 drop_last=True,
-                collate_fn=self.custom_collate_fn
+                collate_fn=self.custom_collate_fn,
+                prefetch_factor=prefetch_factor if num_workers > 0 else 2  # GPU optimization
             )
         self.data_module.train_dataloader = custom_train_dataloader
 
@@ -965,6 +974,21 @@ class UnifiedBitMarTrainer:
             logger.info("📝 Attention sinks disabled in configuration")
 
         self.model.to(self.device)
+
+        # GPU Performance Optimizations
+        if self.device.type == 'cuda':
+            # Enable cuDNN benchmark for consistent input sizes
+            if self.config.get('memory_optimization', {}).get('cudnn_benchmark', True):
+                torch.backends.cudnn.benchmark = True
+                logger.info("🚀 Enabled cuDNN benchmark for consistent input sizes")
+            
+            # Enable torch.compile if specified (PyTorch 2.0+)
+            if self.config.get('memory_optimization', {}).get('torch_compile', False):
+                try:
+                    self.model = torch.compile(self.model)
+                    logger.info("🚀 Model compiled with torch.compile for acceleration")
+                except Exception as e:
+                    logger.warning(f"Failed to compile model: {e}")
 
         # Initialize FIBER-style cross-modal temperature parameter
         self.cross_modal_temp = nn.Parameter(torch.tensor(
@@ -1297,11 +1321,41 @@ class UnifiedBitMarTrainer:
 
         reasoning_batches = 0
         total_batches = 0
+        batch_start_time = time.time()
 
-        progress_bar = tqdm(
-            train_loader, desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,} | Features: {len(train_loader.dataset):,}")
+        # Create progress bar with smoothed ETA tracking
+        class SmoothedProgressBar(tqdm):
+            def __init__(self, iterable, trainer, **kwargs):
+                super().__init__(iterable, **kwargs)
+                self.trainer = trainer
+                self.start_time = time.time()
+                
+            def update(self, n=1):
+                super().update(n)
+                # Update smoothed time estimate
+                current_time = time.time()
+                if self.n > 0:
+                    current_rate = self.n / (current_time - self.start_time)
+                    if self.trainer.smoothed_time_per_batch is None:
+                        self.trainer.smoothed_time_per_batch = 1.0 / current_rate if current_rate > 0 else 1.0
+                    else:
+                        new_time_per_batch = 1.0 / current_rate if current_rate > 0 else self.trainer.smoothed_time_per_batch
+                        self.trainer.smoothed_time_per_batch = (
+                            self.trainer.eta_smoothing_factor * new_time_per_batch + 
+                            (1 - self.trainer.eta_smoothing_factor) * self.trainer.smoothed_time_per_batch
+                        )
+
+        progress_bar = SmoothedProgressBar(
+            train_loader, 
+            trainer=self,
+            desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,} | Features: {len(train_loader.dataset):,}",
+            smoothing=0.1  # Reduce ETA fluctuation
+        )
 
         for batch_idx, batch in enumerate(progress_bar):
+            # Track batch processing time for stable ETA
+            batch_start_time = time.time()
+            
             # Count tokens in this batch for logging purposes
             batch_tokens = self.count_tokens_in_batch(batch)
 
@@ -1974,6 +2028,15 @@ class UnifiedBitMarTrainer:
                         progress_info['robot_acc'] = f"{reasoning_metrics.get('robot_selection_accuracy', 0.0):.3f}"
 
                 progress_bar.set_postfix(progress_info)
+                
+                # Track batch processing time for stable ETA
+                batch_end_time = time.time()
+                batch_duration = batch_end_time - batch_start_time
+                self.batch_times.append(batch_duration)
+                
+                # Keep only recent batch times for moving average
+                if len(self.batch_times) > 100:
+                    self.batch_times = self.batch_times[-100:]
 
                 # Enhanced wandb logging with robot reasoning
                 if self.use_wandb and self.global_step % 100 == 0:

@@ -166,7 +166,7 @@ data:
   cache_vision_features: false # DISABLED: No caching, process fresh features
 
   # DataLoader settings - Optimized for GPU training and faster processing
-  batch_size: 48 # Increased from 32 for better GPU utilization
+  batch_size: 64 # Increased from 48 for better GPU utilization
   num_workers: 8 # Increased from 6 for maximum data loading throughput
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
@@ -224,7 +224,7 @@ adaptive_training:
 training:
   # Training configuration - Train on ALL available data for as many epochs as needed
   max_epochs: 20 # Increased epochs to utilize all data
-  accumulate_grad_batches: 2 # Reduced from 4 due to increased batch_size from 32 to 96
+  accumulate_grad_batches: 1 # Reduced from 2 due to increased batch_size from 48 to 64
   gradient_clip_val: 0.3 # Balanced gradient clipping
   val_check_interval: 1000 # Reduced from 2000 for faster training with batch_size=96
   scheduler: "cosine_with_restarts" # Cosine with restarts for better convergence
@@ -269,12 +269,18 @@ output:
 
 # Memory optimization
 memory_optimization:
-  use_gradient_checkpointing: true # Trade compute for memory
+  use_gradient_checkpointing: false # Disabled for maximum GPU utilization 
   use_fp16: true # Mixed precision training
   use_int8_vision: false # Keep vision in fp16 for quality
-  empty_cache_frequency: 10 # Regular cache cleaning
-  max_memory_slots_in_ram: 16 # Keep 16 slots in RAM
-  compress_episodic_memory: true # Compress memory storage
+  empty_cache_frequency: 50 # Reduced frequency for better performance
+  max_memory_slots_in_ram: 32 # Increased from 16 for better GPU utilization
+  compress_episodic_memory: false # Disabled for faster memory access
+  
+  # GPU optimization settings
+  torch_compile: true # Enable PyTorch 2.0 compilation
+  cudnn_benchmark: true # Optimize cuDNN for consistent input sizes
+  cuda_empty_cache: false # Disable frequent cache clearing for speed
+  prefetch_factor: 4 # Increase data prefetching
 
   # Vision processing optimization
   vision_feature_caching: true # ENABLED: Cache features to disk for speed
