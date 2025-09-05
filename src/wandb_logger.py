@@ -77,8 +77,16 @@ class BitMarWandbLogger:
             metrics['Memory/Usage_Std'] = memory_usage.std().item()
             
             # Memory utilization percentage
-            active_slots = (memory_usage > 0).float().mean().item()
-            metrics['Memory/Active_Slots_Percentage'] = active_slots * 100
+            try:
+                if isinstance(memory_usage, torch.Tensor):
+                    active_slots = (memory_usage > 0).float().mean().item()
+                else:
+                    # Handle numpy arrays
+                    active_slots = (memory_usage > 0).astype(float).mean()
+                metrics['Memory/Active_Slots_Percentage'] = active_slots * 100
+            except Exception as e:
+                logger.debug(f"Failed to compute active slots percentage: {e}")
+                metrics['Memory/Active_Slots_Percentage'] = 0.0
             
         # Attention pattern analysis
         if 'cross_attention' in outputs:

@@ -716,7 +716,7 @@ class LarimarInspiredEpisodicMemory(nn.Module):
             pattern = "episodic_memory_v*.pt*"
             candidates = list(self.memory_storage_path.glob(pattern))
             if not candidates:
-                logger.warning("No external memory files found")
+                logger.info("No external memory files found - starting with fresh memory")
                 return False
             load_path = max(candidates, key=lambda p: p.stat().st_mtime)
         

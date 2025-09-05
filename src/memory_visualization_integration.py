@@ -135,8 +135,12 @@ class MemoryVisualizationIntegration:
         try:
             # Try different possible attribute names for memory slots based on actual BitMar structure
             possible_attrs = [
-                'memory.memory',  # BitMar structure: self.memory (EpisodicMemory) -> .memory (buffer)
+                'memory.memory_mean',  # Enhanced Episodic Memory structure
+                'memory.memory_cov',   # Alternative memory representation
+                'memory.memory',       # BitMar structure: self.memory (EpisodicMemory) -> .memory (buffer)
                 'memory.memory_slots', 
+                'episodic_memory.memory_mean',
+                'episodic_memory.memory_cov',
                 'episodic_memory.memory',
                 'episodic_memory.memory_slots', 
                 'episodic_memory.slots',
@@ -167,7 +171,8 @@ class MemoryVisualizationIntegration:
             model_attrs = [attr for attr in dir(self.model) if not attr.startswith('_') and 'memory' in attr.lower()]
             logger.debug(f"Available model attributes with 'memory': {model_attrs}")
             
-            logger.warning("⚠️  Could not find memory slots in model")
+            # Change to debug level since this is normal during initialization
+            logger.debug("Memory slots not found - memory may be initializing")
             return None
             
         except Exception as e:

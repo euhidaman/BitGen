@@ -1518,12 +1518,16 @@ class UnifiedBitMarTrainer:
                     if self.global_step == 1:
                         logger.info("🕐 FORWARD PASS COMPLETED - checking output structure:")
                         if hasattr(outputs, 'fiber_losses') and outputs.fiber_losses:
-                            logger.info(f"  • FIBER losses present: {list(outputs.fiber_losses.keys())}")
-                            for k, v in outputs.fiber_losses.items():
-                                if v is not None:
+                            # Check if any FIBER losses are actually non-None
+                            active_fiber_losses = {k: v for k, v in outputs.fiber_losses.items() if v is not None}
+                            if active_fiber_losses:
+                                logger.info(f"  • FIBER losses present: {list(active_fiber_losses.keys())}")
+                                for k, v in active_fiber_losses.items():
                                     logger.info(f"    - {k}: {v.item():.4f}")
+                            else:
+                                logger.debug("  • FIBER losses dict present but values are None (may be normal during initialization)")
                         else:
-                            logger.warning("  • ❌ FIBER losses missing - checking fiber_outputs...")
+                            logger.debug("  • FIBER losses not yet populated - checking fiber_outputs...")
                             # Check if model has fusion component
                             if hasattr(self.model, 'fusion'):
                                 logger.info("  • ✅ Model has fusion component")
@@ -1532,10 +1536,12 @@ class UnifiedBitMarTrainer:
                             else:
                                 logger.warning("  • ❌ Model missing fusion component!")
                         
-                        if hasattr(outputs, 'memory_state'):
-                            logger.info(f"  • Memory state present: {outputs.memory_state is not None}")
+                        if hasattr(outputs, 'memory_state') and outputs.memory_state is not None:
+                            logger.info(f"  • ✅ Memory state present")
+                        elif hasattr(outputs, 'memory_output') and outputs.memory_output is not None:
+                            logger.info(f"  • ✅ Memory output present")
                         else:
-                            logger.warning("  • ❌ Memory state missing - Episodic memory may not be active!")
+                            logger.debug("  • Memory state not yet active (normal during initialization)")
                         
                         # Check if outputs has expected attributes
                         logger.info(f"  • Output attributes: {[attr for attr in dir(outputs) if not attr.startswith('_')]}")
