@@ -270,11 +270,25 @@ class LarimarInspiredEpisodicMemory(nn.Module):
             # z_transposed: [batch_size, episode_size, episode_dim]
             z_transposed = z.transpose(0, 1)
             
-            # For each batch, solve: z_i @ pinv(M_T_i) = w_i
-            # z_i: [episode_size, episode_dim], M_T_i: [episode_dim, memory_size]
-            # pinv(M_T_i): [memory_size, episode_dim], result: [episode_size, memory_size]
-            w = torch.bmm(z_transposed, torch.pinverse(M_T).transpose(1, 2))  # [batch_size, episode_size, memory_size]
-            w = w.transpose(0, 1)  # [episode_size, batch_size, memory_size]
+            # Compute pseudoinverse for each batch element separately
+            w_list = []
+            for i in range(batch_size):
+                # M_T_i: [episode_dim, memory_size], z_i: [episode_size, episode_dim]
+                M_T_i = M_T[i]  # [episode_dim, memory_size]
+                z_i = z_transposed[i]  # [episode_size, episode_dim]
+                
+                # Compute pseudoinverse: pinv(M_T_i) has shape [memory_size, episode_dim]
+                try:
+                    M_T_i_pinv = torch.pinverse(M_T_i)  # [memory_size, episode_dim]
+                    # z_i @ M_T_i_pinv.T = [episode_size, episode_dim] @ [episode_dim, memory_size] = [episode_size, memory_size]
+                    w_i = torch.mm(z_i, M_T_i_pinv.T)  # [episode_size, memory_size]
+                except RuntimeError:
+                    # Fallback to least squares if pinverse fails
+                    w_i = torch.linalg.lstsq(M_T_i.T, z_i.T).solution.T  # [episode_size, memory_size]
+                
+                w_list.append(w_i)
+            
+            w = torch.stack(w_list, dim=1)  # [episode_size, batch_size, memory_size]
         else:
             # Direct least squares solution
             M_flat = M.view(batch_size, -1)  # [batch_size, memory_size * episode_dim]
