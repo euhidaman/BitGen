@@ -1,0 +1,579 @@
+"""
+Enhanced BitGen Training Script with Comprehensive Monitoring
+Tracks FLOPS, energy consumption, carbon emissions for Raspberry Pi Zero deployment
+"""
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+import os
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+import numpy as np
+from collections import defaultdict
+
+# Import BitGen components
+from bitgen_model import BitGenModel, BitGenConfig, create_bitgen_model
+from adaptive_loss import BitGenLoss, AdaptiveLossManager, PerformanceTracker
+from data_loader import COCODataset, BitGenDataLoader, RobotSelectionDataset
+
+# Import monitoring
+from raspberry_pi.rpi_monitor import RaspberryPiMonitor, get_monitor, start_monitoring, stop_monitoring
+
+# Additional imports for comprehensive monitoring
+try:
+    from codecarbon import OfflineEmissionsTracker, track_emissions
+    CODECARBON_AVAILABLE = True
+except ImportError:
+    CODECARBON_AVAILABLE = False
+
+try:
+    from ptflops import get_model_complexity_info
+    from thop import profile, clever_format
+    FLOPS_AVAILABLE = True
+except ImportError:
+    FLOPS_AVAILABLE = False
+
+class EnhancedBitGenTrainer:
+    """BitGen trainer with comprehensive monitoring for Raspberry Pi Zero"""
+
+    def __init__(self,
+                 config: BitGenConfig,
+                 model_size: str = 'tiny',
+                 output_dir: str = 'checkpoints',
+                 monitoring_dir: str = 'monitoring_results',
+                 use_carbon_tracking: bool = True):
+
+        self.config = config
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+
+        # Initialize monitoring
+        self.monitor = RaspberryPiMonitor(monitoring_dir)
+        self.use_carbon_tracking = use_carbon_tracking and CODECARBON_AVAILABLE
+
+        # Initialize model
+        self.model = create_bitgen_model(model_size)
+
+        # Setup device (CPU for Raspberry Pi Zero)
+        self.device = torch.device('cpu')  # Raspberry Pi Zero doesn't have GPU
+        self.model = self.model.to(self.device)
+
+        # Calculate model FLOPS
+        self.model_flops = self._calculate_model_flops()
+
+        # Initialize loss function
+        self.loss_fn = BitGenLoss(config, config.vocab_size)
+
+        # Performance tracking
+        self.performance_tracker = PerformanceTracker()
+
+        # Training state
+        self.global_step = 0
+        self.epoch = 0
+        self.best_loss = float('inf')
+
+        # Carbon tracking
+        self.carbon_tracker = None
+        if self.use_carbon_tracking:
+            self.carbon_tracker = OfflineEmissionsTracker(
+                country_iso_code="US",
+                output_dir=str(self.monitor.output_dir),
+                project_name="BitGen-Training"
+            )
+
+        # FLOPS tracking
+        self.training_flops = 0
+        self.inference_flops = 0
+
+        # Setup logging
+        self.setup_logging()
+
+    def setup_logging(self):
+        """Setup logging for training with monitoring"""
+        log_file = self.output_dir / 'enhanced_training.log'
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+        # Log system information
+        system_info = self.monitor.get_system_info()
+        self.logger.info("System Information:")
+        for category, details in system_info.items():
+            self.logger.info(f"  {category}: {details}")
+
+    def _calculate_model_flops(self) -> Dict:
+        """Calculate model FLOPS for different operations"""
+        if not FLOPS_AVAILABLE:
+            self.logger.warning("FLOPS calculation tools not available")
+            return {"forward_flops": 0, "params": 0}
+
+        try:
+            # Calculate FLOPS for forward pass
+            input_shape = (self.config.max_seq_len,)  # Sequence length
+            flops_info = self.monitor.calculate_model_flops(self.model, input_shape)
+
+            self.logger.info(f"Model FLOPS Analysis:")
+            self.logger.info(f"  Forward pass FLOPS: {flops_info.get('flops_human', 'Unknown')}")
+            self.logger.info(f"  Parameters: {flops_info.get('params_human', 'Unknown')}")
+
+            return flops_info
+
+        except Exception as e:
+            self.logger.error(f"FLOPS calculation failed: {e}")
+            return {"forward_flops": 0, "params": 0}
+
+    def setup_optimizer(self, learning_rate: float = 1e-4):
+        """Setup optimizer for Raspberry Pi Zero constraints"""
+        # Use Adam with lower memory footprint for Pi Zero
+        optimizer = optim.AdamW(
+            self.model.parameters(),
+            lr=learning_rate,
+            betas=(0.9, 0.95),
+            weight_decay=0.01,  # Reduced for smaller model
+            eps=1e-8
+        )
+
+        # Simple learning rate scheduler
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=100,
+            gamma=0.95
+        )
+
+        return optimizer, scheduler
+
+    def train_step_with_monitoring(self, batch: Dict, optimizer: optim.Optimizer) -> Dict:
+        """Training step with comprehensive monitoring"""
+        step_start_time = time.time()
+
+        self.model.train()
+
+        # Move batch to device
+        input_ids = batch['input_ids'].to(self.device)
+        labels = batch['labels'].to(self.device)
+        images = batch.get('images')
+        if images is not None:
+            images = images.to(self.device)
+
+        target_robot = batch.get('target_robot')
+        if target_robot is not None:
+            target_robot = target_robot.to(self.device)
+
+        # Forward pass with FLOPS tracking
+        forward_start = time.time()
+
+        outputs = self.model(
+            input_ids=input_ids,
+            images=images,
+            return_robot_selection=(target_robot is not None)
+        )
+
+        forward_time = time.time() - forward_start
+
+        # Compute loss
+        total_loss, loss_dict = self.loss_fn(
+            outputs,
+            labels,
+            images=images,
+            target_robot=target_robot
+        )
+
+        # Backward pass
+        backward_start = time.time()
+        optimizer.zero_grad()
+        total_loss.backward()
+
+        # Gradient clipping for stability on Pi Zero
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+
+        optimizer.step()
+        backward_time = time.time() - backward_start
+
+        step_time = time.time() - step_start_time
+
+        # Calculate FLOPS for this step
+        batch_size = input_ids.size(0)
+        seq_len = input_ids.size(1)
+
+        # Estimate FLOPS (forward + backward ≈ 3x forward)
+        step_flops = self.model_flops.get('flops', 0) * batch_size * 3
+        self.training_flops += step_flops
+
+        # Update metrics
+        metrics = {
+            'total_loss': total_loss.item(),
+            'learning_rate': optimizer.param_groups[0]['lr'],
+            'forward_time_ms': forward_time * 1000,
+            'backward_time_ms': backward_time * 1000,
+            'step_time_ms': step_time * 1000,
+            'step_flops': step_flops,
+            'batch_size': batch_size,
+            'sequence_length': seq_len,
+            'tokens_per_second': (batch_size * seq_len) / step_time
+        }
+
+        # Add individual loss components
+        for key, value in loss_dict.items():
+            if isinstance(value, torch.Tensor):
+                metrics[key] = value.item()
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    metrics[f"{key}_{k}"] = v if not isinstance(v, torch.Tensor) else v.item()
+
+        return metrics
+
+    def train_with_comprehensive_monitoring(self,
+                                           coco_data_path: str,
+                                           robot_data_path: Optional[str] = None,
+                                           num_epochs: int = 5,  # Reduced for Pi Zero
+                                           batch_size: int = 1,  # Small batch for Pi Zero
+                                           learning_rate: float = 5e-5,  # Lower LR for stability
+                                           eval_steps: int = 50,
+                                           save_steps: int = 100):
+        """Main training loop with comprehensive monitoring"""
+
+        self.logger.info("Starting BitGen training with comprehensive monitoring for Raspberry Pi Zero")
+
+        # Start monitoring
+        self.monitor.start_monitoring()
+
+        # Start carbon tracking
+        if self.carbon_tracker:
+            self.carbon_tracker.start()
+
+        try:
+            # Setup training components
+            optimizer, scheduler = self.setup_optimizer(learning_rate)
+
+            # Setup data loaders (small batches for Pi Zero)
+            train_loader = self._setup_data_loader(coco_data_path, robot_data_path, batch_size)
+
+            # Training metrics
+            training_start_time = time.time()
+            total_steps = 0
+
+            # Training loop
+            for epoch in range(num_epochs):
+                self.epoch = epoch
+                epoch_start_time = time.time()
+                epoch_metrics = defaultdict(list)
+
+                self.logger.info(f"Starting epoch {epoch + 1}/{num_epochs}")
+
+                for step, batch in enumerate(train_loader):
+                    # Training step with monitoring
+                    step_metrics = self.train_step_with_monitoring(batch, optimizer)
+
+                    # Update metrics
+                    for key, value in step_metrics.items():
+                        epoch_metrics[key].append(value)
+
+                    # Update performance tracker
+                    self.performance_tracker.update(step_metrics)
+
+                    self.global_step += 1
+                    total_steps += 1
+
+                    # Logging
+                    if step % 10 == 0:
+                        current_metrics = self._get_current_monitoring_state()
+                        self.logger.info(
+                            f"Epoch {epoch+1}, Step {step}: "
+                            f"Loss={step_metrics['total_loss']:.4f}, "
+                            f"Tokens/s={step_metrics['tokens_per_second']:.2f}, "
+                            f"RAM={current_metrics.get('ram_usage_mb', 0):.1f}MB, "
+                            f"CPU={current_metrics.get('cpu_usage_percent', 0):.1f}%, "
+                            f"Temp={current_metrics.get('cpu_temperature_c', 0):.1f}°C, "
+                            f"Power={current_metrics.get('power_consumption_mw', 0):.1f}mW"
+                        )
+
+                    # Evaluation
+                    if self.global_step % eval_steps == 0:
+                        eval_results = self._evaluate_with_monitoring(train_loader, num_samples=5)
+                        self.logger.info(f"Evaluation at step {self.global_step}: {eval_results}")
+
+                    # Checkpointing
+                    if self.global_step % save_steps == 0:
+                        self._save_checkpoint_with_metrics(optimizer, scheduler)
+
+                    # Early stopping if overheating (Pi Zero protection)
+                    current_temp = self._get_current_temperature()
+                    if current_temp > 75.0:  # Pi Zero thermal limit
+                        self.logger.warning(f"High temperature detected: {current_temp}°C. Pausing training.")
+                        time.sleep(30)  # Cool down pause
+
+                # End of epoch
+                scheduler.step()
+                epoch_time = time.time() - epoch_start_time
+
+                # Log epoch summary
+                epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
+                self.logger.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
+                self.logger.info(f"  Average loss: {epoch_avg['total_loss']:.4f}")
+                self.logger.info(f"  Average tokens/s: {epoch_avg['tokens_per_second']:.2f}")
+                self.logger.info(f"  Total FLOPS: {self.training_flops:,}")
+
+            # Training completed
+            training_time = time.time() - training_start_time
+
+            self.logger.info(f"Training completed in {training_time:.2f}s")
+            self.logger.info(f"Total training FLOPS: {self.training_flops:,}")
+
+            # Final evaluation
+            final_eval = self._evaluate_with_monitoring(train_loader, num_samples=10)
+            self.logger.info(f"Final evaluation: {final_eval}")
+
+        except Exception as e:
+            self.logger.error(f"Training failed: {e}")
+            raise
+
+        finally:
+            # Stop monitoring and save results
+            monitoring_summary = self.monitor.stop_monitoring()
+
+            if self.carbon_tracker:
+                self.carbon_tracker.stop()
+
+            # Generate comprehensive training report
+            self._generate_training_report(monitoring_summary, training_time, total_steps)
+
+    def _setup_data_loader(self, coco_data_path: str, robot_data_path: Optional[str], batch_size: int):
+        """Setup data loader optimized for Pi Zero"""
+        # Load datasets
+        coco_dataset = COCODataset(
+            coco_data_path,
+            max_seq_len=self.config.max_seq_len,
+            vocab_size=self.config.vocab_size
+        )
+
+        # Use simple DataLoader with no multiprocessing for Pi Zero
+        train_loader = DataLoader(
+            coco_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,  # No multiprocessing on Pi Zero
+            pin_memory=False,  # No GPU
+            drop_last=True
+        )
+
+        return train_loader
+
+    def _get_current_monitoring_state(self) -> Dict:
+        """Get current monitoring state"""
+        if self.monitor.metrics_history:
+            latest_metrics = self.monitor.metrics_history[-1]
+            return {
+                'ram_usage_mb': latest_metrics.ram_usage_mb,
+                'cpu_usage_percent': latest_metrics.cpu_usage_percent,
+                'cpu_temperature_c': latest_metrics.cpu_temperature_c,
+                'power_consumption_mw': latest_metrics.power_consumption_mw
+            }
+        return {}
+
+    def _get_current_temperature(self) -> float:
+        """Get current CPU temperature"""
+        try:
+            with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                return int(f.read().strip()) / 1000.0
+        except:
+            return 50.0  # Default safe temperature
+
+    def _evaluate_with_monitoring(self, data_loader: DataLoader, num_samples: int = 10) -> Dict:
+        """Evaluation with monitoring"""
+        self.model.eval()
+        total_loss = 0.0
+        total_samples = 0
+        inference_times = []
+
+        with torch.no_grad():
+            for i, batch in enumerate(data_loader):
+                if i >= num_samples:
+                    break
+
+                input_ids = batch['input_ids'].to(self.device)
+                labels = batch['labels'].to(self.device)
+
+                # Monitor inference
+                inference_start = time.time()
+                outputs = self.model(input_ids=input_ids)
+                inference_time = time.time() - inference_start
+
+                loss, _ = self.loss_fn(outputs, labels)
+
+                batch_size = input_ids.size(0)
+                total_loss += loss.item() * batch_size
+                total_samples += batch_size
+                inference_times.append(inference_time * 1000)  # Convert to ms
+
+                # Track inference FLOPS
+                self.inference_flops += self.model_flops.get('flops', 0) * batch_size
+
+        avg_loss = total_loss / total_samples if total_samples > 0 else 0
+        avg_inference_time = np.mean(inference_times)
+
+        return {
+            'eval_loss': avg_loss,
+            'avg_inference_time_ms': avg_inference_time,
+            'inference_flops': self.inference_flops
+        }
+
+    def _save_checkpoint_with_metrics(self, optimizer: optim.Optimizer, scheduler):
+        """Save checkpoint with monitoring metrics"""
+        checkpoint = {
+            'epoch': self.epoch,
+            'global_step': self.global_step,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'config': self.config.__dict__,
+            'best_loss': self.best_loss,
+            'training_flops': self.training_flops,
+            'inference_flops': self.inference_flops,
+            'model_flops_info': self.model_flops,
+            'monitoring_summary': self.monitor._generate_summary() if self.monitor.metrics_history else {}
+        }
+
+        filename = f"bitgen_checkpoint_step_{self.global_step}.pt"
+        torch.save(checkpoint, self.output_dir / filename)
+        self.logger.info(f"Saved checkpoint with metrics: {filename}")
+
+    def _generate_training_report(self, monitoring_summary: Dict, training_time: float, total_steps: int):
+        """Generate comprehensive training report"""
+        report = {
+            'training_summary': {
+                'total_training_time_seconds': training_time,
+                'total_steps': total_steps,
+                'final_epoch': self.epoch,
+                'training_flops': self.training_flops,
+                'inference_flops': self.inference_flops,
+                'model_info': self.model_flops
+            },
+            'system_info': self.monitor.get_system_info(),
+            'monitoring_results': monitoring_summary,
+            'performance_analysis': {
+                'avg_flops_per_step': self.training_flops / total_steps if total_steps > 0 else 0,
+                'training_efficiency_flops_per_second': self.training_flops / training_time if training_time > 0 else 0,
+                'energy_efficiency_flops_per_mj': (
+                    self.training_flops / monitoring_summary.get('total_energy_consumed_mj', 1)
+                    if monitoring_summary.get('total_energy_consumed_mj', 0) > 0 else 0
+                ),
+                'carbon_efficiency_flops_per_g_co2': (
+                    self.training_flops / monitoring_summary.get('total_carbon_emissions_g', 1)
+                    if monitoring_summary.get('total_carbon_emissions_g', 0) > 0 else 0
+                )
+            },
+            'raspberry_pi_metrics': {
+                'thermal_performance': {
+                    'avg_cpu_temp_c': monitoring_summary.get('avg_cpu_temperature_c', 0),
+                    'peak_cpu_temp_c': monitoring_summary.get('peak_cpu_temperature_c', 0),
+                    'thermal_throttling_risk': 'High' if monitoring_summary.get('peak_cpu_temperature_c', 0) > 70 else 'Low'
+                },
+                'power_efficiency': {
+                    'avg_power_mw': monitoring_summary.get('avg_power_consumption_mw', 0),
+                    'peak_power_mw': monitoring_summary.get('peak_power_consumption_mw', 0),
+                    'total_energy_mj': monitoring_summary.get('total_energy_consumed_mj', 0),
+                    'estimated_battery_life_hours': self._estimate_battery_life(monitoring_summary)
+                },
+                'memory_efficiency': {
+                    'avg_ram_usage_mb': monitoring_summary.get('avg_ram_usage_mb', 0),
+                    'peak_ram_usage_mb': monitoring_summary.get('peak_ram_usage_mb', 0),
+                    'memory_utilization_percent': (
+                        monitoring_summary.get('peak_ram_usage_mb', 0) /
+                        self.monitor.get_system_info()['memory']['total_mb'] * 100
+                    )
+                }
+            }
+        }
+
+        # Save comprehensive report
+        report_path = self.output_dir / "comprehensive_training_report.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+
+        self.logger.info(f"Comprehensive training report saved to {report_path}")
+
+        # Log key metrics
+        self.logger.info("Training Summary:")
+        self.logger.info(f"  Total FLOPS: {self.training_flops:,}")
+        self.logger.info(f"  Energy consumed: {monitoring_summary.get('total_energy_consumed_mj', 0):.2f} mJ")
+        self.logger.info(f"  Carbon emissions: {monitoring_summary.get('total_carbon_emissions_g', 0):.3f} g CO2")
+        self.logger.info(f"  Average power: {monitoring_summary.get('avg_power_consumption_mw', 0):.1f} mW")
+        self.logger.info(f"  Peak temperature: {monitoring_summary.get('peak_cpu_temperature_c', 0):.1f}°C")
+        self.logger.info(f"  Peak RAM usage: {monitoring_summary.get('peak_ram_usage_mb', 0):.1f} MB")
+
+        return report
+
+    def _estimate_battery_life(self, monitoring_summary: Dict) -> float:
+        """Estimate battery life for Raspberry Pi Zero"""
+        avg_power_mw = monitoring_summary.get('avg_power_consumption_mw', 300)
+
+        # Typical power bank capacity for Pi Zero: 10,000 mAh at 5V = 50Wh = 180,000J = 180,000,000 mJ
+        battery_capacity_mj = 180_000_000  # 10Ah power bank
+
+        # Battery life in hours
+        if avg_power_mw > 0:
+            battery_life_ms = battery_capacity_mj / avg_power_mw
+            battery_life_hours = battery_life_ms / (1000 * 3600)  # Convert to hours
+            return battery_life_hours
+
+        return 0.0
+
+def main():
+    """Main training function with monitoring"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train BitGen with comprehensive monitoring for Raspberry Pi Zero")
+    parser.add_argument("--coco_data", type=str, required=True, help="Path to COCO dataset")
+    parser.add_argument("--robot_data", type=str, help="Path to robot selection dataset")
+    parser.add_argument("--model_size", type=str, default="nano", choices=["nano", "tiny"])  # Limited for Pi Zero
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size (keep small for Pi Zero)")
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs (reduced for Pi Zero)")
+    parser.add_argument("--output_dir", type=str, default="pi_zero_checkpoints")
+    parser.add_argument("--monitoring_dir", type=str, default="pi_zero_monitoring")
+    parser.add_argument("--use_carbon_tracking", action="store_true", help="Enable carbon emissions tracking")
+
+    args = parser.parse_args()
+
+    # Create model configuration optimized for Pi Zero
+    from configs.bitgen_configs import BitGenNanoConfig
+    config = BitGenNanoConfig()
+
+    # Further optimize for Pi Zero
+    config.embed_dim = 32  # Even smaller for Pi Zero
+    config.num_layers = 2
+    config.num_heads = 2
+    config.memory_size = 16
+    config.max_seq_len = 64
+
+    # Initialize enhanced trainer
+    trainer = EnhancedBitGenTrainer(
+        config=config,
+        model_size=args.model_size,
+        output_dir=args.output_dir,
+        monitoring_dir=args.monitoring_dir,
+        use_carbon_tracking=args.use_carbon_tracking
+    )
+
+    # Start training with comprehensive monitoring
+    trainer.train_with_comprehensive_monitoring(
+        coco_data_path=args.coco_data,
+        robot_data_path=args.robot_data,
+        num_epochs=args.num_epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate
+    )
+
+if __name__ == "__main__":
+    main()

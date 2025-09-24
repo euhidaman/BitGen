@@ -21,4 +21,22 @@ bitarray>=2.8.0
 numba>=0.58.0
 cython>=3.0.0
 pybind11>=2.11.0
-
+# Monitoring and profiling for Raspberry Pi Zero
+codecarbon>=2.3.0
+py-cpuinfo>=9.0.0
+GPUtil>=1.4.0
+nvidia-ml-py>=12.535.133
+pynvml>=11.5.0
+# Power monitoring for Raspberry Pi
+RPi.GPIO>=0.7.1
+gpiozero>=1.6.2
+w1thermsensor>=2.0.0
+# Performance monitoring
+ptflops>=0.6.9
+fvcore>=0.1.5
+thop>=0.1.1
+pycuda>=2022.2.2
+torch-tb-profiler>=0.4.0
+# Raspberry Pi specific
+picamera2>=0.3.12
+adafruit-circuitpython-ina219>=3.4.0
