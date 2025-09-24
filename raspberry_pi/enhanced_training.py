@@ -1,6 +1,7 @@
 """
 Enhanced BitGen Training Script with Comprehensive Monitoring
 Tracks FLOPS, energy consumption, carbon emissions for Raspberry Pi Zero deployment
+WITH HuggingFace Hub integration and enhanced WandB tracking
 """
 
 import torch
@@ -24,6 +25,10 @@ from data_loader import COCODataset, BitGenDataLoader, RobotSelectionDataset
 # Import monitoring
 from raspberry_pi.rpi_monitor import RaspberryPiMonitor, get_monitor, start_monitoring, stop_monitoring
 
+# Import new integrations
+from huggingface_integration import HuggingFaceIntegration, setup_huggingface_integration
+from wandb_integration import WandBIntegration, setup_wandb_integration
+
 # Additional imports for comprehensive monitoring
 try:
     from codecarbon import OfflineEmissionsTracker, track_emissions
@@ -39,14 +44,25 @@ except ImportError:
     FLOPS_AVAILABLE = False
 
 class EnhancedBitGenTrainer:
-    """BitGen trainer with comprehensive monitoring for Raspberry Pi Zero"""
+    """BitGen trainer with comprehensive monitoring, HuggingFace, and WandB integration"""
 
     def __init__(self,
                  config: BitGenConfig,
                  model_size: str = 'tiny',
                  output_dir: str = 'checkpoints',
                  monitoring_dir: str = 'monitoring_results',
-                 use_carbon_tracking: bool = True):
+                 use_carbon_tracking: bool = True,
+                 # HuggingFace integration
+                 hf_repo_name: Optional[str] = None,
+                 hf_organization: Optional[str] = None,
+                 hf_token: Optional[str] = None,
+                 hf_private: bool = False,
+                 push_to_hub: bool = True,
+                 # WandB integration
+                 wandb_project: str = "bitgen-training",
+                 wandb_entity: str = "babylm-ntust",
+                 wandb_run_name: Optional[str] = None,
+                 wandb_tags: List[str] = None):
 
         self.config = config
         self.output_dir = Path(output_dir)
@@ -77,6 +93,39 @@ class EnhancedBitGenTrainer:
         self.epoch = 0
         self.best_loss = float('inf')
 
+        # Initialize HuggingFace integration
+        self.hf_integration = None
+        self.push_to_hub = push_to_hub
+        if push_to_hub and hf_repo_name:
+            try:
+                self.hf_integration = setup_huggingface_integration(
+                    model_name=hf_repo_name,
+                    organization=hf_organization,
+                    token=hf_token,
+                    private=hf_private
+                )
+                self.logger.info(f"✅ HuggingFace integration initialized: {self.hf_integration.repo_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to setup HuggingFace integration: {e}")
+                self.push_to_hub = False
+
+        # Initialize WandB integration
+        wandb_config = {
+            **config.__dict__,
+            'model_size': model_size,
+            'flops_info': self.model_flops,
+            'hf_repo_id': self.hf_integration.repo_id if self.hf_integration else None,
+            'push_to_hub': push_to_hub
+        }
+
+        self.wandb_integration = setup_wandb_integration(
+            project_name=wandb_project,
+            entity=wandb_entity,
+            run_name=wandb_run_name or f"bitgen-{model_size}-{time.strftime('%Y%m%d-%H%M%S')}",
+            config=wandb_config,
+            tags=wandb_tags or ["bitgen", "multimodal", "embedded", "quantized", model_size]
+        )
+
         # Carbon tracking
         self.carbon_tracker = None
         if self.use_carbon_tracking:
@@ -92,6 +141,9 @@ class EnhancedBitGenTrainer:
 
         # Setup logging
         self.setup_logging()
+
+        # Log model architecture to WandB
+        self.wandb_integration.log_model_architecture(self.model, self.config)
 
     def setup_logging(self):
         """Setup logging for training with monitoring"""
@@ -313,16 +365,115 @@ class EnhancedBitGenTrainer:
                         self.logger.warning(f"High temperature detected: {current_temp}°C. Pausing training.")
                         time.sleep(30)  # Cool down pause
 
-                # End of epoch
+                # End of epoch processing with HuggingFace and WandB integration
                 scheduler.step()
                 epoch_time = time.time() - epoch_start_time
 
-                # Log epoch summary
+                # Calculate epoch averages
                 epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
+
+                # Log epoch metrics to WandB
+                epoch_wandb_metrics = {
+                    'epoch/training_loss': epoch_avg['total_loss'],
+                    'epoch/learning_rate': epoch_avg['learning_rate'],
+                    'epoch/tokens_per_second': epoch_avg['tokens_per_second'],
+                    'epoch/duration_seconds': epoch_time,
+                    'epoch/step_time_ms': epoch_avg['step_time_ms'],
+                    'epoch/forward_time_ms': epoch_avg['forward_time_ms'],
+                    'epoch/backward_time_ms': epoch_avg['backward_time_ms'],
+                }
+
+                # Add FLOPS metrics
+                if self.model_flops:
+                    epoch_wandb_metrics.update({
+                        'flops/cumulative_training_flops': self.training_flops,
+                        'flops/epoch_flops': sum(epoch_metrics['step_flops']),
+                        'flops/avg_flops_per_step': np.mean(epoch_metrics['step_flops']),
+                    })
+
+                # Log system metrics to WandB
+                self.wandb_integration.log_system_metrics()
+
+                # Log training metrics
+                self.wandb_integration.log_training_metrics(epoch_wandb_metrics, step=self.global_step, epoch=epoch)
+
+                # Log FLOPS metrics
+                if self.model_flops:
+                    flops_metrics = {
+                        'flops': self.model_flops.get('flops', 0),
+                        'params': self.model_flops.get('params', 0),
+                        'training_flops_total': self.training_flops,
+                        'flops_per_step': np.mean(epoch_metrics['step_flops']) if epoch_metrics['step_flops'] else 0,
+                        'training_time_seconds': sum(epoch_metrics['step_time_ms']) / 1000,
+                    }
+                    self.wandb_integration.log_flops_metrics(flops_metrics)
+
+                # Log energy metrics if available
+                if self.carbon_tracker:
+                    try:
+                        # Try to get current energy data
+                        energy_metrics = {
+                            'energy_consumed_kwh': 0,  # Would be updated by CodeCarbon
+                            'carbon_emissions_kg': 0,  # Would be updated by CodeCarbon
+                            'power_consumption_watts': epoch_avg.get('power_consumption_mw', 0) / 1000,
+                            'tokens_generated': sum(epoch_metrics['batch_size']) * epoch_avg.get('sequence_length', 0),
+                        }
+                        self.wandb_integration.log_energy_metrics(energy_metrics)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to log energy metrics: {e}")
+
+                # Push model to HuggingFace Hub after each epoch
+                model_url = None
+                if self.push_to_hub and self.hf_integration:
+                    try:
+                        self.logger.info(f"🚀 Pushing model to HuggingFace Hub for epoch {epoch+1}...")
+
+                        # Create tokenizer for HF (simplified)
+                        tokenizer_info = {
+                            'vocab_size': self.config.vocab_size,
+                            'max_length': self.config.max_seq_len
+                        }
+
+                        # Prepare metrics for model card
+                        hf_metrics = {
+                            'epoch': epoch + 1,
+                            'training_loss': epoch_avg['total_loss'],
+                            'tokens_per_second': epoch_avg['tokens_per_second'],
+                            'total_flops': self.training_flops,
+                            'avg_power_mw': epoch_avg.get('power_consumption_mw', 0),
+                            'training_time_hours': epoch_time / 3600,
+                        }
+
+                        model_url = self.hf_integration.push_model_checkpoint(
+                            model=self.model,
+                            config=self.config,
+                            tokenizer=tokenizer_info,
+                            epoch=epoch + 1,
+                            metrics=hf_metrics,
+                            commit_message=f"Training checkpoint - Epoch {epoch+1}/{num_epochs} - Loss: {epoch_avg['total_loss']:.4f}"
+                        )
+
+                        self.logger.info(f"✅ Model pushed to HuggingFace: {model_url}")
+
+                    except Exception as e:
+                        self.logger.error(f"❌ Failed to push model to HuggingFace: {e}")
+
+                # Log epoch summary to WandB with HF URL
+                self.wandb_integration.log_epoch_summary(
+                    epoch=epoch + 1,
+                    epoch_metrics=epoch_avg,
+                    model_url=model_url
+                )
+
+                # Create and log training visualizations
+                self.wandb_integration.create_training_visualizations()
+
                 self.logger.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
                 self.logger.info(f"  Average loss: {epoch_avg['total_loss']:.4f}")
                 self.logger.info(f"  Average tokens/s: {epoch_avg['tokens_per_second']:.2f}")
                 self.logger.info(f"  Total FLOPS: {self.training_flops:,}")
+                if model_url:
+                    self.logger.info(f"  🤗 Model URL: {model_url}")
 
             # Training completed
             training_time = time.time() - training_start_time
@@ -333,6 +484,43 @@ class EnhancedBitGenTrainer:
             # Final evaluation
             final_eval = self._evaluate_with_monitoring(train_loader, num_samples=10)
             self.logger.info(f"Final evaluation: {final_eval}")
+
+            # Log final evaluation to WandB
+            self.wandb_integration.log_training_metrics({
+                'final_eval/loss': final_eval['eval_loss'],
+                'final_eval/inference_time_ms': final_eval['avg_inference_time_ms'],
+                'final_eval/inference_flops': final_eval['inference_flops']
+            })
+
+            # Push final model to HuggingFace
+            if self.push_to_hub and self.hf_integration:
+                try:
+                    self.logger.info("🚀 Pushing final model to HuggingFace Hub...")
+
+                    final_metrics = {
+                        'total_epochs': num_epochs,
+                        'final_loss': final_eval['eval_loss'],
+                        'total_training_time_hours': training_time / 3600,
+                        'total_flops': self.training_flops,
+                        'final_tokens_per_second': epoch_avg.get('tokens_per_second', 0),
+                    }
+
+                    final_model_url = self.hf_integration.push_final_model(
+                        model=self.model,
+                        config=self.config,
+                        tokenizer=tokenizer_info,
+                        metrics=final_metrics
+                    )
+
+                    self.logger.info(f"✅ Final model pushed: {final_model_url}")
+
+                    # Log final model URL to WandB
+                    self.wandb_integration.wandb_integration.log({
+                        'final_model_url': final_model_url
+                    })
+
+                except Exception as e:
+                    self.logger.error(f"❌ Failed to push final model: {e}")
 
         except Exception as e:
             self.logger.error(f"Training failed: {e}")
@@ -345,8 +533,49 @@ class EnhancedBitGenTrainer:
             if self.carbon_tracker:
                 self.carbon_tracker.stop()
 
+            # Log final energy metrics if CodeCarbon was used
+            if self.carbon_tracker:
+                try:
+                    carbon_file = Path(self.monitor.output_dir) / "emissions.csv"
+                    if carbon_file.exists():
+                        import pandas as pd
+                        emissions_df = pd.read_csv(carbon_file)
+                        if not emissions_df.empty:
+                            final_energy_metrics = {
+                                'energy_consumed_kwh': emissions_df['energy_consumed'].iloc[-1],
+                                'carbon_emissions_kg': emissions_df['emissions'].iloc[-1],
+                                'power_consumption_watts': emissions_df['cpu_power'].iloc[-1] if 'cpu_power' in emissions_df.columns else 0,
+                                'tokens_generated': total_steps * batch_size * self.config.max_seq_len,
+                            }
+                            self.wandb_integration.log_energy_metrics(final_energy_metrics)
+                            self.logger.info(f"🌍 Final energy consumption: {final_energy_metrics['energy_consumed_kwh']:.6f} kWh")
+                            self.logger.info(f"🌍 Final carbon emissions: {final_energy_metrics['carbon_emissions_kg']:.6f} kg CO2")
+                except Exception as e:
+                    self.logger.warning(f"Failed to log final energy metrics: {e}")
+
             # Generate comprehensive training report
-            self._generate_training_report(monitoring_summary, training_time, total_steps)
+            final_report = self._generate_training_report(monitoring_summary, training_time, total_steps)
+
+            # Log final summary to WandB
+            summary_metrics = {
+                'training/total_time_hours': training_time / 3600,
+                'training/total_steps': total_steps,
+                'training/total_epochs': num_epochs,
+                'training/final_loss': final_eval.get('eval_loss', 0),
+                'performance/total_flops': self.training_flops,
+                'performance/avg_tokens_per_second': final_report['performance_analysis']['training_efficiency_flops_per_second'] / self.training_flops if self.training_flops > 0 else 0,
+                'system/peak_temperature_c': monitoring_summary.get('peak_cpu_temperature_c', 0),
+                'system/peak_memory_mb': monitoring_summary.get('peak_ram_usage_mb', 0),
+                'efficiency/flops_per_second': final_report['performance_analysis']['training_efficiency_flops_per_second'],
+            }
+
+            # Finish WandB run with summary
+            self.wandb_integration.finish_run(summary_metrics)
+
+            self.logger.info("🎯 Training completed with comprehensive monitoring!")
+            self.logger.info(f"📊 WandB Run: https://wandb.ai/{self.wandb_integration.entity}/{self.wandb_integration.project_name}/runs/{self.wandb_integration.run.id}")
+            if self.hf_integration:
+                self.logger.info(f"🤗 HuggingFace Model: https://huggingface.co/{self.hf_integration.repo_id}")
 
     def _setup_data_loader(self, coco_data_path: str, robot_data_path: Optional[str], batch_size: int):
         """Setup data loader optimized for Pi Zero"""

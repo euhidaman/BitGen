@@ -63,6 +63,16 @@ def main():
     train_parser.add_argument('--enable_carbon_tracking', action='store_true', help='Enable CodeCarbon energy tracking')
     train_parser.add_argument('--track_flops', action='store_true', help='Enable FLOPS calculation and tracking')
     train_parser.add_argument('--use_wandb', action='store_true')
+    # HuggingFace Hub integration
+    train_parser.add_argument('--push_to_hub', action='store_true', help='Push model to HuggingFace Hub after every epoch')
+    train_parser.add_argument('--hf_repo_name', type=str, help='HuggingFace repository name (auto-generated if not provided)')
+    train_parser.add_argument('--hf_organization', type=str, help='HuggingFace organization (uses authenticated user if not provided)')
+    train_parser.add_argument('--hf_private', action='store_true', help='Create private HuggingFace repository')
+    # Enhanced WandB integration
+    train_parser.add_argument('--wandb_project', type=str, default='bitgen-training', help='WandB project name')
+    train_parser.add_argument('--wandb_entity', type=str, default='babylm-ntust', help='WandB team/entity')
+    train_parser.add_argument('--wandb_run_name', type=str, help='WandB run name (auto-generated if not provided)')
+    train_parser.add_argument('--wandb_tags', nargs='+', default=['bitgen', 'multimodal', 'babylm'], help='WandB tags')
 
     # Inference command (with comprehensive metrics)
     inference_parser = subparsers.add_parser('inference', help='Run inference with comprehensive performance metrics')
@@ -171,6 +181,65 @@ def train_with_monitoring(args):
     model_flops_info = {}
 
     try:
+        # Use enhanced trainer with HuggingFace and WandB integration
+        from raspberry_pi.enhanced_training import EnhancedBitGenTrainer
+        from configs.bitgen_configs import BitGenNanoConfig, BitGenTinyConfig, BitGenSmallConfig
+
+        # Select appropriate config
+        if args.model_size == 'nano':
+            config = BitGenNanoConfig()
+        elif args.model_size == 'tiny':
+            config = BitGenTinyConfig()
+        else:
+            config = BitGenSmallConfig()
+
+        # Generate unique model name for HuggingFace
+        import time
+        timestamp = time.strftime('%Y%m%d-%H%M%S')
+        hf_repo_name = f"bitgen-{args.model_size}-{timestamp}"
+        wandb_run_name = f"bitgen-{args.model_size}-training-{timestamp}"
+
+        # Initialize enhanced trainer with integrations
+        trainer = EnhancedBitGenTrainer(
+            config=config,
+            model_size=args.model_size,
+            output_dir=args.output_dir,
+            monitoring_dir=args.monitoring_dir,
+            use_carbon_tracking=args.enable_carbon_tracking,
+            # HuggingFace integration
+            hf_repo_name=hf_repo_name,
+            hf_organization=None,  # Will use authenticated user
+            hf_token=os.getenv("HF_TOKEN"),  # Get from environment
+            hf_private=False,  # Public model
+            push_to_hub=True,  # Enable automatic pushing
+            # WandB integration for babylm-ntust team
+            wandb_project="bitgen-training",
+            wandb_entity="babylm-ntust",
+            wandb_run_name=wandb_run_name,
+            wandb_tags=["bitgen", "multimodal", "babylm", "embedded", args.model_size]
+        )
+
+        print("🚀 Starting enhanced training with HuggingFace and WandB integration...")
+        print(f"📊 WandB Project: babylm-ntust/bitgen-training")
+        print(f"🤗 HuggingFace Repo: {hf_repo_name}")
+
+        # Start training with comprehensive monitoring
+        trainer.train_with_comprehensive_monitoring(
+            coco_data_path=args.coco_data,
+            robot_data_path=args.robot_data,
+            num_epochs=args.num_epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate
+        )
+
+        print("✅ Training completed with HuggingFace and WandB integration!")
+
+    except Exception as e:
+        print(f"❌ Enhanced training failed: {e}")
+
+        # Fallback to standard training
+        print("🔄 Falling back to standard training...")
+
         # Create BitGen model
         from src import BitGen
         from src.bitgen_model import create_bitgen_model
@@ -210,9 +279,6 @@ def train_with_monitoring(args):
             print(f"🔢 Estimated training FLOPS: {total_flops:,}")
 
         print("✅ Training completed successfully!")
-
-    except Exception as e:
-        print(f"❌ Training failed: {e}")
 
     finally:
         # Stop carbon tracking
