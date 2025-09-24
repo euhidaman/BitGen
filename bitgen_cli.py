@@ -196,7 +196,7 @@ def train_with_monitoring(args):
         # Generate unique model name for HuggingFace
         import time
         timestamp = time.strftime('%Y%m%d-%H%M%S')
-        hf_repo_name = f"bitgen-{args.model_size}-{timestamp}"
+        hf_repo_name = args.hf_repo_name or "BitGen-Reasoning"  # Default to BitGen-Reasoning
         wandb_run_name = f"bitgen-{args.model_size}-training-{timestamp}"
 
         # Initialize enhanced trainer with integrations
@@ -208,19 +208,19 @@ def train_with_monitoring(args):
             use_carbon_tracking=args.enable_carbon_tracking,
             # HuggingFace integration
             hf_repo_name=hf_repo_name,
-            hf_organization=None,  # Will use authenticated user
-            hf_token=os.getenv("HF_TOKEN"),  # Get from environment
-            hf_private=False,  # Public model
-            push_to_hub=True,  # Enable automatic pushing
+            hf_organization=args.hf_organization,
+            hf_token=os.getenv("HF_TOKEN"),
+            hf_private=args.hf_private,
+            push_to_hub=args.push_to_hub,
             # WandB integration for babylm-ntust team
-            wandb_project="bitgen-training",
-            wandb_entity="babylm-ntust",
-            wandb_run_name=wandb_run_name,
-            wandb_tags=["bitgen", "multimodal", "babylm", "embedded", args.model_size]
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            wandb_run_name=args.wandb_run_name or wandb_run_name,
+            wandb_tags=args.wandb_tags
         )
 
         print("🚀 Starting enhanced training with HuggingFace and WandB integration...")
-        print(f"📊 WandB Project: babylm-ntust/bitgen-training")
+        print(f"📊 WandB Project: {args.wandb_entity}/{args.wandb_project}")
         print(f"🤗 HuggingFace Repo: {hf_repo_name}")
 
         # Start training with comprehensive monitoring

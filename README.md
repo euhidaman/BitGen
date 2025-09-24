@@ -2,17 +2,213 @@
 
 An advanced tiny language model that integrates **Larimar Episodic Memory**, **BitNet 1.58-bit Quantization**, **FIBER Cross-Modal Fusion**, **Attention Sinks**, **Tiny-R1 Reasoning**, and **Robot Selection** capabilities.
 
-## 🚀 Features
+## 🏗️ BitGen Architecture Block Diagram
 
-- **Larimar Episodic Memory**: Core memory architecture for storing and retrieving experiences
-- **BitNet 1.58-bit Quantization**: Ultra-efficient quantization for embedded deployment
-- **FIBER Cross-Modal Fusion**: Vision-language understanding with image-text association
-- **Attention Sinks**: Memory-efficient attention mechanism for long sequences
-- **Tiny-R1 Reasoning**: DeepSeek-R1 inspired reasoning capabilities
-- **Robot Selection**: Intelligent robot selection based on task requirements
-- **Comprehensive Monitoring**: FLOPS tracking, CodeCarbon energy monitoring, performance metrics
-- **HuggingFace Integration**: Automatic model pushing after every epoch
-- **WandB Tracking**: Real-time metrics logging to 'babylm-ntust' team with visualizations
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           BitGen Complete Architecture Flow                                │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+INPUT LAYER:
+┌─────────────┐    ┌─────────────┐    ┌──────────────────────────────────────────┐
+│ Text Input  │    │ Image Input │    │         Monitoring & Integration          │
+│ (Token IDs) │    │ (RGB Tensor)│    │ • WandB (babylm-ntust team)             │
+└─────────────┘    └─────────────┘    │ • HuggingFace Hub (auto-push)           │
+       │                   │          │ • FLOPS Tracking                        │
+       ▼                   ▼          │ • CodeCarbon Energy Monitoring          │
+                                      └──────────────────────────────────────────┘
+
+EMBEDDING LAYER:
+┌─────────────┐    ┌─────────────┐    ┌──────────────────────────────────────────┐
+│Token Embed  │    │Vision Encode│    │         BitNet 1.58-bit Quantization     │
+│+ Positional │    │(DinoV2-like)│    │ • Weights: {-1, 0, +1}                  │
+│Encoding     │    │14x14 Patches│    │ • Activations: 8-bit                    │
+└─────────────┘    └─────────────┘    │ • 4x Compression Ratio                  │
+       │                   │          │ • Integer Arithmetic for Edge           │
+       ▼                   ▼          └──────────────────────────────────────────┘
+                                                           │
+                                                           ▼
+
+CORE PROCESSING LAYERS:
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                          Larimar Episodic Memory (Key Component)                        │
+│ ┌─────────────┐  ┌─────────────┐  ┌──────────────────────────────────────────────────┐  │
+│ │Memory Keys  │  │Memory Values│  │              Edge Advantages:                     │  │
+│ │(64 slots)   │  │(64 slots)   │  │ ⚡ Fast Fact Editing (no retraining) ~1-5ms      │  │
+│ └─────────────┘  └─────────────┘  │ 🗑️ Selective Forgetting of outdated info       │  │
+│        │               │          │ 📈 High Accuracy on Updated Knowledge           │  │
+│        ▼               ▼          │ 🚀 Local Access (no cloud dependency)           │  │
+│ ┌─────────────────────────────────┐ │ 💾 Latent Information Storage                  │  │
+│ │    Similarity Computation       │ └──────────────────────────────────────────────────┘  │
+│ │    & Attention Weights          │                                                      │
+│ └─────────────────────────────────┘                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            FIBER Cross-Modal Fusion                                     │
+│ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────────────────────┐  │
+│ │Text Features│◄─┤Text-Vision  │  │                Fusion Process:                  │  │
+│ │             │  │ Attention   │  │ 1. Text-to-Vision Cross Attention              │  │
+│ │             │  │             │  │ 2. Vision-to-Text Cross Attention              │  │
+│ │Vision Feats │◄─┤Vision-Text  │  │ 3. Multimodal Representation Creation          │  │
+│ │             │  │ Attention   │  │ 4. Joint Feature Space Mapping                 │  │
+│ └─────────────┘  └─────────────┘  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                    Multi-Layer Attention with Sinks                                    │
+│ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────────────────────┐  │
+│ │Attention    │  │ Sink Tokens │  │             Attention Features:                 │  │
+│ │Head 1       │  │   (4 slots) │  │ • 4 Attention Sink Tokens                      │  │
+│ │             │  │             │  │ • 128 Token Sliding Window                     │  │
+│ │Attention    │  │Recent Window│  │ • Memory-Efficient Long Sequences              │  │
+│ │Head 2-8     │  │ (128 tokens)│  │ • Multi-Head Specialization Analysis           │  │
+│ │             │  │             │  │ • Important Token Identification               │  │
+│ └─────────────┘  └─────────────┘  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         Tiny-R1 Reasoning Module                                       │
+│ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────────────────────┐  │
+│ │Reasoning    │  │  LSTM Step  │  │            Reasoning Process:                   │  │
+│ │Encoder      │  │ Processor   │  │ 1. Encode input to reasoning space             │  │
+│ │             │  │             │  │ 2. Multi-step LSTM processing                  │  │
+│ │Gate         │  │ Reasoning   │  │ 3. Gate mechanism (continue/stop)              │  │
+│ │Mechanism    │  │ Decoder     │  │ 4. Aggregate reasoning steps                   │  │
+│ │             │  │             │  │ 5. Decode back to embedding space              │  │
+│ └─────────────┘  └─────────────┘  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           Robot Selection System                                        │
+│ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────────────────────┐  │
+│ │Task Encoder │  │Robot        │  │           Selection Process:                    │  │
+│ │             │  │Embeddings   │  │ 1. Encode task representation                  │  │
+│ │Similarity   │  │(16 robots)  │  │ 2. Compare with robot embeddings              │  │
+│ │Computation  │  │             │  │ 3. Calculate selection confidence              │  │
+│ │             │  │Selection    │  │ 4. Generate confusion matrices                 │  │
+│ │Confidence   │  │Network      │  │ 5. Track accuracy improvement                  │  │
+│ └─────────────┘  └─────────────┘  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+
+OUTPUT LAYER:
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────┐
+│Layer        │  │ Output      │  │ Generated   │  │     Performance Metrics:        │
+│Normalization│  │Projection   │  │    Text     │  │ • Throughput: 2-5 tokens/sec   │
+│             │  │(Vocab Size) │  │  (Logits)   │  │ • Latency: 200-500ms/token     │
+│             │  │             │  │             │  │ • Memory: <100MB RAM           │
+└─────────────┘  └─────────────┘  └─────────────┘  │ • Power: <500mW consumption    │
+                                                    │ • Temperature: <70°C           │
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  └─────────────────────────────────┘
+│Attention    │  │ Robot       │  │  Robot      │
+│Cache Update │  │Selection    │  │Probabilities│
+│(Next Token) │  │(Confidence) │  │ (16 types)  │
+└─────────────┘  └─────────────┘  └─────────────┘
+```
+
+## 🔄 Data Flow Process
+
+### **1. Input Processing**
+```
+Text Input → Tokenization → Token IDs [batch_size, seq_len]
+Image Input → Patch Extraction → RGB Patches [batch_size, 3, 14, 14]
+```
+
+### **2. Embedding & Quantization**
+```
+Token IDs → Token Embedding + Positional Embedding [batch_size, seq_len, embed_dim]
+RGB Patches → Vision Encoder → Vision Features [batch_size, 1, embed_dim]
+All Weights → BitNet Quantization → {-1, 0, +1} ternary values
+```
+
+### **3. Episodic Memory Integration** 🧠
+```
+Input Embeddings → Key/Value Projection → Memory Query
+Memory Keys (64 slots) → Similarity Computation → Attention Weights
+Attention Weights × Memory Values → Retrieved Memories
+Input + Retrieved Memories → Enhanced Representation
+
+Edge Operations:
+• Fast Fact Edit: Update memory slot directly (~1-5ms)
+• Selective Forget: Decay specific memory strength 
+• Online Update: Learn from deployment experiences
+• Local Retrieval: Access relevant memories (<1ms)
+```
+
+### **4. Cross-Modal Fusion (FIBER)**
+```
+Text Embeddings + Vision Features → Cross-Attention
+Text-to-Vision Attention → Vision-enhanced Text
+Vision-to-Text Attention → Text-enhanced Vision  
+Concatenate → Fusion MLP → Multimodal Representation
+```
+
+### **5. Multi-Layer Attention with Sinks**
+```
+For each layer (4 layers):
+  Input → Q, K, V Projections
+  Attention Sinks (4 tokens) + Sliding Window (128 tokens)
+  Multi-Head Attention → Attention Weights [batch, heads, seq, seq]
+  Attention Weights × Values → Attended Output
+  Update Cache for Next Iteration
+```
+
+### **6. Reasoning Module (Tiny-R1)**
+```
+Attended Features → Reasoning Encoder → Reasoning Space
+For each reasoning step (max 8 steps):
+  LSTM Processing → Reasoning State
+  Gate Network → Continue/Stop Decision
+  Accumulate Reasoning States
+Final Reasoning → Decoder → Enhanced Features
+```
+
+### **7. Robot Selection**
+```
+Task Representation → Task Encoder
+For each robot (16 types):
+  Task Features + Robot Embedding → Similarity Score
+All Similarities → Selection Network → Robot Probabilities
+Argmax → Selected Robot + Confidence Score
+```
+
+### **8. Output Generation**
+```
+Enhanced Features → Layer Normalization
+Normalized Features → Output Projection → Logits [batch_size, seq_len, vocab_size]
+Logits → Text Generation (sampling/greedy)
+Robot Probabilities → Robot Selection Output
+Attention States → Cache for Next Token
+```
+
+## 🧠 Episodic Memory: The Key Advantage
+
+BitGen's episodic memory system provides **critical advantages for edge deployment**:
+
+### 🚀 **Fast Local Knowledge Access**
+- **Low Latency**: Memory accessed locally on device, eliminating network delays
+- **Edge-Optimized**: Knowledge retrieval happens on-device without cloud dependency
+- **Real-time Updates**: Immediate access to latest information and experiences
+
+### ⚡ **Dynamic Knowledge Management** (No Retraining Required)
+- **Fast Fact Editing**: Update knowledge instantly without model retraining
+- **Selective Forgetting**: Remove outdated information while preserving important memories
+- **High Accuracy on Updated Knowledge**: Maintains performance on new information
+- **Continuous Learning**: Adapts to new experiences during deployment
+
+### 🎯 **Latent Information Advantages**
+- **Compressed Knowledge**: Stores experiences as latent representations for efficiency
+- **Contextual Retrieval**: Accesses relevant memories based on current context
+- **Memory Efficiency**: Compact storage suitable for edge device constraints
+- **Experience-Based Learning**: Learns from actual deployment experiences
+
+**Unlike traditional LLMs that require full retraining for knowledge updates, BitGen's episodic memory enables real-time knowledge management directly on edge devices.**
 
 ## 📊 Advanced Metrics & Visualizations
 
@@ -302,26 +498,3 @@ python bitgen_cli.py analyze \
 ```
 
 The BitGen system provides state-of-the-art multimodal capabilities with comprehensive monitoring, automatic model sharing, and advanced internal analysis - all optimized for efficient deployment and team collaboration.
-
-## 🧠 Episodic Memory: The Key Advantage
-
-BitGen's episodic memory system provides **critical advantages for edge deployment**:
-
-### 🚀 **Fast Local Knowledge Access**
-- **Low Latency**: Memory accessed locally on device, eliminating network delays
-- **Edge-Optimized**: Knowledge retrieval happens on-device without cloud dependency
-- **Real-time Updates**: Immediate access to latest information and experiences
-
-### ⚡ **Dynamic Knowledge Management** (No Retraining Required)
-- **Fast Fact Editing**: Update knowledge instantly without model retraining
-- **Selective Forgetting**: Remove outdated information while preserving important memories
-- **High Accuracy on Updated Knowledge**: Maintains performance on new information
-- **Continuous Learning**: Adapts to new experiences during deployment
-
-### 🎯 **Latent Information Advantages**
-- **Compressed Knowledge**: Stores experiences as latent representations for efficiency
-- **Contextual Retrieval**: Accesses relevant memories based on current context
-- **Memory Efficiency**: Compact storage suitable for edge device constraints
-- **Experience-Based Learning**: Learns from actual deployment experiences
-
-**Unlike traditional LLMs that require full retraining for knowledge updates, BitGen's episodic memory enables real-time knowledge management directly on edge devices.**
