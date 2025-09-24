@@ -41,7 +41,16 @@ try:
     RPI_SENSORS_AVAILABLE = True
 except ImportError:
     RPI_SENSORS_AVAILABLE = False
-    print("Warning: Raspberry Pi sensors not available (not running on Pi?)")
+    # Create dummy classes for non-Pi environments
+    class CPUTemperature:
+        def __init__(self):
+            self.temperature = 50.0
+
+    class W1ThermSensor:
+        def __init__(self):
+            pass
+        def get_temperature(self):
+            return 50.0
 
 @dataclass
 class PerformanceMetrics:

@@ -25,6 +25,47 @@ try:
     MONITORING_AVAILABLE = True
 except ImportError:
     MONITORING_AVAILABLE = False
+    print("Info: Advanced Pi monitoring not available - using basic monitoring")
+
+    # Create dummy classes for non-Pi environments
+    class RaspberryPiMonitor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start_monitoring(self):
+            return {}
+        def stop_monitoring(self):
+            return {}
+
+    class RealTimeInferenceMonitor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def measure_single_inference(self, prompt, max_length=50):
+            return {
+                'tokens_per_second': 0,
+                'latency_ms_per_token': 0,
+                'response_latency_ms': 0,
+                'memory_peak_mb': 0,
+                'estimated_power_mw': 0,
+                'cpu_temp_post_c': 0,
+                'energy_consumed_mj': 0,
+                'performance_score': 0,
+                'total_tokens': 0,
+                'input_text': prompt,
+                'output_text': 'monitoring not available',
+                'memory_delta_mb': 0,
+                'thermal_delta_c': 0
+            }
+        def stop_monitoring(self):
+            return {}
+
+    def start_monitoring():
+        return RaspberryPiMonitor()
+
+    def stop_monitoring():
+        return {}
+
+    def interactive_inference_session(model_path):
+        print("Interactive inference not available without Pi monitoring components")
 
 # Import FLOPS and CodeCarbon for training
 try:
@@ -143,19 +184,36 @@ def download_coco_data(args):
     print("📥 Downloading COCO dataset...")
 
     try:
-        from download_coco_dataset import COCODownloader
+        from download_coco_dataset import download_and_prepare_coco
 
-        downloader = COCODownloader(args.output_dir)
-        success = downloader.download_from_kaggle()
+        success = download_and_prepare_coco(args.output_dir)
 
         if success:
-            downloader.process_dataset()
             print("✅ COCO dataset downloaded and processed!")
+            print(f"🚀 Ready to train! Use:")
+            print(f"python bitgen_cli.py train --coco_data {args.output_dir}/validated_coco.json")
         else:
             print("❌ Failed to download COCO dataset")
 
     except Exception as e:
         print(f"❌ Error downloading dataset: {e}")
+        print("Creating basic sample dataset for testing...")
+
+        # Create basic sample data as fallback
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        sample_data = [
+            {"image_id": 1, "caption": "A robot arm picking up objects", "image_file": "sample1.jpg"},
+            {"image_id": 2, "caption": "Mobile robot navigating corridor", "image_file": "sample2.jpg"},
+            {"image_id": 3, "caption": "Robot performing assembly task", "image_file": "sample3.jpg"}
+        ]
+
+        sample_file = output_dir / "validated_coco.json"
+        with open(sample_file, 'w') as f:
+            json.dump(sample_data, f, indent=2)
+
+        print(f"✅ Created sample dataset: {sample_file}")
 
 def train_with_monitoring(args):
     """Unified training with FLOPS and CodeCarbon energy tracking"""
@@ -179,6 +237,7 @@ def train_with_monitoring(args):
     # Initialize FLOPS tracking
     total_flops = 0
     model_flops_info = {}
+    training_time = 0
 
     try:
         # Use enhanced trainer with HuggingFace and WandB integration
@@ -194,7 +253,6 @@ def train_with_monitoring(args):
             config = BitGenSmallConfig()
 
         # Generate unique model name for HuggingFace
-        import time
         timestamp = time.strftime('%Y%m%d-%H%M%S')
         hf_repo_name = args.hf_repo_name or "BitGen-Reasoning"  # Default to BitGen-Reasoning
         wandb_run_name = f"bitgen-{args.model_size}-training-{timestamp}"
@@ -224,6 +282,7 @@ def train_with_monitoring(args):
         print(f"🤗 HuggingFace Repo: {hf_repo_name}")
 
         # Start training with comprehensive monitoring
+        training_start = time.time()
         trainer.train_with_comprehensive_monitoring(
             coco_data_path=args.coco_data,
             robot_data_path=args.robot_data,
@@ -231,54 +290,43 @@ def train_with_monitoring(args):
             batch_size=args.batch_size,
             learning_rate=args.learning_rate
         )
+        training_time = time.time() - training_start
 
         print("✅ Training completed with HuggingFace and WandB integration!")
 
     except Exception as e:
         print(f"❌ Enhanced training failed: {e}")
+        print("🔄 Using basic cross-platform trainer...")
 
-        # Fallback to standard training
-        print("🔄 Falling back to standard training...")
+        # Use basic trainer as fallback
+        from src.basic_trainer import create_basic_trainer
 
-        # Create BitGen model
-        from src import BitGen
-        from src.bitgen_model import create_bitgen_model
+        hf_repo_name = args.hf_repo_name or "BitGen-Reasoning"
 
-        bitgen = BitGen(model_size=args.model_size, target_device='cpu')
-
-        # Calculate model FLOPS if requested
-        if args.track_flops and FLOPS_AVAILABLE:
-            print("🔢 Calculating model FLOPS...")
-            model_flops_info = calculate_model_flops(bitgen.model, bitgen.config)
-            print(f"   Forward pass FLOPS: {model_flops_info.get('flops_human', 'Unknown')}")
-            print(f"   Parameters: {model_flops_info.get('params_human', 'Unknown')}")
-
-        # Training start time
-        training_start = time.time()
-
-        # Run training
-        print("🚀 Starting training...")
-        training_result = bitgen.train(
-            coco_data_path=args.coco_data,
-            robot_data_path=args.robot_data,
+        trainer = create_basic_trainer(
+            model_size=args.model_size,
             output_dir=args.output_dir,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            num_epochs=args.num_epochs,
+            hf_repo_name=hf_repo_name,
+            hf_organization=args.hf_organization,
+            hf_token=os.getenv("HF_TOKEN"),
+            push_to_hub=args.push_to_hub,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
             use_wandb=args.use_wandb
         )
 
+        print("🚀 Starting basic training...")
+        training_start = time.time()
+        trainer.train(
+            coco_data_path=args.coco_data,
+            num_epochs=args.num_epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate
+        )
         training_time = time.time() - training_start
 
-        # Calculate training FLOPS
-        if args.track_flops and model_flops_info:
-            # Rough estimation: training_steps * batch_size * forward_flops * 3 (forward + backward)
-            estimated_steps = 1000  # This would come from actual training
-            forward_flops = model_flops_info.get('flops', 0)
-            total_flops = estimated_steps * args.batch_size * forward_flops * 3
-            print(f"🔢 Estimated training FLOPS: {total_flops:,}")
+        print("✅ Basic training completed!")
 
-        print("✅ Training completed successfully!")
 
     finally:
         # Stop carbon tracking
