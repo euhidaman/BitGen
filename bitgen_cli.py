@@ -96,7 +96,7 @@ def main():
     train_parser.add_argument('--coco_data', type=str, required=True, help='Path to COCO dataset')
     train_parser.add_argument('--robot_data', type=str, help='Path to robot selection dataset')
     train_parser.add_argument('--model_size', type=str, default='tiny', choices=['nano', 'tiny', 'small'])
-    train_parser.add_argument('--batch_size', type=int, default=4)
+    train_parser.add_argument('--batch_size', type=int, default=16, help='Per-GPU batch size (will be scaled for multi-GPU)')
     train_parser.add_argument('--learning_rate', type=float, default=1e-4)
     train_parser.add_argument('--num_epochs', type=int, default=10)
     train_parser.add_argument('--output_dir', type=str, default='checkpoints')
@@ -106,7 +106,7 @@ def main():
     train_parser.add_argument('--use_wandb', action='store_true')
     # HuggingFace Hub integration
     train_parser.add_argument('--push_to_hub', action='store_true', help='Push model to HuggingFace Hub after every epoch')
-    train_parser.add_argument('--hf_repo_name', type=str, help='HuggingFace repository name (auto-generated if not provided)')
+    train_parser.add_argument('--hf_repo_name', type=str, help='HuggingFace repository name (defaults to BitGen-Reasoning)')
     train_parser.add_argument('--hf_organization', type=str, help='HuggingFace organization (uses authenticated user if not provided)')
     train_parser.add_argument('--hf_private', action='store_true', help='Create private HuggingFace repository')
     # Enhanced WandB integration

@@ -28,16 +28,16 @@ class COCODownloader:
         try:
             import kaggle
 
-            self.logger.info("Downloading COCO dataset from Kaggle...")
+            self.logger.info("Downloading COCO Image Caption dataset from Kaggle...")
 
-            # Download using Kaggle API
+            # Download the specific dataset you mentioned
             kaggle.api.dataset_download_files(
-                'awsaf49/coco-2017-dataset',
+                'nikhil7280/coco-image-caption',
                 path=str(self.output_dir),
                 unzip=True
             )
 
-            self.logger.info("✅ COCO dataset downloaded successfully")
+            self.logger.info("✅ COCO Image Caption dataset downloaded successfully")
             return True
 
         except ImportError:
@@ -107,137 +107,106 @@ class COCODownloader:
     def process_dataset(self):
         """Process downloaded dataset for BitGen training"""
         try:
-            self.logger.info("Processing COCO dataset for BitGen...")
+            self.logger.info("Processing COCO Image Caption dataset for BitGen...")
 
-            # Look for COCO annotation files
-            coco_files = list(self.output_dir.rglob("*.json"))
+            # Look for the downloaded files - this dataset might have different structure
+            all_files = list(self.output_dir.rglob("*"))
 
-            if not coco_files:
-                # Create sample data if no COCO files found
-                self.logger.info("No COCO files found, creating sample data...")
+            # Find JSON files (captions) and image files
+            json_files = [f for f in all_files if f.suffix.lower() == '.json']
+            image_files = [f for f in all_files if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']]
+
+            self.logger.info(f"Found {len(json_files)} JSON files and {len(image_files)} image files")
+
+            if not json_files and not image_files:
+                self.logger.warning("No COCO files found, creating sample data...")
                 self.download_sample_data()
                 return
 
-            # Process the first valid COCO file found
-            for coco_file in coco_files:
-                if self._process_coco_file(coco_file):
+            # Try to process different possible structures
+            processed_data = []
+
+            # Method 1: Look for standard COCO format JSON
+            for json_file in json_files:
+                if self._process_coco_format(json_file, image_files, processed_data):
                     break
 
-            self.logger.info("✅ Dataset processing completed")
+            # Method 2: Try to process CSV format if available
+            csv_files = [f for f in all_files if f.suffix.lower() == '.csv']
+            if not processed_data and csv_files:
+                for csv_file in csv_files:
+                    if self._process_csv_format(csv_file, image_files, processed_data):
+                        break
+
+            # Method 3: Try to process directory structure with images and captions
+            if not processed_data:
+                self._process_directory_structure(image_files, processed_data)
+
+            if processed_data:
+                # Save processed data
+                output_file = self.output_dir / "validated_coco.json"
+                with open(output_file, 'w') as f:
+                    json.dump(processed_data, f, indent=2)
+
+                self.logger.info(f"✅ Processed {len(processed_data)} image-caption pairs")
+
+                # Validate images exist
+                self._validate_images(processed_data)
+            else:
+                self.logger.warning("Could not process dataset, creating sample data...")
+                self.download_sample_data()
 
         except Exception as e:
             self.logger.error(f"Dataset processing failed: {e}")
+            # Fallback to sample data
+            self.download_sample_data()
 
-    def _process_coco_file(self, coco_file: Path) -> bool:
-        """Process a single COCO annotation file"""
+    def _process_coco_format(self, json_file: Path, image_files: List[Path], processed_data: List) -> bool:
+        """Process standard COCO format JSON file"""
         try:
-            with open(coco_file, 'r') as f:
+            with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # Extract images and annotations
-            images = data.get('images', [])
-            annotations = data.get('annotations', [])
+            # Check if it's COCO format
+            if 'images' in data and 'annotations' in data:
+                images = data['images']
+                annotations = data['annotations']
 
-            if not images or not annotations:
-                return False
+                self.logger.info(f"Processing COCO format from {json_file.name}")
+                self.logger.info(f"Found {len(images)} images and {len(annotations)} annotations")
 
-            # Create processed dataset
-            processed_data = []
+                # Use pandas for efficient merging (like in the notebook)
+                try:
+                    import pandas as pd
 
-            for img in images[:100]:  # Limit to first 100 images for quick testing
-                img_id = img['id']
+                    # Create DataFrames (following the notebook approach)
+                    images_df = pd.DataFrame(images)
+                    annotations_df = pd.DataFrame(annotations)
 
-                # Find captions for this image
-                img_captions = [ann['caption'] for ann in annotations
-                              if ann.get('image_id') == img_id and 'caption' in ann]
+                    # Merge on image_id (like in the notebook)
+                    merged_df = pd.merge(annotations_df, images_df, left_on='image_id', right_on='id', suffixes=('_annotation', '_image'))
 
-                if img_captions:
-                    for caption in img_captions[:2]:  # Max 2 captions per image
-                        processed_data.append({
-                            'image_id': img_id,
-                            'image_file': img.get('file_name', f"image_{img_id}.jpg"),
-                            'caption': caption,
-                            'width': img.get('width', 640),
-                            'height': img.get('height', 480)
-                        })
+                    # Select relevant columns
+                    coco_df = merged_df[['image_id', 'file_name', 'caption', 'width', 'height']].copy()
 
-            # Save processed data
-            output_file = self.output_dir / "validated_coco.json"
-            with open(output_file, 'w') as f:
-                json.dump(processed_data, f, indent=2)
+                    self.logger.info(f"Merged data: {len(coco_df)} image-caption pairs")
 
-            self.logger.info(f"✅ Processed {len(processed_data)} samples to {output_file}")
-            return True
+                    # Create image filename mapping for actual files
+                    image_files_dict = {}
+                    for img_file in image_files:
+                        # Try multiple naming patterns
+                        image_files_dict[img_file.name] = img_file
+                        # Also map without path prefixes
+                        base_name = img_file.name
+                        if base_name.startswith('COCO_'):
+                            clean_name = base_name
+                        else:
+                            # Try to match COCO naming patterns
+                            clean_name = base_name
+                        image_files_dict[clean_name] = img_file
 
-        except Exception as e:
-            self.logger.error(f"Error processing {coco_file}: {e}")
-            return False
-
-    def validate_dataset(self) -> bool:
-        """Validate that dataset is ready for training"""
-        validation_file = self.output_dir / "validated_coco.json"
-
-        if not validation_file.exists():
-            self.logger.error("No validated dataset found. Run download and process first.")
-            return False
-
-        try:
-            with open(validation_file, 'r') as f:
-                data = json.load(f)
-
-            if len(data) < 10:
-                self.logger.warning(f"Dataset only has {len(data)} samples. Consider downloading more data.")
-
-            self.logger.info(f"✅ Dataset validated: {len(data)} training samples available")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Dataset validation failed: {e}")
-            return False
-
-def download_and_prepare_coco(output_dir: str = "data/coco"):
-    """Main function to download and prepare COCO dataset"""
-
-    downloader = COCODownloader(output_dir)
-
-    print("📥 BitGen COCO Dataset Setup")
-    print("=" * 40)
-
-    # Try to download from Kaggle first
-    if downloader.download_from_kaggle():
-        print("✅ Downloaded COCO dataset from Kaggle")
-    else:
-        print("ℹ️ Kaggle download failed, creating sample dataset...")
-        if downloader.download_sample_data():
-            print("✅ Created sample dataset for testing")
-        else:
-            print("❌ Failed to create sample dataset")
-            return False
-
-    # Process the dataset
-    downloader.process_dataset()
-
-    # Validate the result
-    if downloader.validate_dataset():
-        print("🎯 Dataset is ready for BitGen training!")
-        return True
-    else:
-        print("❌ Dataset validation failed")
-        return False
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Download COCO dataset for BitGen")
-    parser.add_argument("--output_dir", type=str, default="data/coco",
-                       help="Output directory for dataset")
-
-    args = parser.parse_args()
-
-    success = download_and_prepare_coco(args.output_dir)
-
-    if success:
-        print(f"\n🚀 Ready to train! Use:")
-        print(f"python bitgen_cli.py train --coco_data {args.output_dir}/validated_coco.json")
-    else:
-        print("\n❌ Setup failed. Please check the error messages above.")
+                    # Process the merged data (limit for performance)
+                    processed_count = 0
+                    for _, row in coco_df.head(1000).iterrows():  # Process up to 1000 samples
+                        img_filename = row['file_name']
+                        caption = str(row['caption']).st

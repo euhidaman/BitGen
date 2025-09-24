@@ -76,9 +76,35 @@ class EnhancedBitGenTrainer:
         # Initialize model
         self.model = create_bitgen_model(model_size)
 
-        # Setup device (CPU for Raspberry Pi Zero)
-        self.device = torch.device('cpu')  # Raspberry Pi Zero doesn't have GPU
-        self.model = self.model.to(self.device)
+        # Multi-GPU setup - detect and use all available GPUs for training
+        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        self.use_multi_gpu = self.num_gpus > 1
+
+        if torch.cuda.is_available():
+            print(f"🚀 CUDA available with {self.num_gpus} GPU(s) for training")
+            for i in range(self.num_gpus):
+                gpu_name = torch.cuda.get_device_name(i)
+                gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1e9
+                print(f"   GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
+
+        # Setup device - use GPU for training, CPU only for Pi Zero inference
+        if self.use_multi_gpu:
+            print(f"✅ Enabling DataParallel training across {self.num_gpus} GPUs")
+            self.device = torch.device('cuda:0')
+            self.model = self.model.to(self.device)
+            # Wrap model with DataParallel for multi-GPU training
+            self.model = nn.DataParallel(self.model)
+            self.effective_batch_size_multiplier = self.num_gpus
+        elif torch.cuda.is_available():
+            self.device = torch.device('cuda')
+            self.model = self.model.to(self.device)
+            self.effective_batch_size_multiplier = 1
+            print("✅ Using single GPU training")
+        else:
+            self.device = torch.device('cpu')  # Fallback to CPU if no GPU
+            self.model = self.model.to(self.device)
+            self.effective_batch_size_multiplier = 1
+            print("⚠️ Using CPU training (no CUDA available)")
 
         # Calculate model FLOPS
         self.model_flops = self._calculate_model_flops()
