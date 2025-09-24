@@ -28,6 +28,7 @@ from raspberry_pi.rpi_monitor import RaspberryPiMonitor, get_monitor, start_moni
 # Import new integrations
 from huggingface_integration import HuggingFaceIntegration, setup_huggingface_integration
 from wandb_integration import WandBIntegration, setup_wandb_integration
+from advanced_metrics import create_advanced_metrics_logger
 
 # Additional imports for comprehensive monitoring
 try:
@@ -126,6 +127,13 @@ class EnhancedBitGenTrainer:
             tags=wandb_tags or ["bitgen", "multimodal", "embedded", "quantized", model_size]
         )
 
+        # Initialize advanced metrics logger
+        self.advanced_metrics = create_advanced_metrics_logger(
+            wandb_integration=self.wandb_integration,
+            config=config,
+            output_dir=str(Path(monitoring_dir) / "advanced_metrics")
+        )
+
         # Carbon tracking
         self.carbon_tracker = None
         if self.use_carbon_tracking:
@@ -138,6 +146,11 @@ class EnhancedBitGenTrainer:
         # FLOPS tracking
         self.training_flops = 0
         self.inference_flops = 0
+
+        # Epoch-level data collection for matrices
+        self.epoch_robot_predictions = []
+        self.epoch_robot_targets = []
+        self.epoch_task_descriptions = []
 
         # Setup logging
         self.setup_logging()
@@ -206,7 +219,7 @@ class EnhancedBitGenTrainer:
         return optimizer, scheduler
 
     def train_step_with_monitoring(self, batch: Dict, optimizer: optim.Optimizer) -> Dict:
-        """Training step with comprehensive monitoring"""
+        """Training step with comprehensive monitoring including advanced metrics"""
         step_start_time = time.time()
 
         self.model.train()
@@ -222,13 +235,14 @@ class EnhancedBitGenTrainer:
         if target_robot is not None:
             target_robot = target_robot.to(self.device)
 
-        # Forward pass with FLOPS tracking
+        # Forward pass with FLOPS tracking and analysis data
         forward_start = time.time()
 
         outputs = self.model(
             input_ids=input_ids,
             images=images,
-            return_robot_selection=(target_robot is not None)
+            return_robot_selection=(target_robot is not None),
+            return_analysis_data=True  # Enable analysis data collection
         )
 
         forward_time = time.time() - forward_start
@@ -246,7 +260,7 @@ class EnhancedBitGenTrainer:
         optimizer.zero_grad()
         total_loss.backward()
 
-        # Gradient clipping for stability on Pi Zero
+        # Gradient clipping for stability
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
 
         optimizer.step()
@@ -261,6 +275,25 @@ class EnhancedBitGenTrainer:
         # Estimate FLOPS (forward + backward ≈ 3x forward)
         step_flops = self.model_flops.get('flops', 0) * batch_size * 3
         self.training_flops += step_flops
+
+        # Log advanced metrics (episodic memory, attention, reasoning)
+        if self.advanced_metrics and 'memory_attention' in outputs:
+            self.advanced_metrics.log_step_metrics(
+                model_outputs=outputs,
+                batch_data=batch,
+                step=self.global_step
+            )
+
+        # Collect epoch-level data for reasoning matrices
+        if target_robot is not None and 'robot_selection' in outputs and outputs['robot_selection'] is not None:
+            predicted_robots = outputs['robot_selection'].argmax(dim=-1)
+
+            self.epoch_robot_predictions.extend(predicted_robots.cpu().numpy().tolist())
+            self.epoch_robot_targets.extend(target_robot.cpu().numpy().tolist())
+
+            # Collect task descriptions if available
+            task_descriptions = batch.get('task_description', [''] * batch_size)
+            self.epoch_task_descriptions.extend(task_descriptions)
 
         # Update metrics
         metrics = {
@@ -468,12 +501,20 @@ class EnhancedBitGenTrainer:
                 # Create and log training visualizations
                 self.wandb_integration.create_training_visualizations()
 
+                # Generate advanced metrics analysis for this epoch
+                self._process_epoch_advanced_metrics(epoch + 1)
+
                 self.logger.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
                 self.logger.info(f"  Average loss: {epoch_avg['total_loss']:.4f}")
                 self.logger.info(f"  Average tokens/s: {epoch_avg['tokens_per_second']:.2f}")
                 self.logger.info(f"  Total FLOPS: {self.training_flops:,}")
                 if model_url:
                     self.logger.info(f"  🤗 Model URL: {model_url}")
+
+                # Clear epoch data for next epoch
+                self.epoch_robot_predictions = []
+                self.epoch_robot_targets = []
+                self.epoch_task_descriptions = []
 
             # Training completed
             training_time = time.time() - training_start_time
@@ -758,51 +799,168 @@ class EnhancedBitGenTrainer:
 
         return 0.0
 
-def main():
-    """Main training function with monitoring"""
-    import argparse
+    def _process_epoch_advanced_metrics(self, epoch: int):
+        """Process and log advanced metrics at the end of each epoch"""
 
-    parser = argparse.ArgumentParser(description="Train BitGen with comprehensive monitoring for Raspberry Pi Zero")
-    parser.add_argument("--coco_data", type=str, required=True, help="Path to COCO dataset")
-    parser.add_argument("--robot_data", type=str, help="Path to robot selection dataset")
-    parser.add_argument("--model_size", type=str, default="nano", choices=["nano", "tiny"])  # Limited for Pi Zero
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size (keep small for Pi Zero)")
-    parser.add_argument("--learning_rate", type=float, default=5e-5)
-    parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs (reduced for Pi Zero)")
-    parser.add_argument("--output_dir", type=str, default="pi_zero_checkpoints")
-    parser.add_argument("--monitoring_dir", type=str, default="pi_zero_monitoring")
-    parser.add_argument("--use_carbon_tracking", action="store_true", help="Enable carbon emissions tracking")
+        self.logger.info(f"🔬 Generating advanced metrics analysis for epoch {epoch}...")
 
-    args = parser.parse_args()
+        try:
+            # 1. Generate Episodic Memory Heatmaps
+            if self.advanced_metrics and self.advanced_metrics.memory_analyzer:
+                self.logger.info("📊 Creating episodic memory heatmaps...")
 
-    # Create model configuration optimized for Pi Zero
-    from configs.bitgen_configs import BitGenNanoConfig
-    config = BitGenNanoConfig()
+                memory_heatmap_path = self.advanced_metrics.output_dir / f"memory_analysis_epoch_{epoch}.png"
+                memory_fig = self.advanced_metrics.memory_analyzer.create_memory_heatmaps(str(memory_heatmap_path))
 
-    # Further optimize for Pi Zero
-    config.embed_dim = 32  # Even smaller for Pi Zero
-    config.num_layers = 2
-    config.num_heads = 2
-    config.memory_size = 16
-    config.max_seq_len = 64
+                # Log to WandB
+                self.wandb_integration.run.log({
+                    f"episodic_memory/heatmaps_epoch_{epoch}": wandb.Image(str(memory_heatmap_path)),
+                    f"episodic_memory/utilization_epoch_{epoch}": self.advanced_metrics.memory_analyzer.memory_usage_history[-1]['utilization'] if self.advanced_metrics.memory_analyzer.memory_usage_history else 0,
+                    f"episodic_memory/diversity_epoch_{epoch}": self.advanced_metrics.memory_analyzer.memory_usage_history[-1]['memory_diversity'] if self.advanced_metrics.memory_analyzer.memory_usage_history else 0,
+                })
 
-    # Initialize enhanced trainer
-    trainer = EnhancedBitGenTrainer(
-        config=config,
-        model_size=args.model_size,
-        output_dir=args.output_dir,
-        monitoring_dir=args.monitoring_dir,
-        use_carbon_tracking=args.use_carbon_tracking
-    )
+                self.logger.info(f"   ✅ Memory heatmaps saved and logged to WandB")
 
-    # Start training with comprehensive monitoring
-    trainer.train_with_comprehensive_monitoring(
-        coco_data_path=args.coco_data,
-        robot_data_path=args.robot_data,
-        num_epochs=args.num_epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate
-    )
+            # 2. Generate Attention Heatmaps focusing on important tokens
+            if self.advanced_metrics and self.advanced_metrics.attention_analyzer:
+                if self.advanced_metrics.attention_analyzer.attention_history:
+                    self.logger.info("🎯 Creating attention heatmaps for important tokens...")
 
-if __name__ == "__main__":
-    main()
+                    # Get latest attention data
+                    latest_attention = self.advanced_metrics.attention_analyzer.attention_history[-1]
+
+                    # Create static attention heatmap
+                    attention_heatmap_path = self.advanced_metrics.output_dir / f"attention_heatmaps_epoch_{epoch}.png"
+                    attention_fig = self.advanced_metrics.attention_analyzer.create_attention_heatmaps(
+                        attention_weights=torch.tensor(latest_attention['attention_weights']),
+                        input_tokens=torch.tensor(latest_attention['input_tokens']),
+                        save_path=str(attention_heatmap_path)
+                    )
+
+                    # Create interactive attention heatmap
+                    interactive_attention = self.advanced_metrics.attention_analyzer.create_interactive_attention_heatmap(
+                        attention_weights=torch.tensor(latest_attention['attention_weights']),
+                        input_tokens=torch.tensor(latest_attention['input_tokens'])
+                    )
+
+                    # Log attention metrics
+                    attention_stats = latest_attention['stats']
+                    attention_metrics = {
+                        f"attention/entropy_epoch_{epoch}": np.mean(attention_stats['attention_entropy']),
+                        f"attention/important_tokens_epoch_{epoch}": len(attention_stats['important_tokens']),
+                        f"attention/num_sinks_epoch_{epoch}": len(attention_stats['attention_sinks']),
+                    }
+
+                    # Log head specialization metrics
+                    for head_idx, head_info in enumerate(attention_stats['head_specialization']):
+                        attention_metrics.update({
+                            f"attention/head_{head_idx}_local_focus_epoch_{epoch}": head_info['local_focus'],
+                            f"attention/head_{head_idx}_concentration_epoch_{epoch}": head_info['concentration'],
+                        })
+
+                    # Log to WandB
+                    self.wandb_integration.run.log({
+                        f"attention/heatmaps_epoch_{epoch}": wandb.Image(str(attention_heatmap_path)),
+                        f"attention/interactive_epoch_{epoch}": wandb.Plotly(interactive_attention),
+                        **attention_metrics
+                    })
+
+                    self.logger.info(f"   ✅ Attention heatmaps created and logged")
+                    self.logger.info(f"   🎯 Important tokens identified: {len(attention_stats['important_tokens'])}")
+                    self.logger.info(f"   🔍 Attention sinks detected: {len(attention_stats['attention_sinks'])}")
+
+            # 3. Generate Reasoning Matrices (Robot Selection Confusion Matrix)
+            if (self.epoch_robot_predictions and self.epoch_robot_targets and
+                self.advanced_metrics and self.advanced_metrics.reasoning_analyzer):
+
+                self.logger.info("🤖 Creating reasoning matrix for robot selection...")
+
+                # Update epoch confusion matrix
+                epoch_predictions = np.array(self.epoch_robot_predictions)
+                epoch_targets = np.array(self.epoch_robot_targets)
+
+                confusion_data = self.advanced_metrics.reasoning_analyzer.update_epoch_confusion_matrix(
+                    epoch_predictions=epoch_predictions,
+                    epoch_targets=epoch_targets,
+                    epoch=epoch
+                )
+
+                # Create confusion matrix evolution visualization
+                confusion_evolution_path = self.advanced_metrics.output_dir / f"reasoning_matrix_epoch_{epoch}.png"
+                confusion_fig = self.advanced_metrics.reasoning_analyzer.create_confusion_matrix_evolution(
+                    str(confusion_evolution_path)
+                )
+
+                # Create reasoning improvement chart
+                improvement_chart_path = self.advanced_metrics.output_dir / f"reasoning_improvement_epoch_{epoch}.png"
+                improvement_fig = self.advanced_metrics.reasoning_analyzer.create_reasoning_improvement_chart(
+                    str(improvement_chart_path)
+                )
+
+                # Create interactive reasoning dashboard
+                reasoning_dashboard = self.advanced_metrics.reasoning_analyzer.create_interactive_reasoning_dashboard()
+
+                # Calculate improvement metrics
+                epoch_accuracy = confusion_data['accuracy']
+                per_class_accuracy = confusion_data['per_class_accuracy']
+
+                # Log reasoning metrics to WandB
+                reasoning_metrics = {
+                    f"reasoning/accuracy_epoch_{epoch}": epoch_accuracy,
+                    f"reasoning/avg_per_class_accuracy_epoch_{epoch}": np.mean(per_class_accuracy),
+                    f"reasoning/confusion_matrix_epoch_{epoch}": wandb.Image(str(confusion_evolution_path)),
+                    f"reasoning/improvement_chart_epoch_{epoch}": wandb.Image(str(improvement_chart_path)),
+                }
+
+                # Log per-robot accuracy
+                robot_types = self.advanced_metrics.reasoning_analyzer.robot_types
+                for i, robot_type in enumerate(robot_types):
+                    if i < len(per_class_accuracy):
+                        reasoning_metrics[f"reasoning/{robot_type}_accuracy_epoch_{epoch}"] = per_class_accuracy[i]
+
+                # Add interactive dashboard
+                if reasoning_dashboard:
+                    reasoning_metrics[f"reasoning/dashboard_epoch_{epoch}"] = wandb.Plotly(reasoning_dashboard)
+
+                # Log to WandB
+                self.wandb_integration.run.log(reasoning_metrics)
+
+                self.logger.info(f"   ✅ Reasoning matrix created and logged")
+                self.logger.info(f"   🎯 Epoch accuracy: {epoch_accuracy:.3f}")
+                self.logger.info(f"   📈 Average per-class accuracy: {np.mean(per_class_accuracy):.3f}")
+
+                # Show improvement over epochs
+                if len(self.advanced_metrics.reasoning_analyzer.confusion_matrices) > 1:
+                    prev_accuracy = self.advanced_metrics.reasoning_analyzer.confusion_matrices[-2]['accuracy']
+                    improvement = epoch_accuracy - prev_accuracy
+                    self.logger.info(f"   📊 Improvement from previous epoch: {improvement:+.3f}")
+
+            # 4. Log comprehensive epoch analysis summary
+            epoch_summary_metrics = {
+                f"epoch_analysis/epoch": epoch,
+                f"epoch_analysis/timestamp": datetime.now().timestamp(),
+            }
+
+            # Add memory analysis summary
+            if self.advanced_metrics and self.advanced_metrics.memory_analyzer.memory_usage_history:
+                latest_memory = self.advanced_metrics.memory_analyzer.memory_usage_history[-1]
+                epoch_summary_metrics.update({
+                    f"epoch_analysis/memory_utilization": latest_memory['utilization'],
+                    f"epoch_analysis/memory_diversity": latest_memory['memory_diversity'],
+                    f"epoch_analysis/active_memories": latest_memory['active_memories'],
+                })
+
+            # Add reasoning analysis summary
+            if self.epoch_robot_predictions and self.epoch_robot_targets:
+                epoch_accuracy = (np.array(self.epoch_robot_predictions) == np.array(self.epoch_robot_targets)).mean()
+                epoch_summary_metrics[f"epoch_analysis/reasoning_accuracy"] = epoch_accuracy
+
+            # Log summary
+            self.wandb_integration.run.log(epoch_summary_metrics)
+
+            self.logger.info("🎨 Advanced metrics analysis completed and logged to WandB")
+
+        except Exception as e:
+            self.logger.error(f"❌ Failed to process advanced metrics for epoch {epoch}: {e}")
+            import traceback
+            traceback.print_exc()

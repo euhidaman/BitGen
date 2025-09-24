@@ -151,7 +151,16 @@ class EpisodicMemory(nn.Module):
         if self.training and update_memory:
             self.update_memories(query_keys, query_values, attention_weights)
 
-        return output
+        # Return additional info for analysis
+        memory_info = {
+            'memory_keys': self.memory_keys,
+            'memory_values': self.memory_values,
+            'memory_attention': attention_weights,
+            'retrieved_memories': retrieved_memories,
+            'memory_similarities': similarities
+        }
+
+        return output, memory_info
 
     def update_memories(self, keys, values, attention_weights):
         """Update episodic memory with new experiences"""
@@ -428,8 +437,8 @@ class BitGenModel(nn.Module):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids, images=None, return_robot_selection=False, attention_cache=None):
-        """Forward pass through BitGen model"""
+    def forward(self, input_ids, images=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False):
+        """Forward pass through BitGen model with optional analysis data"""
         batch_size, seq_len = input_ids.shape
 
         # Token and position embeddings
@@ -439,24 +448,33 @@ class BitGenModel(nn.Module):
 
         x = self.dropout(token_emb + pos_emb)
 
-        # Episodic memory integration
-        x = self.episodic_memory(x)
+        # Episodic memory integration with analysis data
+        x, memory_info = self.episodic_memory(x)
 
         # Cross-modal fusion with images
         x = self.cross_modal_fusion(x, images)
 
-        # Multi-layer attention with sinks
+        # Multi-layer attention with sinks - collect attention weights for analysis
         new_cache = []
+        all_attention_weights = []
         cache_idx = 0
 
-        for attention_layer in self.attention_layers:
+        for layer_idx, attention_layer in enumerate(self.attention_layers):
             layer_cache = attention_cache[cache_idx] if attention_cache else None
-            x, cache = attention_layer(x, layer_cache)
+
+            # Modified to capture attention weights
+            layer_output, cache, attention_weights = self._forward_attention_with_weights(
+                attention_layer, x, layer_cache
+            )
+
+            x = layer_output
             new_cache.append(cache)
+            all_attention_weights.append(attention_weights)
             cache_idx += 1
 
-        # Reasoning module
-        x = self.reasoning_module(x)
+        # Reasoning module with reasoning state tracking
+        reasoning_input = x
+        x, reasoning_info = self._forward_reasoning_with_analysis(x)
 
         # Layer normalization
         x = self.layer_norm(x)
@@ -464,75 +482,146 @@ class BitGenModel(nn.Module):
         # Output projection
         logits = self.output_projection(x)
 
-        # Robot selection
+        # Robot selection with confidence tracking
         robot_probs = None
+        robot_info = {}
         if return_robot_selection:
             robot_probs = self.robot_selector(x)
 
-        return {
+            # Add robot selection analysis info
+            robot_info = {
+                'robot_probabilities': robot_probs,
+                'predicted_robots': robot_probs.argmax(dim=-1),
+                'prediction_confidence': robot_probs.max(dim=-1)[0],
+                'robot_embeddings': self.robot_selector.robot_embeddings
+            }
+
+        # Prepare output
+        outputs = {
             'logits': logits,
             'robot_selection': robot_probs,
             'attention_cache': new_cache
         }
 
-    def generate_embedded(self, input_ids, max_length=50, temperature=0.7, cache=None):
-        """Optimized generation for embedded deployment"""
-        self.eval()
+        # Add analysis data if requested
+        if return_analysis_data:
+            outputs.update({
+                # Episodic memory analysis
+                'memory_keys': memory_info['memory_keys'],
+                'memory_values': memory_info['memory_values'],
+                'memory_attention': memory_info['memory_attention'],
+                'memory_similarities': memory_info['memory_similarities'],
+                'retrieved_memories': memory_info['retrieved_memories'],
 
-        generated = input_ids.clone()
-        current_cache = cache
+                # Attention analysis
+                'attention_weights': all_attention_weights,  # List of attention weights per layer
+                'input_embeddings': token_emb + pos_emb,
+                'final_embeddings': x,
 
-        with torch.no_grad():
-            for _ in range(max_length):
-                # Forward pass
-                outputs = self.forward(
-                    generated[:, -1:] if current_cache else generated,
-                    attention_cache=current_cache
-                )
+                # Reasoning analysis
+                'reasoning_states': reasoning_info.get('reasoning_states', []),
+                'reasoning_steps_taken': reasoning_info.get('steps_taken', 0),
+                'reasoning_gate_scores': reasoning_info.get('gate_scores', []),
 
-                # Sample next token
-                logits = outputs['logits'][:, -1, :] / temperature
-                probs = F.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, 1)
+                # Robot selection analysis
+                **robot_info
+            })
 
-                generated = torch.cat([generated, next_token], dim=-1)
-                current_cache = outputs['attention_cache']
+        return outputs
 
-                # Stop on EOS token
-                if next_token.item() == self.config.vocab_size - 1:  # Assuming last token is EOS
-                    break
+    def _forward_attention_with_weights(self, attention_layer, x, cache):
+        """Forward attention layer and capture attention weights"""
+        batch_size, seq_len, embed_dim = x.shape
 
-        return generated, current_cache
+        # Project to Q, K, V
+        q = attention_layer.q_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
+        k = attention_layer.k_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
+        v = attention_layer.v_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
 
-    def export_for_embedded(self, path: str):
-        """Export model for embedded deployment with quantization"""
-        self.eval()
+        # Handle cache
+        if cache is not None and len(cache) > 0:
+            cached_k, cached_v = cache
+            k = torch.cat([cached_k, k], dim=2)
+            v = torch.cat([cached_v, v], dim=2)
 
-        # Quantize all BitNetLinear layers
-        for module in self.modules():
-            if isinstance(module, BitNetLinear):
-                # Pre-quantize weights
-                q_weight, w_scale = module.quantize_weights(module.weight)
-                module.weight.data = q_weight
-                module.weight_scale.data = w_scale
+            # Keep only sink tokens + recent window
+            total_len = k.size(2)
+            if total_len > attention_layer.attention_sinks + attention_layer.window_size:
+                sink_k = k[:, :, :attention_layer.attention_sinks]
+                sink_v = v[:, :, :attention_layer.attention_sinks]
+                recent_k = k[:, :, -(attention_layer.window_size):]
+                recent_v = v[:, :, -(attention_layer.window_size):]
 
-        # Save quantized model
-        torch.save({
-            'model_state_dict': self.state_dict(),
-            'config': self.config,
-            'quantized': True
-        }, path)
+                k = torch.cat([sink_k, recent_k], dim=2)
+                v = torch.cat([sink_v, recent_v], dim=2)
 
-        print(f"Quantized model exported to {path}")
+        # Compute attention
+        scale = 1.0 / math.sqrt(attention_layer.head_dim)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale
 
-        # Calculate model size
-        param_count = sum(p.numel() for p in self.parameters())
-        size_mb = param_count * 4 / (1024 * 1024)  # Assuming fp32
-        quantized_size_mb = param_count * 1.58 / 8 / (1024 * 1024)  # 1.58 bits per parameter
+        # Causal mask
+        if seq_len > 1:
+            mask = torch.triu(torch.ones(seq_len, k.size(2)), diagonal=1).bool()
+            mask = mask.to(scores.device)
+            scores.masked_fill_(mask.unsqueeze(0).unsqueeze(0), float('-inf'))
 
-        print(f"Original size: {size_mb:.2f} MB")
-        print(f"Quantized size: {quantized_size_mb:.2f} MB")
-        print(f"Compression ratio: {size_mb / quantized_size_mb:.2f}x")
+        attn_weights = F.softmax(scores, dim=-1)
+        out = torch.matmul(attn_weights, v)
+
+        # Reshape and project output
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        output = attention_layer.out_proj(out)
+
+        # Update cache
+        new_cache = (k[:, :, -attention_layer.window_size:], v[:, :, -attention_layer.window_size:])
+
+        return output, new_cache, attn_weights
+
+    def _forward_reasoning_with_analysis(self, x):
+        """Forward reasoning module with analysis tracking"""
+        batch_size, seq_len, embed_dim = x.shape
+
+        # Encode to reasoning space
+        reasoning_input = self.reasoning_module.reasoning_encoder(x.mean(dim=1))
+
+        # Multi-step reasoning with tracking
+        reasoning_states = []
+        gate_scores = []
+        hidden = None
+
+        current_state = reasoning_input.unsqueeze(1)
+
+        steps_taken = 0
+        for step in range(self.reasoning_module.max_steps):
+            # Process reasoning step
+            output, hidden = self.reasoning_module.step_processor(current_state, hidden)
+            reasoning_states.append(output.clone())
+
+            # Check if reasoning should continue
+            gate_score = torch.sigmoid(self.reasoning_module.step_gate(output.squeeze(1)))
+            gate_scores.append(gate_score.clone())
+
+            steps_taken += 1
+
+            if (gate_score < 0.5).all() and step > 2:
+                break
+
+            current_state = output
+
+        # Aggregate reasoning steps
+        final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)
+        reasoning_output = self.reasoning_module.reasoning_decoder(final_reasoning)
+        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)
+
+        # Prepare analysis info
+        reasoning_info = {
+            'reasoning_states': reasoning_states,
+            'gate_scores': gate_scores,
+            'steps_taken': steps_taken,
+            'final_reasoning': final_reasoning
+        }
+
+        return x + reasoning_output, reasoning_info
 
 # Factory function for different model sizes
 def create_bitgen_model(size='tiny'):
