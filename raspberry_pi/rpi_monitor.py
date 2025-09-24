@@ -34,14 +34,46 @@ except ImportError:
     FLOPS_AVAILABLE = False
     print("Warning: FLOPS calculation tools not available")
 
+# Raspberry Pi specific imports - made truly conditional
+RPI_SENSORS_AVAILABLE = False
 try:
-    import RPi.GPIO as GPIO
-    from gpiozero import CPUTemperature
-    from w1thermsensor import W1ThermSensor
-    RPI_SENSORS_AVAILABLE = True
-except ImportError:
-    RPI_SENSORS_AVAILABLE = False
-    # Create dummy classes for non-Pi environments
+    # Only try to import if we're actually on a Raspberry Pi
+    import platform
+    import os
+
+    # Check if we're on a Raspberry Pi before importing GPIO
+    is_raspberry_pi = False
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            cpuinfo = f.read()
+            if 'Raspberry Pi' in cpuinfo or 'BCM' in cpuinfo:
+                is_raspberry_pi = True
+    except:
+        # If we can't read cpuinfo, check for Pi-specific paths
+        is_raspberry_pi = os.path.exists('/opt/vc/bin/vcgencmd')
+
+    if is_raspberry_pi:
+        import RPi.GPIO as GPIO
+        from gpiozero import CPUTemperature
+        from w1thermsensor import W1ThermSensor
+        RPI_SENSORS_AVAILABLE = True
+        print("✅ Raspberry Pi hardware detected - full monitoring enabled")
+    else:
+        # Create dummy classes for non-Pi environments
+        class CPUTemperature:
+            def __init__(self):
+                self.temperature = 50.0
+
+        class W1ThermSensor:
+            def __init__(self):
+                pass
+            def get_temperature(self):
+                return 50.0
+
+        print("ℹ️ Non-Pi environment detected - using basic monitoring")
+
+except ImportError as e:
+    # Create dummy classes for environments without Pi libraries
     class CPUTemperature:
         def __init__(self):
             self.temperature = 50.0
@@ -51,6 +83,8 @@ except ImportError:
             pass
         def get_temperature(self):
             return 50.0
+
+    print("ℹ️ Pi libraries not available - using basic monitoring")
 
 @dataclass
 class PerformanceMetrics:

@@ -13,9 +13,10 @@ INPUT LAYER:
 ┌─────────────┐    ┌─────────────┐    ┌──────────────────────────────────────────┐
 │ Text Input  │    │ Image Input │    │         Monitoring & Integration          │
 │ (Token IDs) │    │ (RGB Tensor)│    │ • WandB (babylm-ntust team)             │
-└─────────────┘    └─────────────┘    │ • HuggingFace Hub (auto-push)           │
-       │                   │          │ • FLOPS Tracking                        │
-       ▼                   ▼          │ • CodeCarbon Energy Monitoring          │
+│             │    │             │    │ • HuggingFace Hub (auto-push)           │
+└─────────────┘    └─────────────┘    │ • FLOPS Tracking                        │
+       │                   │          │ • CodeCarbon Energy Monitoring          │
+       ▼                   ▼          │ • Performance Profiling                  │
                                       └──────────────────────────────────────────┘
 
 EMBEDDING LAYER:
@@ -299,6 +300,47 @@ python bitgen_cli.py train \
 - ✅ **HuggingFace Hub Pushing**: Automatic model upload after every epoch
 - ✅ **WandB Logging**: Comprehensive metrics to babylm-ntust team
 - ✅ **Advanced Visualizations**: Memory heatmaps, attention patterns, reasoning matrices
+
+## 🎯 Deployment Strategy
+
+**BitGen is designed for this exact workflow:**
+
+### 🚀 Training Environment (RTX 4090)
+- **High-performance training** with full GPU acceleration
+- **Comprehensive monitoring** with FLOPS, energy tracking, and visualizations
+- **Advanced metrics** including episodic memory heatmaps and reasoning matrices
+- **Automatic model pushing** to HuggingFace Hub after every epoch
+
+### 📱 Inference Environment (Raspberry Pi Zero)
+- **Optimized inference** with 1.58-bit quantization for ultra-low power
+- **Edge monitoring** with thermal, power, and performance tracking
+- **Fast episodic memory operations** (fact editing, selective forgetting)
+- **Local knowledge management** without cloud dependencies
+
+## 🔧 Platform-Specific Optimizations
+
+### For Training (RTX 4090):
+```bash
+# Full-featured training with all monitoring
+python bitgen_cli.py train \
+  --coco_data data/coco/validated_coco.json \
+  --model_size tiny \
+  --batch_size 32 \
+  --num_epochs 50 \
+  --enable_carbon_tracking \
+  --track_flops \
+  --push_to_hub \
+  --use_wandb
+```
+
+### For Inference (Raspberry Pi Zero):
+```bash
+# Optimized inference with Pi-specific monitoring
+python bitgen_cli.py inference \
+  --model_path checkpoints/bitgen_final.pt \
+  --benchmark \
+  --show_metrics
+```
 
 ## 🔮 Inference with Performance Metrics
 
