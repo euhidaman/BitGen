@@ -115,7 +115,7 @@ class BitGenTokenizer:
         return ' '.join(tokens)
 
 class COCODataset(Dataset):
-    """COCO dataset optimized for BitGen training"""
+    """COCO dataset optimized for BitGen training - REAL IMAGES ONLY"""
 
     def __init__(self,
                  data_file: str,
@@ -129,7 +129,7 @@ class COCODataset(Dataset):
         self.tokenizer = BitGenTokenizer(vocab_size)
         self.max_seq_len = max_seq_len
 
-        # Image transforms optimized for embedded
+        # Image transforms optimized for embedded - MANDATORY for real images
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
@@ -143,13 +143,19 @@ class COCODataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
 
-        # Load and transform image
+        # Load and transform image - MUST succeed or crash
         try:
-            image = Image.open(item['image_path']).convert('RGB')
+            image_path = item['image_path']
+            image = Image.open(image_path).convert('RGB')
             image = self.transform(image)
+
+            # Log successful image loading (debug level)
+            # print(f"✅ Successfully loaded image: {image_path}")
+
+        except FileNotFoundError:
+            raise FileNotFoundError(f"❌ CRITICAL: Image file not found: {item.get('image_path', 'unknown path')}")
         except Exception as e:
-            # Fallback to black image if loading fails
-            image = torch.zeros(3, 224, 224)
+            raise RuntimeError(f"❌ CRITICAL: Failed to load/process image {item.get('image_path', 'unknown path')}. Real images are mandatory. Error: {e}")
 
         # Process caption
         caption = item['caption']

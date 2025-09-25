@@ -47,73 +47,16 @@ class COCODownloader:
             self.logger.error(f"Failed to download from Kaggle: {e}")
             return False
 
-    def download_sample_data(self) -> bool:
-        """Download a small sample of COCO data for testing"""
-        try:
-            self.logger.info("Creating sample COCO dataset for testing...")
-
-            # Create sample data structure
-            sample_data = {
-                "images": [
-                    {
-                        "id": 1,
-                        "file_name": "sample_001.jpg",
-                        "width": 640,
-                        "height": 480
-                    },
-                    {
-                        "id": 2,
-                        "file_name": "sample_002.jpg",
-                        "width": 640,
-                        "height": 480
-                    }
-                ],
-                "annotations": [
-                    {
-                        "id": 1,
-                        "image_id": 1,
-                        "caption": "A robot arm picking up a red cube from a table"
-                    },
-                    {
-                        "id": 2,
-                        "image_id": 1,
-                        "caption": "Industrial robot performing pick and place operation"
-                    },
-                    {
-                        "id": 3,
-                        "image_id": 2,
-                        "caption": "Mobile robot navigating through a warehouse corridor"
-                    },
-                    {
-                        "id": 4,
-                        "image_id": 2,
-                        "caption": "Autonomous robot avoiding obstacles while moving"
-                    }
-                ]
-            }
-
-            # Save sample data
-            sample_file = self.output_dir / "sample_coco.json"
-            with open(sample_file, 'w') as f:
-                json.dump(sample_data, f, indent=2)
-
-            self.logger.info(f"✅ Sample COCO data created: {sample_file}")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to create sample data: {e}")
-            return False
-
     def process_dataset(self):
-        """Process downloaded dataset for BitGen training"""
+        """Process downloaded dataset for BitGen training - compatible with existing data loader"""
         try:
             self.logger.info("Processing COCO Image Caption dataset for BitGen...")
 
-            # Look for the downloaded files - this dataset might have different structure
+            # Look for the downloaded files
             all_files = list(self.output_dir.rglob("*"))
 
             # Find JSON files (captions) and image files
-            json_files = [f for f in all_files if f.suffix.lower() == '.json']
+            json_files = [f for f in all_files if f.suffix.lower() == '.json' and 'sample' not in f.name]
             image_files = [f for f in all_files if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']]
 
             self.logger.info(f"Found {len(json_files)} JSON files and {len(image_files)} image files")
@@ -123,35 +66,44 @@ class COCODownloader:
                 self.download_sample_data()
                 return
 
-            # Try to process different possible structures
+            # Process into BitGen-compatible format
             processed_data = []
 
-            # Method 1: Look for standard COCO format JSON
+            # Try different processing methods
+            success = False
+
+            # Method 1: Standard COCO format
             for json_file in json_files:
-                if self._process_coco_format(json_file, image_files, processed_data):
+                if self._process_coco_compatible(json_file, image_files, processed_data):
+                    success = True
                     break
 
-            # Method 2: Try to process CSV format if available
-            csv_files = [f for f in all_files if f.suffix.lower() == '.csv']
-            if not processed_data and csv_files:
+            # Method 2: CSV format
+            if not success:
+                csv_files = [f for f in all_files if f.suffix.lower() == '.csv']
                 for csv_file in csv_files:
                     if self._process_csv_format(csv_file, image_files, processed_data):
+                        success = True
                         break
 
-            # Method 3: Try to process directory structure with images and captions
-            if not processed_data:
+            # Method 3: Directory structure
+            if not success:
                 self._process_directory_structure(image_files, processed_data)
+                success = len(processed_data) > 0
 
             if processed_data:
-                # Save processed data
+                # Save in BitGen-compatible format
                 output_file = self.output_dir / "validated_coco.json"
                 with open(output_file, 'w') as f:
                     json.dump(processed_data, f, indent=2)
 
-                self.logger.info(f"✅ Processed {len(processed_data)} image-caption pairs")
+                self.logger.info(f"✅ Processed {len(processed_data)} image-caption pairs for BitGen")
 
                 # Validate images exist
                 self._validate_images(processed_data)
+
+                # Save final validated data
+                self._save_validated_data(processed_data)
             else:
                 self.logger.warning("Could not process dataset, creating sample data...")
                 self.download_sample_data()
@@ -161,304 +113,158 @@ class COCODownloader:
             # Fallback to sample data
             self.download_sample_data()
 
-    def _process_coco_format(self, json_file: Path, image_files: List[Path], processed_data: List) -> bool:
-        """Process standard COCO format JSON file"""
+    def _process_coco_compatible(self, json_file: Path, image_files: List[Path], processed_data: List) -> bool:
+        """Process COCO format to be compatible with BitGen data loader"""
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # Check if it's COCO format
             if 'images' in data and 'annotations' in data:
                 images = data['images']
                 annotations = data['annotations']
 
-                self.logger.info(f"Processing COCO format from {json_file.name}")
-                self.logger.info(f"Found {len(images)} images and {len(annotations)} annotations")
+                self.logger.info(f"Processing {len(images)} images with {len(annotations)} captions from {json_file.name}")
 
-                # Use pandas for efficient merging (like in the notebook)
-                try:
-                    import pandas as pd
+                # Create image lookup
+                image_lookup = {img['id']: img for img in images}
 
-                    # Create DataFrames (following the notebook approach)
-                    images_df = pd.DataFrame(images)
-                    annotations_df = pd.DataFrame(annotations)
+                # Create image filename mapping
+                image_files_dict = {}
+                for img_file in image_files:
+                    base_name = img_file.name
+                    image_files_dict[base_name] = img_file
 
-                    # Merge on image_id (like in the notebook)
-                    merged_df = pd.merge(annotations_df, images_df, left_on='image_id', right_on='id', suffixes=('_annotation', '_image'))
-
-                    # Select relevant columns
-                    coco_df = merged_df[['image_id', 'file_name', 'caption', 'width', 'height']].copy()
-
-                    self.logger.info(f"Merged data: {len(coco_df)} image-caption pairs")
-
-                    # Create image filename mapping for actual files
-                    image_files_dict = {}
-                    for img_file in image_files:
-                        # Try multiple naming patterns
-                        image_files_dict[img_file.name] = img_file
-                        # Also map without path prefixes
-                        base_name = img_file.name
-                        if base_name.startswith('COCO_'):
-                            clean_name = base_name
-                        else:
-                            # Try to match COCO naming patterns
-                            clean_name = base_name
-                        image_files_dict[clean_name] = img_file
-
-                    # Process the merged data (limit for performance)
-                    processed_count = 0
-                    for _, row in coco_df.head(1000).iterrows():  # Process up to 1000 samples
-                        img_filename = row['file_name']
-                        caption = str(row['caption']).strip()
-
-                        # Try to find the actual image file
-                        img_path = None
-
-                        # Method 1: Direct filename match
-                        if img_filename in image_files_dict:
-                            img_path = image_files_dict[img_filename]
-                        else:
-                            # Method 2: Try common COCO prefixes
-                            for prefix in ['', 'COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_', 'train2014_', 'val2014_', 'val2017_']:
-                                test_name = f"{prefix}{img_filename}"
-                                if test_name in image_files_dict:
-                                    img_path = image_files_dict[test_name]
-                                    break
-
-                        if img_path and caption:
-                            processed_data.append({
-                                'image_id': int(row['image_id']),
-                                'image_file': str(img_path.relative_to(self.output_dir)),
-                                'image_path': str(img_path),
-                                'caption': caption,
-                                'width': int(row['width']) if pd.notna(row['width']) else 640,
-                                'height': int(row['height']) if pd.notna(row['height']) else 480
-                            })
-                            processed_count += 1
-
-                    self.logger.info(f"Successfully processed {processed_count} image-caption pairs from {json_file.name}")
-                    return processed_count > 0
-
-                except ImportError:
-                    # Fallback without pandas
-                    self.logger.warning("pandas not available, using slower processing")
-                    return self._process_coco_format_without_pandas(data, image_files, processed_data)
-
-            else:
-                # Check for other possible formats
-                if isinstance(data, list) and len(data) > 0 and 'caption' in data[0]:
-                    # Direct list of caption objects
-                    self.logger.info(f"Processing direct caption list format with {len(data)} entries")
-
-                    image_files_dict = {img_file.name: img_file for img_file in image_files}
-
-                    for item in data[:500]:  # Limit for performance
-                        if 'image_id' in item and 'caption' in item:
-                            # Try to find corresponding image
-                            img_filename = item.get('file_name', f"image_{item['image_id']}.jpg")
-
-                            if img_filename in image_files_dict:
-                                img_path = image_files_dict[img_filename]
-                                processed_data.append({
-                                    'image_id': item['image_id'],
-                                    'image_file': str(img_path.relative_to(self.output_dir)),
-                                    'image_path': str(img_path),
-                                    'caption': str(item['caption']).strip(),
-                                    'width': item.get('width', 640),
-                                    'height': item.get('height', 480)
-                                })
-
-                    return len(processed_data) > 0
-
-                return False
-
-        except Exception as e:
-            self.logger.error(f"Error processing COCO format {json_file}: {e}")
-            return False
-
-    def _process_coco_format_without_pandas(self, data: Dict, image_files: List[Path], processed_data: List) -> bool:
-        """Fallback method to process COCO format without pandas"""
-        try:
-            images = data['images']
-            annotations = data['annotations']
-
-            # Create lookup dictionaries
-            image_lookup = {img['id']: img for img in images}
-            image_files_dict = {img_file.name: img_file for img_file in image_files}
-
-            # Process annotations
-            for ann in annotations[:500]:  # Limit for performance
-                if 'image_id' in ann and 'caption' in ann:
-                    img_id = ann['image_id']
-                    if img_id in image_lookup:
-                        img_info = image_lookup[img_id]
-                        img_filename = img_info.get('file_name', f"image_{img_id}.jpg")
-
-                        # Try to find the image file
-                        img_path = None
-                        if img_filename in image_files_dict:
-                            img_path = image_files_dict[img_filename]
-                        else:
-                            # Try with COCO prefixes
-                            for prefix in ['COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_']:
-                                test_name = f"{prefix}{img_filename}"
-                                if test_name in image_files_dict:
-                                    img_path = image_files_dict[test_name]
-                                    break
-
-                        if img_path:
-                            processed_data.append({
-                                'image_id': img_id,
-                                'image_file': str(img_path.relative_to(self.output_dir)),
-                                'image_path': str(img_path),
-                                'caption': str(ann['caption']).strip(),
-                                'width': img_info.get('width', 640),
-                                'height': img_info.get('height', 480)
-                            })
-
-            return len(processed_data) > 0
-
-        except Exception as e:
-            self.logger.error(f"Error in fallback COCO processing: {e}")
-            return False
-
-    def _process_csv_format(self, csv_file: Path, image_files: List[Path], processed_data: List) -> bool:
-        """Process CSV format with image-caption pairs"""
-        try:
-            import pandas as pd
-
-            df = pd.read_csv(csv_file)
-            self.logger.info(f"Processing CSV format with {len(df)} rows")
-
-            # Look for common column names
-            image_col = None
-            caption_col = None
-
-            for col in df.columns:
-                if any(keyword in col.lower() for keyword in ['image', 'img', 'file']):
-                    image_col = col
-                if any(keyword in col.lower() for keyword in ['caption', 'description', 'text']):
-                    caption_col = col
-
-            if not image_col or not caption_col:
-                self.logger.warning(f"Could not identify image and caption columns in {csv_file}")
-                return False
-
-            self.logger.info(f"Using columns: {image_col} (images), {caption_col} (captions)")
-
-            # Create image filename mapping
-            image_files_dict = {img_file.name: img_file for img_file in image_files}
-
-            for idx, row in df.iterrows():
-                if idx >= 1000:  # Limit for faster processing
-                    break
-
-                img_filename = str(row[image_col])
-                caption = str(row[caption_col])
-
-                # Try to find the image file
-                img_path = None
-                if img_filename in image_files_dict:
-                    img_path = image_files_dict[img_filename]
-                else:
-                    # Try without extension and with common extensions
-                    base_name = Path(img_filename).stem
-                    for ext in ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']:
-                        test_name = f"{base_name}{ext}"
-                        if test_name in image_files_dict:
-                            img_path = image_files_dict[test_name]
+                    # Also try without common prefixes
+                    for prefix in ['COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_', 'train2014_', 'val2014_', 'val2017_']:
+                        if base_name.startswith(prefix):
+                            clean_name = base_name[len(prefix):]
+                            image_files_dict[clean_name] = img_file
                             break
 
-                if img_path and caption.strip():
-                    processed_data.append({
-                        'image_id': idx + 1,
-                        'image_file': str(img_path.relative_to(self.output_dir)),
-                        'image_path': str(img_path),
-                        'caption': caption.strip(),
-                        'width': 640,  # Default values
-                        'height': 480
-                    })
+                # Process annotations and create BitGen-compatible entries
+                processed_count = 0
+                for ann in annotations[:1000]:  # Limit for performance
+                    if 'image_id' in ann and 'caption' in ann:
+                        img_id = ann['image_id']
+                        caption = ann['caption'].strip()
 
-            return len(processed_data) > 0
+                        if img_id in image_lookup and caption:
+                            img_info = image_lookup[img_id]
+                            img_filename = img_info.get('file_name', f'image_{img_id}.jpg')
 
-        except ImportError:
-            self.logger.warning("pandas not available for CSV processing")
+                            # Try to find the actual image file
+                            img_path = None
+
+                            # Direct match
+                            if img_filename in image_files_dict:
+                                img_path = image_files_dict[img_filename]
+                            else:
+                                # Try with different prefixes
+                                for prefix in ['', 'COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_']:
+                                    test_name = f"{prefix}{img_filename}"
+                                    if test_name in image_files_dict:
+                                        img_path = image_files_dict[test_name]
+                                        break
+
+                            if img_path:
+                                # Create BitGen-compatible entry
+                                processed_data.append({
+                                    'image_id': img_id,
+                                    'image_file': str(img_path.relative_to(self.output_dir)),
+                                    'image_path': str(img_path),
+                                    'caption': caption,
+                                    'width': img_info.get('width', 640),
+                                    'height': img_info.get('height', 480)
+                                })
+                                processed_count += 1
+
+                self.logger.info(f"Successfully processed {processed_count} image-caption pairs")
+                return processed_count > 0
+
             return False
+
         except Exception as e:
-            self.logger.error(f"Error processing CSV format {csv_file}: {e}")
+            self.logger.error(f"Error processing {json_file}: {e}")
             return False
 
-    def _process_directory_structure(self, image_files: List[Path], processed_data: List):
-        """Process images directly from directory structure"""
+    def _save_validated_data(self, processed_data: List[Dict]):
+        """Save data in format compatible with BitGen COCODataset"""
         try:
-            self.logger.info(f"Processing {len(image_files)} images from directory structure")
+            # Filter out invalid entries
+            valid_data = []
+            for item in processed_data:
+                if Path(item['image_path']).exists() and item['caption'].strip():
+                    valid_data.append(item)
 
-            for idx, img_path in enumerate(image_files[:500]):  # Limit for faster processing
-                # Generate a simple caption based on filename or use default
-                img_name = img_path.stem
+            # Save in final format
+            output_file = self.output_dir / "validated_coco.json"
+            with open(output_file, 'w') as f:
+                json.dump(valid_data, f, indent=2)
 
-                # Try to create a meaningful caption from filename
-                caption = self._generate_caption_from_filename(img_name)
+            # Also create a summary file for easy reference
+            summary = {
+                'dataset_info': {
+                    'total_samples': len(valid_data),
+                    'source': 'nikhil7280/coco-image-caption',
+                    'processed_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'format': 'BitGen-compatible'
+                },
+                'sample_data': valid_data[:5]  # First 5 for reference
+            }
 
-                processed_data.append({
-                    'image_id': idx + 1,
-                    'image_file': str(img_path.relative_to(self.output_dir)),
-                    'image_path': str(img_path),
-                    'caption': caption,
-                    'width': 640,  # Default values - could be extracted from image
-                    'height': 480
-                })
+            summary_file = self.output_dir / "dataset_summary.json"
+            with open(summary_file, 'w') as f:
+                json.dump(summary, f, indent=2)
 
-            self.logger.info(f"Generated captions for {len(processed_data)} images")
+            self.logger.info(f"Saved {len(valid_data)} validated samples for BitGen training")
 
         except Exception as e:
-            self.logger.error(f"Error processing directory structure: {e}")
+            self.logger.error(f"Error saving validated data: {e}")
 
-    def _generate_caption_from_filename(self, filename: str) -> str:
-        """Generate a basic caption from image filename"""
-        # Remove common prefixes/suffixes and underscores
-        name = filename.lower()
-        name = name.replace('_', ' ').replace('-', ' ')
+    def download_sample_data(self) -> bool:
+        """Create sample data compatible with BitGen"""
+        try:
+            self.logger.info("Creating BitGen-compatible sample dataset...")
 
-        # Common COCO-style captions based on filename patterns
-        if any(word in name for word in ['person', 'people', 'man', 'woman']):
-            return f"A person in the image {filename}"
-        elif any(word in name for word in ['car', 'vehicle', 'truck', 'bus']):
-            return f"A vehicle shown in {filename}"
-        elif any(word in name for word in ['cat', 'dog', 'animal', 'bird']):
-            return f"An animal captured in {filename}"
-        elif any(word in name for word in ['food', 'pizza', 'cake']):
-            return f"Food item displayed in {filename}"
-        else:
-            return f"An image showing the contents of {filename}"
+            # Create sample data in the format expected by BitGen
+            sample_data = [
+                {
+                    'image_id': 1,
+                    'image_file': 'sample_001.jpg',
+                    'image_path': str(self.output_dir / 'sample_001.jpg'),
+                    'caption': 'A robot arm picking up a red cube from a table',
+                    'width': 640,
+                    'height': 480
+                },
+                {
+                    'image_id': 2,
+                    'image_file': 'sample_002.jpg',
+                    'image_path': str(self.output_dir / 'sample_002.jpg'),
+                    'caption': 'Industrial robot performing pick and place operation',
+                    'width': 640,
+                    'height': 480
+                },
+                {
+                    'image_id': 3,
+                    'image_file': 'sample_003.jpg',
+                    'image_path': str(self.output_dir / 'sample_003.jpg'),
+                    'caption': 'Mobile robot navigating through a warehouse corridor',
+                    'width': 640,
+                    'height': 480
+                }
+            ]
 
-    def _validate_images(self, processed_data: List[Dict]):
-        """Validate that image files actually exist"""
-        valid_count = 0
-        invalid_files = []
+            # Save in BitGen format
+            sample_file = self.output_dir / "validated_coco.json"
+            with open(sample_file, 'w') as f:
+                json.dump(sample_data, f, indent=2)
 
-        for item in processed_data:
-            img_path = Path(item['image_path'])
-            if img_path.exists():
-                valid_count += 1
-                # Try to get actual image dimensions
-                try:
-                    from PIL import Image
-                    with Image.open(img_path) as img:
-                        item['width'] = img.width
-                        item['height'] = img.height
-                except:
-                    pass  # Keep default dimensions if PIL not available
-            else:
-                invalid_files.append(str(img_path))
+            self.logger.info(f"✅ BitGen-compatible sample data created: {sample_file}")
+            return True
 
-        self.logger.info(f"✅ Validated {valid_count}/{len(processed_data)} images exist")
-        if invalid_files:
-            self.logger.warning(f"❌ {len(invalid_files)} image files not found")
-            # Remove invalid entries
-            valid_data = [item for item in processed_data if Path(item['image_path']).exists()]
-            processed_data.clear()
-            processed_data.extend(valid_data)
+        except Exception as e:
+            self.logger.error(f"Failed to create sample data: {e}")
+            return False
 
     def validate_dataset(self) -> bool:
         """Validate that dataset is ready for training"""
@@ -529,79 +335,149 @@ class COCODownloader:
         """Legacy method - kept for compatibility"""
         return self._process_coco_format(coco_file, [], [])
 
-def download_and_prepare_coco(output_dir: str = "data/coco"):
-    """Main function to download and prepare COCO dataset"""
+    def _process_csv_format(self, csv_file: Path, image_files: List[Path], processed_data: List) -> bool:
+        """Process CSV format with image-caption pairs - BitGen compatible"""
+        try:
+            import pandas as pd
 
-    downloader = COCODownloader(output_dir)
+            df = pd.read_csv(csv_file)
+            self.logger.info(f"Processing CSV format with {len(df)} rows")
 
-    print("📥 BitGen COCO Image Caption Dataset Setup")
-    print("=" * 50)
-    print(f"🎯 Target dataset: nikhil7280/coco-image-caption")
-    print(f"📁 Output directory: {output_dir}")
+            # Look for common column names
+            image_col = None
+            caption_col = None
 
-    # Check if Kaggle credentials are set up
-    try:
-        import kaggle
-        print("✅ Kaggle API credentials found")
-    except ImportError:
-        print("❌ Kaggle API not installed. Run: pip install kaggle")
-        return False
-    except Exception as e:
-        print(f"❌ Kaggle credentials issue: {e}")
-        print("💡 Make sure ~/.kaggle/kaggle.json exists with your API token")
-        return False
+            for col in df.columns:
+                if any(keyword in col.lower() for keyword in ['image', 'img', 'file']):
+                    image_col = col
+                if any(keyword in col.lower() for keyword in ['caption', 'description', 'text']):
+                    caption_col = col
 
-    # Try to download from Kaggle
-    print("\n🚀 Starting download from Kaggle...")
-    if downloader.download_from_kaggle():
-        print("✅ COCO Image Caption dataset downloaded from Kaggle")
+            if not image_col or not caption_col:
+                self.logger.warning(f"Could not identify image and caption columns in {csv_file}")
+                return False
 
-        # Get initial info about downloaded files
-        info = downloader.get_dataset_info()
-        print(f"\n📊 Downloaded files:")
-        print(f"   📄 JSON files: {info.get('json_files', 0)}")
-        print(f"   🖼️  Image files: {info.get('image_files', 0)}")
-        print(f"   📋 CSV files: {info.get('csv_files', 0)}")
-        print(f"   💾 Total size: {info.get('total_size_mb', 0):.1f} MB")
+            self.logger.info(f"Using columns: {image_col} (images), {caption_col} (captions)")
 
-    else:
-        print("❌ Kaggle download failed, creating sample dataset...")
-        if downloader.download_sample_data():
-            print("✅ Created sample dataset for testing")
-        else:
-            print("❌ Failed to create sample dataset")
+            # Create image filename mapping
+            image_files_dict = {img_file.name: img_file for img_file in image_files}
+
+            processed_count = 0
+            for idx, row in df.iterrows():
+                if processed_count >= 1000:  # Limit for performance
+                    break
+
+                img_filename = str(row[image_col])
+                caption = str(row[caption_col]).strip()
+
+                # Try to find the image file
+                img_path = None
+                if img_filename in image_files_dict:
+                    img_path = image_files_dict[img_filename]
+                else:
+                    # Try without extension and with common extensions
+                    base_name = Path(img_filename).stem
+                    for ext in ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']:
+                        test_name = f"{base_name}{ext}"
+                        if test_name in image_files_dict:
+                            img_path = image_files_dict[test_name]
+                            break
+
+                if img_path and caption:
+                    # BitGen-compatible format
+                    processed_data.append({
+                        'image_id': processed_count + 1,
+                        'image_file': str(img_path.relative_to(self.output_dir)),
+                        'image_path': str(img_path),
+                        'caption': caption,
+                        'width': 640,  # Default values
+                        'height': 480
+                    })
+                    processed_count += 1
+
+            self.logger.info(f"Successfully processed {processed_count} samples from CSV")
+            return processed_count > 0
+
+        except ImportError:
+            self.logger.warning("pandas not available for CSV processing")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error processing CSV format {csv_file}: {e}")
             return False
 
-    # Process the dataset
-    print("\n🔄 Processing dataset for BitGen training...")
-    downloader.process_dataset()
+    def _process_directory_structure(self, image_files: List[Path], processed_data: List):
+        """Process images directly from directory structure - BitGen compatible"""
+        try:
+            self.logger.info(f"Processing {len(image_files)} images from directory structure")
 
-    # Get final info and validate
-    final_info = downloader.get_dataset_info()
+            processed_count = 0
+            for img_path in image_files[:500]:  # Limit for performance
+                # Generate a caption based on filename
+                img_name = img_path.stem
+                caption = self._generate_caption_from_filename(img_name)
 
-    if downloader.validate_dataset():
-        print("\n🎉 Dataset is ready for BitGen training!")
-        print(f"   ✅ Processed samples: {final_info.get('processed_samples', 0)}")
-        print(f"   🖼️  Image files available: {final_info.get('image_files', 0)}")
-        print(f"   📁 Dataset location: {output_dir}")
+                # BitGen-compatible format
+                processed_data.append({
+                    'image_id': processed_count + 1,
+                    'image_file': str(img_path.relative_to(self.output_dir)),
+                    'image_path': str(img_path),
+                    'caption': caption,
+                    'width': 640,  # Default values
+                    'height': 480
+                })
+                processed_count += 1
 
-        # Show sample of what was processed
-        validation_file = Path(output_dir) / "validated_coco.json"
-        if validation_file.exists():
-            try:
-                with open(validation_file, 'r') as f:
-                    sample_data = json.load(f)[:3]  # Show first 3 samples
+            self.logger.info(f"Generated captions for {processed_count} images")
 
-                print(f"\n📋 Sample processed data:")
-                for i, sample in enumerate(sample_data, 1):
-                    print(f"   {i}. Image: {sample.get('image_file', 'N/A')}")
-                    print(f"      Caption: {sample.get('caption', 'N/A')[:80]}...")
-                    print(f"      Size: {sample.get('width', 0)}x{sample.get('height', 0)}")
-            except:
-                pass
+        except Exception as e:
+            self.logger.error(f"Error processing directory structure: {e}")
 
-        return True
-    else:
-        print("❌ Dataset validation failed")
-        print("💡 Check if images were properly downloaded and can be accessed")
-        return False
+    def _generate_caption_from_filename(self, filename: str) -> str:
+        """Generate a basic caption from image filename"""
+        # Remove common prefixes/suffixes and underscores
+        name = filename.lower()
+        name = name.replace('_', ' ').replace('-', ' ')
+
+        # Generate robot/AI focused captions for BitGen
+        if any(word in name for word in ['person', 'people', 'man', 'woman']):
+            return f"A person interacting with robotic systems"
+        elif any(word in name for word in ['car', 'vehicle', 'truck', 'bus']):
+            return f"An autonomous vehicle in operation"
+        elif any(word in name for word in ['cat', 'dog', 'animal', 'bird']):
+            return f"An animal that robots must navigate around"
+        elif any(word in name for word in ['food', 'kitchen']):
+            return f"A kitchen environment for service robots"
+        else:
+            return f"A scene for robotic understanding and navigation"
+
+    def _validate_images(self, processed_data: List[Dict]):
+        """Validate that image files actually exist and get real dimensions"""
+        valid_count = 0
+        invalid_files = []
+
+        for item in processed_data:
+            img_path = Path(item['image_path'])
+            if img_path.exists():
+                valid_count += 1
+                # Try to get actual image dimensions
+                try:
+                    from PIL import Image
+                    with Image.open(img_path) as img:
+                        item['width'] = img.width
+                        item['height'] = img.height
+                except:
+                    pass  # Keep default dimensions if PIL not available
+            else:
+                invalid_files.append(str(img_path))
+
+        self.logger.info(f"✅ Validated {valid_count}/{len(processed_data)} images exist")
+        if invalid_files and len(invalid_files) < 10:
+            self.logger.warning(f"❌ Missing files: {invalid_files}")
+        elif invalid_files:
+            self.logger.warning(f"❌ {len(invalid_files)} image files not found")
+
+        # Remove invalid entries
+        valid_data = [item for item in processed_data if Path(item['image_path']).exists()]
+        processed_data.clear()
+        processed_data.extend(valid_data)
+```
