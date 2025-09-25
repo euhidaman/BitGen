@@ -1,6 +1,6 @@
 """
 COCO Dataset Downloader for BitGen
-Simple cross-platform dataset downloader for GPU training
+Simple cross-platform dataset downloader for GPU training with integrated visualization
 """
 
 import os
@@ -11,8 +11,13 @@ import logging
 from typing import Dict, List, Optional
 import time
 
+# Add visualization imports
+import matplotlib.pyplot as plt
+from PIL import Image
+import random
+
 class COCODownloader:
-    """Simple COCO dataset downloader for GPU training"""
+    """Simple COCO dataset downloader for GPU training with visualization"""
 
     def __init__(self, output_dir: str = "data/coco"):
         self.output_dir = Path(output_dir)
@@ -69,9 +74,9 @@ class COCODownloader:
 
             # Process all annotations and create proper image-caption pairs
             all_processed_data = []
-            processed_image_ids = set()
 
             # Create unified image file mapping first
+            self.logger.info("🗂️ Creating image file mapping...")
             image_files_dict = {}
             for img_file in image_files:
                 base_name = img_file.name
@@ -83,16 +88,20 @@ class COCODownloader:
                         clean_name = base_name[len(prefix):]
                         image_files_dict[clean_name] = img_file
 
+            self.logger.info(f"📁 Mapped {len(image_files_dict)} image files")
+
             # Process each JSON file and collect all valid pairs
             for json_file in json_files:
                 self.logger.info(f"📂 Processing: {json_file.name}")
                 temp_data = []
-                if self._process_coco_format(json_file, image_files_dict, temp_data, processed_image_ids):
+                if self._process_coco_format(json_file, image_files_dict, temp_data):
                     all_processed_data.extend(temp_data)
                     self.logger.info(f"   ✅ Added {len(temp_data)} valid image-caption pairs")
 
             # Validate and save final data
             if all_processed_data:
+                self.logger.info(f"🔍 Processing {len(all_processed_data)} total pairs...")
+
                 # Remove duplicates based on image_id + caption combination
                 unique_pairs = {}
                 for item in all_processed_data:
@@ -102,11 +111,11 @@ class COCODownloader:
 
                 final_data = list(unique_pairs.values())
 
-                # Limit to reasonable number for training
-                if len(final_data) > 5000:
+                # Keep more data - limit to 20000 for better training
+                if len(final_data) > 20000:
                     import random
                     random.seed(42)  # Reproducible sampling
-                    final_data = random.sample(final_data, 5000)
+                    final_data = random.sample(final_data, 20000)
 
                 self.logger.info(f"✅ Final dataset: {len(final_data)} unique image-caption pairs")
 
@@ -119,6 +128,10 @@ class COCODownloader:
                     json.dump(final_data, f, indent=2)
 
                 self.logger.info(f"💾 Saved validated dataset to: {output_file}")
+
+                # AUTOMATICALLY CREATE VISUALIZATION GRID
+                self.create_visualization_grid(final_data)
+
             else:
                 self.logger.warning("⚠️ No valid pairs found, creating sample data")
                 self.download_sample_data()
@@ -127,7 +140,7 @@ class COCODownloader:
             self.logger.error(f"❌ Dataset processing failed: {e}")
             self.download_sample_data()
 
-    def _process_coco_format(self, json_file: Path, image_files_dict: dict, processed_data: List, processed_image_ids: set) -> bool:
+    def _process_coco_format(self, json_file: Path, image_files_dict: dict, processed_data: List) -> bool:
         """Process COCO format JSON file with proper validation"""
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
@@ -145,17 +158,14 @@ class COCODownloader:
                 valid_pairs = 0
                 skipped_pairs = 0
 
-                # Process each annotation (caption)
-                for ann in annotations:
-                    if valid_pairs >= 2000:  # Limit per file
-                        break
-
+                # Process each annotation (caption) - process MORE data
+                for ann in annotations[:10000]:  # Increased limit per file
                     if 'image_id' in ann and 'caption' in ann:
                         img_id = ann['image_id']
                         caption = ann['caption'].strip()
 
-                        # Skip if we've already processed this image or empty caption
-                        if not caption or len(caption) < 10:
+                        # Skip if empty caption or too short
+                        if not caption or len(caption) < 5:  # Reduced minimum length
                             skipped_pairs += 1
                             continue
 
@@ -220,12 +230,12 @@ class COCODownloader:
             caption = item['caption']
 
             # Verify image exists and caption is valid
-            if img_path.exists() and len(caption.strip()) >= 10:
+            if img_path.exists() and len(caption.strip()) >= 5:
                 valid_count += 1
 
-                # Log a few examples for verification
-                if i < 3:
-                    self.logger.info(f"   ✅ Pair {i+1}: {img_path.name} → '{caption[:50]}...'")
+                # Log first 9 examples for verification (for the grid)
+                if i < 9:
+                    self.logger.info(f"   ✅ Pair {i+1}: {img_path.name} → '{caption}'")
             else:
                 invalid_files.append({
                     'image_path': str(img_path),
@@ -237,13 +247,10 @@ class COCODownloader:
 
         if invalid_files:
             self.logger.warning(f"⚠️ Found {len(invalid_files)} invalid pairs")
-            if len(invalid_files) <= 5:
-                for invalid in invalid_files:
-                    self.logger.warning(f"   ❌ {invalid['issue']}: {invalid['image_path']} → {invalid['caption']}")
 
         # Remove invalid pairs
         valid_data = [item for item in processed_data if
-                     Path(item['image_path']).exists() and len(item['caption'].strip()) >= 10]
+                     Path(item['image_path']).exists() and len(item['caption'].strip()) >= 5]
 
         # Update the list in place
         processed_data.clear()
@@ -309,6 +316,113 @@ class COCODownloader:
 
         except Exception as e:
             self.logger.error(f"❌ Dataset validation failed: {e}")
+            return False
+
+    def create_visualization_grid(self, data: List[Dict]):
+        """Create and display 3x3 grid of image-caption pairs"""
+        try:
+            self.logger.info("🖼️ Creating visualization grid to verify image-caption alignment...")
+
+            if len(data) < 9:
+                self.logger.warning(f"⚠️ Only {len(data)} pairs available, need at least 9 for 3x3 grid")
+                return
+
+            # Select 9 random pairs for visualization
+            random.seed(42)  # Reproducible results
+            selected_pairs = random.sample(data, 9)
+
+            # Create the figure
+            fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+            fig.suptitle('COCO Dataset: Image-Caption Pairs Verification\n(Verifying proper alignment)',
+                        fontsize=16, fontweight='bold')
+
+            self.logger.info("📊 Processing 9 pairs for visualization grid:")
+
+            for idx, pair in enumerate(selected_pairs):
+                row = idx // 3
+                col = idx % 3
+                ax = axes[row, col]
+
+                image_path = pair['image_path']
+                caption = pair['caption']
+                image_id = pair['image_id']
+
+                self.logger.info(f"   📷 Pair {idx+1}: Image ID {image_id}")
+                self.logger.info(f"      📁 {Path(image_path).name}")
+                self.logger.info(f"      💬 '{caption}'")
+
+                try:
+                    # Load and display image
+                    if Path(image_path).exists():
+                        img = Image.open(image_path)
+                        img = img.convert('RGB')  # Ensure RGB format
+                        ax.imshow(img)
+
+                        # Add caption as title (truncate if too long)
+                        caption_short = caption if len(caption) <= 80 else caption[:77] + "..."
+                        ax.set_title(f"ID: {image_id}\n{caption_short}",
+                                   fontsize=9, wrap=True, pad=8)
+
+                        self.logger.info(f"      ✅ Image loaded successfully")
+
+                    else:
+                        # Image doesn't exist - show placeholder
+                        ax.text(0.5, 0.5, f"❌ Image Missing\nID: {image_id}\n{caption[:40]}...",
+                               ha='center', va='center', fontsize=10, transform=ax.transAxes,
+                               bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral"))
+                        ax.set_xlim(0, 1)
+                        ax.set_ylim(0, 1)
+                        self.logger.warning(f"      ❌ Image file not found")
+
+                except Exception as e:
+                    self.logger.error(f"      ❌ Error loading image: {e}")
+                    # Show error placeholder
+                    ax.text(0.5, 0.5, f"⚠️ Error Loading\nID: {image_id}\n{str(e)[:30]}...",
+                           ha='center', va='center', fontsize=10, transform=ax.transAxes,
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor="orange"))
+                    ax.set_xlim(0, 1)
+                    ax.set_ylim(0, 1)
+
+                # Remove axis ticks and labels for cleaner look
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+            # Adjust layout and save
+            plt.tight_layout()
+
+            # Save visualization
+            output_image = self.output_dir / "coco_verification_grid.png"
+            plt.savefig(output_image, dpi=200, bbox_inches='tight', facecolor='white')
+            self.logger.info(f"💾 Visualization grid saved to: {output_image}")
+
+            # Display statistics
+            self.logger.info("📊 DATASET VERIFICATION COMPLETE:")
+            self.logger.info(f"   📈 Total processed pairs: {len(data)}")
+
+            # Check how many images actually exist
+            existing_images = sum(1 for item in data if Path(item['image_path']).exists())
+            self.logger.info(f"   🖼️ Images found: {existing_images}/{len(data)} ({existing_images/len(data)*100:.1f}%)")
+
+            if existing_images == len(data):
+                self.logger.info("   ✅ Perfect! All images properly aligned with captions")
+            else:
+                self.logger.warning(f"   ⚠️ {len(data) - existing_images} images missing - check download")
+
+            # Try to display if in interactive environment
+            try:
+                plt.show()
+                self.logger.info("🖥️ Visualization displayed")
+            except:
+                self.logger.info("🖥️ Visualization saved (display not available in current environment)")
+
+            return True
+
+        except ImportError:
+            self.logger.error("❌ Matplotlib not available for visualization")
+            self.logger.info("💡 Install with: pip install matplotlib")
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ Visualization failed: {e}")
             return False
 
 
