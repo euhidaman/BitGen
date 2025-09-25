@@ -480,4 +480,3 @@ class COCODownloader:
         valid_data = [item for item in processed_data if Path(item['image_path']).exists()]
         processed_data.clear()
         processed_data.extend(valid_data)
-```
