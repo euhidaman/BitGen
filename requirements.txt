@@ -37,9 +37,6 @@ fvcore
 thop
 pycuda
 torch-tb-profiler
-# Raspberry Pi specific
-picamera2
-adafruit-circuitpython-ina219
 # HuggingFace integration
 huggingface-hub
 tokenizers
