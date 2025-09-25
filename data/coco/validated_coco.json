@@ -1,0 +1,26 @@
+[
+  {
+    "image_id": 1,
+    "image_file": "sample_001.jpg",
+    "image_path": "data\\coco\\sample_001.jpg",
+    "caption": "A robot arm picking up a red cube from a table",
+    "width": 640,
+    "height": 480
+  },
+  {
+    "image_id": 2,
+    "image_file": "sample_002.jpg",
+    "image_path": "data\\coco\\sample_002.jpg",
+    "caption": "Industrial robot performing pick and place operation",
+    "width": 640,
+    "height": 480
+  },
+  {
+    "image_id": 3,
+    "image_file": "sample_003.jpg",
+    "image_path": "data\\coco\\sample_003.jpg",
+    "caption": "Mobile robot navigating through a warehouse corridor",
+    "width": 640,
+    "height": 480
+  }
+]
