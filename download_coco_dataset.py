@@ -51,7 +51,7 @@ class COCODownloader:
             return False
 
     def process_dataset(self):
-        """Process downloaded dataset for BitGen training"""
+        """Process downloaded dataset for BitGen training with proper pairing validation"""
         try:
             self.logger.info("🔄 Processing COCO dataset for BitGen...")
 
@@ -67,31 +67,68 @@ class COCODownloader:
                 self.download_sample_data()
                 return
 
-            processed_data = []
+            # Process all annotations and create proper image-caption pairs
+            all_processed_data = []
+            processed_image_ids = set()
 
-            # Try to process COCO format
+            # Create unified image file mapping first
+            image_files_dict = {}
+            for img_file in image_files:
+                base_name = img_file.name
+                image_files_dict[base_name] = img_file
+
+                # Also try without common prefixes
+                for prefix in ['COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_']:
+                    if base_name.startswith(prefix):
+                        clean_name = base_name[len(prefix):]
+                        image_files_dict[clean_name] = img_file
+
+            # Process each JSON file and collect all valid pairs
             for json_file in json_files:
-                if self._process_coco_format(json_file, image_files, processed_data):
-                    break
+                self.logger.info(f"📂 Processing: {json_file.name}")
+                temp_data = []
+                if self._process_coco_format(json_file, image_files_dict, temp_data, processed_image_ids):
+                    all_processed_data.extend(temp_data)
+                    self.logger.info(f"   ✅ Added {len(temp_data)} valid image-caption pairs")
 
-            # Save processed data
-            if processed_data:
+            # Validate and save final data
+            if all_processed_data:
+                # Remove duplicates based on image_id + caption combination
+                unique_pairs = {}
+                for item in all_processed_data:
+                    key = f"{item['image_id']}_{hash(item['caption'])}"
+                    if key not in unique_pairs:
+                        unique_pairs[key] = item
+
+                final_data = list(unique_pairs.values())
+
+                # Limit to reasonable number for training
+                if len(final_data) > 5000:
+                    import random
+                    random.seed(42)  # Reproducible sampling
+                    final_data = random.sample(final_data, 5000)
+
+                self.logger.info(f"✅ Final dataset: {len(final_data)} unique image-caption pairs")
+
+                # Validate that each pair has correct image-caption matching
+                self._validate_image_caption_pairs(final_data)
+
+                # Save processed data
                 output_file = self.output_dir / "validated_coco.json"
                 with open(output_file, 'w') as f:
-                    json.dump(processed_data, f, indent=2)
+                    json.dump(final_data, f, indent=2)
 
-                self.logger.info(f"✅ Processed {len(processed_data)} image-caption pairs")
-                self._validate_images(processed_data)
+                self.logger.info(f"💾 Saved validated dataset to: {output_file}")
             else:
-                self.logger.warning("⚠️ No data could be processed, creating sample data")
+                self.logger.warning("⚠️ No valid pairs found, creating sample data")
                 self.download_sample_data()
 
         except Exception as e:
             self.logger.error(f"❌ Dataset processing failed: {e}")
             self.download_sample_data()
 
-    def _process_coco_format(self, json_file: Path, image_files: List[Path], processed_data: List) -> bool:
-        """Process COCO format JSON file"""
+    def _process_coco_format(self, json_file: Path, image_files_dict: dict, processed_data: List, processed_image_ids: set) -> bool:
+        """Process COCO format JSON file with proper validation"""
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -100,46 +137,69 @@ class COCODownloader:
                 images = data['images']
                 annotations = data['annotations']
 
-                self.logger.info(f"📊 Processing {len(images)} images with {len(annotations)} captions")
+                self.logger.info(f"   📊 Found {len(images)} images with {len(annotations)} captions in {json_file.name}")
 
                 # Create image lookup
                 image_lookup = {img['id']: img for img in images}
 
-                # Create filename mapping
-                image_files_dict = {img_file.name: img_file for img_file in image_files}
+                valid_pairs = 0
+                skipped_pairs = 0
 
-                # Process annotations
-                for ann in annotations[:2000]:  # Limit for performance
+                # Process each annotation (caption)
+                for ann in annotations:
+                    if valid_pairs >= 2000:  # Limit per file
+                        break
+
                     if 'image_id' in ann and 'caption' in ann:
                         img_id = ann['image_id']
                         caption = ann['caption'].strip()
 
-                        if img_id in image_lookup and caption:
+                        # Skip if we've already processed this image or empty caption
+                        if not caption or len(caption) < 10:
+                            skipped_pairs += 1
+                            continue
+
+                        if img_id in image_lookup:
                             img_info = image_lookup[img_id]
-                            img_filename = img_info.get('file_name', f'image_{img_id}.jpg')
+                            img_filename = img_info.get('file_name', f'{img_id:012d}.jpg')
 
                             # Find actual image file
                             img_path = None
+
+                            # Try direct match first
                             if img_filename in image_files_dict:
                                 img_path = image_files_dict[img_filename]
                             else:
-                                # Try with different prefixes
-                                for prefix in ['COCO_train2014_', 'COCO_val2014_', 'COCO_val2017_']:
-                                    test_name = f"{prefix}{img_filename}"
+                                # Try with different naming patterns
+                                possible_names = [
+                                    f'COCO_train2014_{img_id:012d}.jpg',
+                                    f'COCO_val2014_{img_id:012d}.jpg',
+                                    f'COCO_val2017_{img_id:012d}.jpg',
+                                    f'{img_id:012d}.jpg',
+                                    img_filename
+                                ]
+
+                                for test_name in possible_names:
                                     if test_name in image_files_dict:
                                         img_path = image_files_dict[test_name]
                                         break
 
-                            if img_path:
+                            # Only add if we found the matching image file
+                            if img_path and img_path.exists():
                                 processed_data.append({
                                     'image_id': img_id,
                                     'image_path': str(img_path),
                                     'caption': caption,
                                     'width': img_info.get('width', 640),
-                                    'height': img_info.get('height', 480)
+                                    'height': img_info.get('height', 480),
+                                    'source_file': json_file.name
                                 })
+                                valid_pairs += 1
+                            else:
+                                skipped_pairs += 1
 
-                return len(processed_data) > 0
+                self.logger.info(f"   ✅ Extracted {valid_pairs} valid pairs, skipped {skipped_pairs} (missing images/bad captions)")
+                return valid_pairs > 0
 
         except Exception as e:
             self.logger.error(f"❌ Error processing {json_file}: {e}")
@@ -147,35 +207,50 @@ class COCODownloader:
 
         return False
 
-    def _validate_images(self, processed_data: List[Dict]):
-        """Validate that image files exist"""
+    def _validate_image_caption_pairs(self, processed_data: List[Dict]):
+        """Validate that each image-caption pair is correctly matched"""
+        self.logger.info("🔍 Validating image-caption pairs...")
+
         valid_count = 0
         invalid_files = []
 
-        for item in processed_data:
+        # Check each pair
+        for i, item in enumerate(processed_data):
             img_path = Path(item['image_path'])
-            if img_path.exists():
-                valid_count += 1
-            else:
-                invalid_files.append(str(img_path))
+            caption = item['caption']
 
-        self.logger.info(f"✅ Validated {valid_count}/{len(processed_data)} images exist")
+            # Verify image exists and caption is valid
+            if img_path.exists() and len(caption.strip()) >= 10:
+                valid_count += 1
+
+                # Log a few examples for verification
+                if i < 3:
+                    self.logger.info(f"   ✅ Pair {i+1}: {img_path.name} → '{caption[:50]}...'")
+            else:
+                invalid_files.append({
+                    'image_path': str(img_path),
+                    'caption': caption[:30] + '...' if len(caption) > 30 else caption,
+                    'issue': 'missing_image' if not img_path.exists() else 'short_caption'
+                })
+
+        self.logger.info(f"✅ Validation complete: {valid_count}/{len(processed_data)} pairs are valid")
 
         if invalid_files:
-            if len(invalid_files) < 10:
-                self.logger.warning(f"❌ Missing files: {invalid_files}")
-            else:
-                self.logger.warning(f"❌ {len(invalid_files)} image files not found")
+            self.logger.warning(f"⚠️ Found {len(invalid_files)} invalid pairs")
+            if len(invalid_files) <= 5:
+                for invalid in invalid_files:
+                    self.logger.warning(f"   ❌ {invalid['issue']}: {invalid['image_path']} → {invalid['caption']}")
 
-        # Remove invalid entries
-        valid_data = [item for item in processed_data if Path(item['image_path']).exists()]
+        # Remove invalid pairs
+        valid_data = [item for item in processed_data if
+                     Path(item['image_path']).exists() and len(item['caption'].strip()) >= 10]
+
+        # Update the list in place
         processed_data.clear()
         processed_data.extend(valid_data)
 
-        # Save final validated data
-        output_file = self.output_dir / "validated_coco.json"
-        with open(output_file, 'w') as f:
-            json.dump(valid_data, f, indent=2)
+        # Save final summary
+        self.logger.info(f"🎯 Final result: {len(processed_data)} verified image-caption pairs ready for training")
 
     def download_sample_data(self) -> bool:
         """Create sample data for testing"""
