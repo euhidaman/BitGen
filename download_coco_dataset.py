@@ -104,13 +104,10 @@ class COCODownloader:
 
                 final_data = list(unique_pairs.values())
 
-                # Use MUCH MORE data - increased from 20k to 50k pairs for better training
-                if len(final_data) > 50000:
-                    import random
-                    random.seed(42)  # Reproducible sampling
-                    final_data = random.sample(final_data, 50000)
-
+                # USE ALL DATA - NO ARTIFICIAL LIMITS!
+                # Removed the 50k limit - use everything available for better training
                 self.logger.info(f"✅ Final dataset: {len(final_data)} unique image-caption pairs")
+                self.logger.info("🚀 Using ALL available data for comprehensive training!")
 
                 # Validate that each pair has correct image-caption matching
                 self._validate_image_caption_pairs(final_data)
@@ -139,6 +136,11 @@ class COCODownloader:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
+            # Only process caption files - skip instances/keypoints files for now
+            if 'captions' not in json_file.name.lower():
+                self.logger.info(f"   ⏭️ Skipping non-caption file: {json_file.name}")
+                return False
+
             if 'images' in data and 'annotations' in data:
                 images = data['images']
                 annotations = data['annotations']
@@ -154,7 +156,7 @@ class COCODownloader:
                 # Process ALL annotations - no artificial limits!
                 self.logger.info(f"   🚀 Processing ALL {len(annotations)} annotations from {json_file.name}")
 
-                for ann in annotations:  # REMOVED: [:10000] limit - process everything!
+                for ann in annotations:
                     if 'image_id' in ann and 'caption' in ann:
                         img_id = ann['image_id']
                         caption = ann['caption'].strip()
@@ -179,6 +181,7 @@ class COCODownloader:
                                 possible_names = [
                                     f'COCO_train2014_{img_id:012d}.jpg',
                                     f'COCO_val2014_{img_id:012d}.jpg',
+                                    f'COCO_train2017_{img_id:012d}.jpg',
                                     f'COCO_val2017_{img_id:012d}.jpg',
                                     f'{img_id:012d}.jpg',
                                     img_filename
