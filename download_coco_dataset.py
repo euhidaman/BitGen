@@ -87,7 +87,7 @@ class COCODownloader:
             for json_file in json_files:
                 self.logger.info(f"📂 Processing: {json_file.name}")
                 temp_data = []
-                if self._process_coco_format(json_file, image_files_dict, temp_data, processed_image_ids):
+                if self._process_coco_format(json_file, image_files_dict, temp_data):
                     all_processed_data.extend(temp_data)
                     self.logger.info(f"   ✅ Added {len(temp_data)} valid image-caption pairs")
 
