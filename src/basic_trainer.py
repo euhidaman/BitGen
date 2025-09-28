@@ -82,15 +82,23 @@ class BasicBitGenTrainer:
 
         if push_to_hub:
             try:
-                from src.huggingface_integration import setup_huggingface_integration
-                self.hf_integration = setup_huggingface_integration(
-                    model_name=hf_repo_name,
+                from src.huggingface_integration import HuggingFaceIntegration
+                self.hf_integration = HuggingFaceIntegration(
+                    repo_name=hf_repo_name,
                     organization=hf_organization,
-                    token=hf_token
+                    token=hf_token,
+                    max_checkpoints=10  # Keep only last 10 iterations
                 )
-                print(f"✅ HuggingFace integration: {self.hf_integration.repo_id}")
+                print(f"✅ HuggingFace integration with rolling checkpoints: {self.hf_integration.repo_id}")
             except Exception as e:
                 print(f"❌ HuggingFace setup failed: {e}")
+
+        # Initialize local checkpoint manager
+        from src.checkpoint_manager import LocalCheckpointManager
+        self.checkpoint_manager = LocalCheckpointManager(
+            checkpoint_dir=str(self.output_dir / "model_checkpoints"),
+            max_checkpoints=10  # Keep only last 10 iterations locally
+        )
 
         if use_wandb:
             try:
@@ -355,10 +363,56 @@ class BasicBitGenTrainer:
         self.logger.info(f"   GPUs utilized: {self.num_gpus}")
         self.logger.info(f"   Final throughput: {epoch_avg_throughput:.0f} tokens/s")
 
+    def _save_checkpoint(self, optimizer, scheduler):
+        """Save model checkpoint with rolling management"""
+        model_to_save = self.model.module if self.use_multi_gpu else self.model
+
+        # Calculate current metrics
+        current_metrics = {
+            'loss': self.best_loss,
+            'global_step': self.global_step,
+            'epoch': self.epoch,
+            'gpu_count': self.num_gpus,
+            'multi_gpu_training': self.use_multi_gpu
+        }
+
+        try:
+            # Save checkpoint locally with rolling management
+            checkpoint_path = self.checkpoint_manager.save_checkpoint(
+                model=model_to_save,
+                config=self.config,
+                epoch=self.epoch,
+                step=self.global_step,
+                metrics=current_metrics
+            )
+
+            # Get storage information
+            storage_info = self.checkpoint_manager.get_storage_info()
+            self.logger.info(f"💾 Local checkpoint saved: epoch {self.epoch}, step {self.global_step}")
+            self.logger.info(f"   📁 Storage: {storage_info['total_checkpoints']}/{storage_info['max_checkpoints']} checkpoints ({storage_info['total_size_gb']:.2f}GB)")
+
+            # Save to HuggingFace if enabled
+            if self.hf_integration:
+                try:
+                    self.hf_integration.push_model_checkpoint(
+                        model=model_to_save,
+                        config=self.config,
+                        epoch=self.epoch,
+                        step=self.global_step,
+                        metrics=current_metrics
+                    )
+                    self.logger.info(f"☁️ HuggingFace checkpoint pushed: epoch {self.epoch}, step {self.global_step}")
+                except Exception as e:
+                    self.logger.error(f"❌ HuggingFace checkpoint push failed: {e}")
+
+        except Exception as e:
+            self.logger.error(f"❌ Checkpoint saving failed: {e}")
+
     def _save_best_checkpoint(self, optimizer, scheduler):
         """Save best model checkpoint"""
         model_to_save = self.model.module if self.use_multi_gpu else self.model
 
+        # Save best model separately (not part of rolling checkpoints)
         checkpoint = {
             'epoch': self.epoch,
             'global_step': self.global_step,
@@ -371,29 +425,44 @@ class BasicBitGenTrainer:
             'num_gpus': self.num_gpus
         }
 
-        filename = f"bitgen_best_model.pt"
+        filename = "bitgen_best_model.pt"
         torch.save(checkpoint, self.output_dir / filename)
-        self.logger.info(f"💾 Saved best checkpoint: {filename}")
+        self.logger.info(f"🏆 Saved best model checkpoint: {filename} (loss: {self.best_loss:.4f})")
 
-    def _save_checkpoint(self, optimizer, scheduler):
-        """Save model checkpoint"""
-        model_to_save = self.model.module if self.use_multi_gpu else self.model
+        # Also save best model to HuggingFace if enabled
+        if self.hf_integration:
+            try:
+                # Save as latest model on HuggingFace
+                self.hf_integration.push_final_model(
+                    model=model_to_save,
+                    config=self.config,
+                    metrics={'best_loss': self.best_loss, 'epoch': self.epoch}
+                )
+                self.logger.info(f"🏆 Best model pushed to HuggingFace Hub")
+            except Exception as e:
+                self.logger.error(f"❌ Best model HuggingFace push failed: {e}")
 
-        checkpoint = {
-            'epoch': self.epoch,
-            'global_step': self.global_step,
-            'model_state_dict': model_to_save.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'config': self.config.__dict__,
-            'best_loss': self.best_loss,
-            'multi_gpu_training': self.use_multi_gpu,
-            'num_gpus': self.num_gpus
+    def get_checkpoint_info(self):
+        """Get information about saved checkpoints"""
+        local_info = self.checkpoint_manager.get_storage_info()
+
+        checkpoint_info = {
+            'local_storage': local_info,
+            'huggingface_enabled': self.hf_integration is not None,
+            'max_checkpoints_kept': 10,
+            'checkpoint_strategy': 'rolling_window'
         }
 
-        filename = f"bitgen_checkpoint_epoch_{self.epoch}.pt"
-        torch.save(checkpoint, self.output_dir / filename)
-        self.logger.info(f"Saved checkpoint: {filename}")
+        if self.hf_integration:
+            checkpoint_info['huggingface_repo'] = self.hf_integration.repo_id
+
+        return checkpoint_info
+
+    def cleanup_old_checkpoints(self):
+        """Manual cleanup of all old checkpoints (use with caution)"""
+        self.logger.warning("🗑️ Performing manual checkpoint cleanup")
+        self.checkpoint_manager.cleanup_all_checkpoints()
+        self.logger.info("✅ All local checkpoints cleaned up")
 
     def _setup_data_loader(self, coco_data_path: str, batch_size: int):
         """Setup data loader optimized for multi-GPU training"""
