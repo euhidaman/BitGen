@@ -320,27 +320,35 @@ class COCODownloader:
             return False
 
     def create_visualization_grid(self, data: List[Dict]):
-        """Create and display 3x3 grid of image-caption pairs"""
+        """Create and display 3x3 grid of image-caption pairs - Jupyter friendly"""
         try:
-            # Add visualization imports
+            # Add visualization imports with Jupyter-specific setup
             import matplotlib.pyplot as plt
             from PIL import Image
             import random
+
+            # Ensure proper backend for Jupyter
+            try:
+                get_ipython()  # Check if in Jupyter
+                plt.ion()  # Turn on interactive mode for Jupyter
+                self.logger.info("🖥️ Jupyter notebook detected - enabling interactive display")
+            except NameError:
+                pass  # Not in Jupyter
 
             self.logger.info("🖼️ Creating visualization grid to verify image-caption alignment...")
 
             if len(data) < 9:
                 self.logger.warning(f"⚠️ Only {len(data)} pairs available, need at least 9 for 3x3 grid")
-                return
+                return None
 
             # Select 9 random pairs for visualization
             random.seed(42)  # Reproducible results
             selected_pairs = random.sample(data, 9)
 
-            # Create the figure
-            fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+            # Create the figure with better spacing
+            fig, axes = plt.subplots(3, 3, figsize=(20, 16))
             fig.suptitle('COCO Dataset: Image-Caption Pairs Verification\n(Verifying proper alignment)',
-                        fontsize=16, fontweight='bold')
+                        fontsize=18, fontweight='bold', y=0.98)
 
             self.logger.info("📊 Processing 9 pairs for visualization grid:")
 
@@ -365,9 +373,9 @@ class COCODownloader:
                         ax.imshow(img)
 
                         # Add caption as title (truncate if too long)
-                        caption_short = caption if len(caption) <= 80 else caption[:77] + "..."
+                        caption_short = caption if len(caption) <= 85 else caption[:82] + "..."
                         ax.set_title(f"ID: {image_id}\n{caption_short}",
-                                   fontsize=9, wrap=True, pad=8)
+                                   fontsize=10, wrap=True, pad=10)
 
                         self.logger.info(f"      ✅ Image loaded successfully")
 
@@ -393,12 +401,13 @@ class COCODownloader:
                 ax.set_xticks([])
                 ax.set_yticks([])
 
-            # Adjust layout and save
-            plt.tight_layout()
+            # Adjust layout with more padding
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-            # Save visualization
+            # Save visualization with high quality
             output_image = self.output_dir / "coco_verification_grid.png"
-            plt.savefig(output_image, dpi=200, bbox_inches='tight', facecolor='white')
+            plt.savefig(output_image, dpi=300, bbox_inches='tight', facecolor='white',
+                       pad_inches=0.2)
             self.logger.info(f"💾 Visualization grid saved to: {output_image}")
 
             # Display statistics
@@ -414,22 +423,31 @@ class COCODownloader:
             else:
                 self.logger.warning(f"   ⚠️ {len(data) - existing_images} images missing - check download")
 
-            # Try to display if in interactive environment
+            # Enhanced display for Jupyter notebooks
             try:
+                get_ipython()  # Check if in Jupyter
+                from IPython.display import display
+                plt.show()
+                display(fig)  # Explicit display for Jupyter
+                self.logger.info("🖥️ Visualization displayed in Jupyter notebook")
+            except NameError:
+                # Not in Jupyter - regular display
                 plt.show()
                 self.logger.info("🖥️ Visualization displayed")
-            except:
-                self.logger.info("🖥️ Visualization saved (display not available in current environment)")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Display might not work in current environment: {e}")
+                self.logger.info("💾 Visualization saved to file instead")
 
-            return True
+            # Keep the figure object available for manual display
+            return fig
 
         except ImportError:
             self.logger.error("❌ Matplotlib not available for visualization")
             self.logger.info("💡 Install with: pip install matplotlib pillow")
-            return False
+            return None
         except Exception as e:
             self.logger.error(f"❌ Visualization failed: {e}")
-            return False
+            return None
 
 
 def download_and_prepare_coco(output_dir: str = "data/coco") -> bool:
