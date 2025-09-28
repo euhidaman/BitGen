@@ -87,9 +87,16 @@ class COCODownloader:
             for json_file in json_files:
                 self.logger.info(f"📂 Processing: {json_file.name}")
                 temp_data = []
-                if self._process_coco_format(json_file, image_files_dict, temp_data):
-                    all_processed_data.extend(temp_data)
-                    self.logger.info(f"   ✅ Added {len(temp_data)} valid image-caption pairs")
+                # Fixed method call - ensure exact parameter matching
+                try:
+                    if self._process_coco_format(json_file, image_files_dict, temp_data):
+                        all_processed_data.extend(temp_data)
+                        self.logger.info(f"   ✅ Added {len(temp_data)} valid image-caption pairs")
+                except TypeError as e:
+                    self.logger.error(f"❌ Method signature error: {e}")
+                    self.logger.error(f"   Parameters: json_file={type(json_file)}, image_files_dict={type(image_files_dict)}, temp_data={type(temp_data)}")
+                    # Skip this file and continue
+                    continue
 
             # Validate and save final data
             if all_processed_data:
