@@ -196,8 +196,9 @@ class BitGenTrainer:
                     total_loss = torch.tensor(1.0, device=total_loss.device, requires_grad=True)
                     loss_dict['total_loss'] = total_loss
                 else:
-                    # DEBUG: Print the actual loss being used for training
-                    print(f"TRAINING: Using loss = {total_loss.item():.6f}")
+                    # DEBUG: Print the actual loss being used for training - only every 5000 steps
+                    if self.global_step % 5000 == 0:
+                        print(f"TRAINING: Using loss = {total_loss.item():.6f}")
 
         except RuntimeError as e:
             if "device-side assert" in str(e) or "index" in str(e).lower():
