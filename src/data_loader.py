@@ -83,7 +83,7 @@ class BitGenTokenizer:
         return [t for t in result if t.strip()]
 
     def encode(self, text: str, max_length: int = 128) -> List[int]:
-        """Encode text to token IDs"""
+        """Encode text to token IDs with proper bounds checking"""
         tokens = self.tokenize(text)
 
         # Add special tokens
@@ -91,6 +91,8 @@ class BitGenTokenizer:
 
         for token in tokens[:max_length-2]:  # Reserve space for BOS and EOS
             token_id = self.token_to_id.get(token, self.special_tokens['<unk>'])
+            # Ensure token ID is within vocabulary bounds
+            token_id = min(token_id, self.vocab_size - 1)
             token_ids.append(token_id)
 
         token_ids.append(self.special_tokens['<eos>'])
@@ -98,6 +100,9 @@ class BitGenTokenizer:
         # Pad to max_length
         while len(token_ids) < max_length:
             token_ids.append(self.special_tokens['<pad>'])
+
+        # Final safety check - clamp all token IDs to vocabulary bounds
+        token_ids = [min(max(tid, 0), self.vocab_size - 1) for tid in token_ids]
 
         return token_ids[:max_length]
 
@@ -161,8 +166,15 @@ class COCODataset(Dataset):
         caption = item['caption']
         input_ids = self.tokenizer.encode(caption, self.max_seq_len)
 
+        # Validate token IDs are within bounds - CRITICAL for CUDA safety
+        max_valid_id = self.tokenizer.vocab_size - 1
+        input_ids = [min(max(tid, 0), max_valid_id) for tid in input_ids]
+
         # Create labels (shifted input_ids for language modeling)
         labels = input_ids[1:] + [self.tokenizer.special_tokens['<pad>']]
+
+        # Validate labels are also within bounds
+        labels = [min(max(tid, 0), max_valid_id) for tid in labels]
 
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
