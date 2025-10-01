@@ -141,7 +141,7 @@ class BitGenTrainer:
         return train_loader, robot_loader
     
     def train_step(self, batch: Dict, optimizer: optim.Optimizer) -> Dict:
-        """Single training step"""
+        """Single training step with comprehensive token validation"""
         self.model.train()
         
         # Move batch to device
@@ -155,22 +155,51 @@ class BitGenTrainer:
         if target_robot is not None:
             target_robot = target_robot.to(self.device)
         
-        # Forward pass
-        with autocast():
-            outputs = self.model(
-                input_ids=input_ids,
-                images=images,
-                return_robot_selection=(target_robot is not None)
-            )
-            
-            # Compute loss
-            total_loss, loss_dict = self.loss_fn(
-                outputs,
-                labels,
-                images=images,
-                target_robot=target_robot
-            )
-        
+        # CRITICAL: Validate token IDs before model forward pass
+        max_token_id = input_ids.max().item()
+        min_token_id = input_ids.min().item()
+        vocab_size = self.config.vocab_size
+
+        self.logger.info(f"Token validation: min={min_token_id}, max={max_token_id}, vocab_size={vocab_size}")
+
+        if max_token_id >= vocab_size:
+            self.logger.error(f"CRITICAL: Token ID {max_token_id} exceeds vocab size {vocab_size}")
+            # Emergency fix: clamp all token IDs
+            input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
+            labels = torch.clamp(labels, 0, vocab_size - 1)
+            self.logger.warning(f"Applied emergency token clamping")
+
+        if min_token_id < 0:
+            self.logger.error(f"CRITICAL: Negative token ID {min_token_id}")
+            input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
+            labels = torch.clamp(labels, 0, vocab_size - 1)
+
+        # Forward pass with error handling
+        try:
+            with autocast():
+                outputs = self.model(
+                    input_ids=input_ids,
+                    images=images,
+                    return_robot_selection=(target_robot is not None)
+                )
+
+                # Compute loss
+                total_loss, loss_dict = self.loss_fn(
+                    outputs,
+                    labels,
+                    images=images,
+                    target_robot=target_robot
+                )
+        except RuntimeError as e:
+            if "device-side assert" in str(e) or "index" in str(e).lower():
+                self.logger.error(f"CUDA indexing error detected. Input shape: {input_ids.shape}")
+                self.logger.error(f"Token stats: min={input_ids.min()}, max={input_ids.max()}, vocab={vocab_size}")
+                self.logger.error(f"Sample tokens: {input_ids[0, :10].tolist()}")
+                # Re-raise with more context
+                raise RuntimeError(f"CUDA indexing error: token_max={max_token_id}, vocab_size={vocab_size}") from e
+            else:
+                raise
+
         # Backward pass
         optimizer.zero_grad()
         total_loss.backward()

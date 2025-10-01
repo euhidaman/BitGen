@@ -438,13 +438,41 @@ class BitGenModel(nn.Module):
             torch.nn.init.zeros_(module.bias)
 
     def forward(self, input_ids, images=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False):
-        """Forward pass through BitGen model with optional analysis data"""
+        """Forward pass through BitGen model with comprehensive token validation"""
         batch_size, seq_len = input_ids.shape
 
-        # Token and position embeddings
-        token_emb = self.token_embedding(input_ids)
+        # CRITICAL: Validate input tokens before any embedding operations
+        if input_ids.max() >= self.config.vocab_size or input_ids.min() < 0:
+            print(f"EMERGENCY: Token validation failed in model forward pass")
+            print(f"Token range: [{input_ids.min().item()}, {input_ids.max().item()}], vocab_size: {self.config.vocab_size}")
+            # Emergency clamp to prevent CUDA errors
+            input_ids = torch.clamp(input_ids, 0, self.config.vocab_size - 1)
+            print(f"Applied emergency clamping: [{input_ids.min().item()}, {input_ids.max().item()}]")
+
+        # Token and position embeddings with safe indexing
+        try:
+            token_emb = self.token_embedding(input_ids)
+        except RuntimeError as e:
+            if "index" in str(e).lower():
+                print(f"Token embedding failed: {e}")
+                print(f"input_ids shape: {input_ids.shape}, max: {input_ids.max()}, vocab_size: {self.config.vocab_size}")
+                raise RuntimeError(f"Token embedding indexing error: max_token={input_ids.max()}, vocab_size={self.config.vocab_size}")
+            raise
+
+        # Safe position embedding
         pos_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
-        pos_emb = self.pos_embedding(pos_ids)
+        if seq_len > self.config.max_seq_len:
+            print(f"WARNING: Sequence length {seq_len} exceeds max_seq_len {self.config.max_seq_len}")
+            pos_ids = pos_ids[:, :self.config.max_seq_len]
+
+        try:
+            pos_emb = self.pos_embedding(pos_ids)
+        except RuntimeError as e:
+            if "index" in str(e).lower():
+                print(f"Position embedding failed: {e}")
+                print(f"pos_ids shape: {pos_ids.shape}, max: {pos_ids.max()}, max_seq_len: {self.config.max_seq_len}")
+                raise RuntimeError(f"Position embedding indexing error: max_pos={pos_ids.max()}, max_seq_len={self.config.max_seq_len}")
+            raise
 
         x = self.dropout(token_emb + pos_emb)
 
@@ -623,30 +651,45 @@ class BitGenModel(nn.Module):
 
         return x + reasoning_output, reasoning_info
 
-# Factory function for different model sizes
+# Factory function for different model sizes with consistent vocab
 def create_bitgen_model(size='tiny'):
-    """Create BitGen model optimized for different embedded systems"""
+    """Create BitGen model optimized for different embedded systems with consistent vocabulary"""
 
     if size == 'nano':
         # Ultra-tiny for smallest microcontrollers
         config = BitGenConfig(
-            embed_dim=64,
-            num_layers=2,
-            num_heads=4,
+            embed_dim=128,
+            num_layers=4,
+            num_heads=8,
+            head_dim=16,
+            ffn_dim=256,
+            vocab_size=8192,  # Consistent with tiny tokenizer
             memory_size=32,
-            vocab_size=4096
+            max_seq_len=256
         )
     elif size == 'tiny':
-        # Default configuration
-        config = BitGenConfig()
-    elif size == 'small':
-        # Larger model for more capable embedded systems
+        # Default configuration - FIXED vocabulary size
         config = BitGenConfig(
             embed_dim=256,
             num_layers=6,
             num_heads=8,
+            head_dim=32,
+            ffn_dim=512,
+            vocab_size=16384,  # CRITICAL: Match this exactly with CLI config
+            memory_size=64,
+            max_seq_len=1024
+        )
+    elif size == 'small':
+        # Larger model for more capable embedded systems
+        config = BitGenConfig(
+            embed_dim=512,
+            num_layers=8,
+            num_heads=16,
+            head_dim=32,
+            ffn_dim=1024,
+            vocab_size=32768,  # CRITICAL: Match this exactly with CLI config
             memory_size=128,
-            ffn_dim=512
+            max_seq_len=2048
         )
     else:
         raise ValueError(f"Unknown model size: {size}")
