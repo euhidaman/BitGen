@@ -216,14 +216,18 @@ def train_with_monitoring(args):
 
     # Initialize monitoring
     carbon_tracker = None
-    if args.enable_carbon_tracking and CODECARBON_AVAILABLE:
-        carbon_tracker = OfflineEmissionsTracker(
-            project_name="BitGen-Training",
-            output_dir=args.monitoring_dir,
-            country_iso_code="US"
-        )
-        carbon_tracker.start()
-        print("🌍 CodeCarbon tracking enabled")
+    if args.enable_carbon_tracking:
+        try:
+            from codecarbon import OfflineEmissionsTracker
+            carbon_tracker = OfflineEmissionsTracker(
+                project_name="BitGen-Training",
+                output_dir=args.monitoring_dir,
+                country_iso_code="US"
+            )
+            carbon_tracker.start()
+            print("🌍 CodeCarbon tracking enabled")
+        except ImportError:
+            print("⚠️ CodeCarbon not available, skipping energy tracking")
 
     # Initialize FLOPS tracking
     total_flops = 0
@@ -231,50 +235,36 @@ def train_with_monitoring(args):
     training_time = 0
 
     try:
-        # Use enhanced trainer with HuggingFace and WandB integration
-        from raspberry_pi.enhanced_training import EnhancedBitGenTrainer
-        from configs.bitgen_configs import BitGenNanoConfig, BitGenTinyConfig, BitGenSmallConfig
+        # Use the available BitGen trainer
+        from src import BitGenTrainer, BitGenConfig
 
-        # Select appropriate config
+        # Create model configuration based on size
         if args.model_size == 'nano':
-            config = BitGenNanoConfig()
+            config_dict = {'hidden_size': 128, 'num_layers': 4, 'vocab_size': 8192, 'max_seq_len': 512}
         elif args.model_size == 'tiny':
-            config = BitGenTinyConfig()
-        else:
-            config = BitGenSmallConfig()
+            config_dict = {'hidden_size': 256, 'num_layers': 6, 'vocab_size': 16384, 'max_seq_len': 1024}
+        else:  # small
+            config_dict = {'hidden_size': 512, 'num_layers': 8, 'vocab_size': 32768, 'max_seq_len': 2048}
 
-        # Generate unique model name for HuggingFace
-        timestamp = time.strftime('%Y%m%d-%H%M%S')
-        hf_repo_name = args.hf_repo_name or "BitGen-Reasoning"  # Default to BitGen-Reasoning
-        wandb_run_name = f"bitgen-{args.model_size}-training-{timestamp}"
+        config = BitGenConfig(**config_dict)
 
-        # Initialize enhanced trainer with integrations
-        trainer = EnhancedBitGenTrainer(
+        # Initialize trainer
+        trainer = BitGenTrainer(
             config=config,
             model_size=args.model_size,
             output_dir=args.output_dir,
-            monitoring_dir=args.monitoring_dir,
-            use_carbon_tracking=args.enable_carbon_tracking,
-            # HuggingFace integration
-            hf_repo_name=hf_repo_name,
-            hf_organization=args.hf_organization,
-            hf_token=os.getenv("HF_TOKEN"),
-            hf_private=args.hf_private,
-            push_to_hub=args.push_to_hub,
-            # WandB integration for babylm-ntust team
-            wandb_project=args.wandb_project,
-            wandb_entity=args.wandb_entity,
-            wandb_run_name=args.wandb_run_name or wandb_run_name,
-            wandb_tags=args.wandb_tags
+            use_wandb=args.use_wandb
         )
 
-        print("🚀 Starting enhanced training with HuggingFace and WandB integration...")
-        print(f"📊 WandB Project: {args.wandb_entity}/{args.wandb_project}")
-        print(f"🤗 HuggingFace Repo: {hf_repo_name}")
+        print("🚀 Starting BitGen training...")
+        print(f"📊 Model: {args.model_size} ({config_dict['hidden_size']}d, {config_dict['num_layers']} layers)")
 
-        # Start training with comprehensive monitoring
+        if args.push_to_hub:
+            print(f"🤗 Will push to HuggingFace: {args.hf_repo_name}")
+
+        # Start training
         training_start = time.time()
-        trainer.train_with_comprehensive_monitoring(
+        trainer.train(
             coco_data_path=args.coco_data,
             robot_data_path=args.robot_data,
             num_epochs=args.num_epochs,
@@ -283,41 +273,34 @@ def train_with_monitoring(args):
         )
         training_time = time.time() - training_start
 
-        print("✅ Training completed with HuggingFace and WandB integration!")
+        print("✅ Training completed successfully!")
+        print(f"⏱️ Total training time: {training_time/3600:.2f} hours")
+
+        # Push to HuggingFace if requested
+        if args.push_to_hub and args.hf_repo_name:
+            try:
+                from src.huggingface_integration import HuggingFaceIntegration
+                hf_integration = HuggingFaceIntegration(
+                    repo_name=args.hf_repo_name,
+                    organization=args.hf_organization,
+                    private=args.hf_private
+                )
+
+                # Push the final model
+                final_checkpoint = os.path.join(args.output_dir, "bitgen_checkpoint_final.pt")
+                if os.path.exists(final_checkpoint):
+                    hf_integration.push_model(final_checkpoint, "Final trained model")
+                    print(f"🤗 Model pushed to HuggingFace: {args.hf_repo_name}")
+                else:
+                    print("⚠️ Final checkpoint not found, skipping HuggingFace upload")
+            except Exception as e:
+                print(f"⚠️ HuggingFace upload failed: {e}")
 
     except Exception as e:
-        print(f"❌ Enhanced training failed: {e}")
-        print("🔄 Using basic cross-platform trainer...")
-
-        # Use basic trainer as fallback
-        from src.basic_trainer import create_basic_trainer
-
-        hf_repo_name = args.hf_repo_name or "BitGen-Reasoning"
-
-        trainer = create_basic_trainer(
-            model_size=args.model_size,
-            output_dir=args.output_dir,
-            hf_repo_name=hf_repo_name,
-            hf_organization=args.hf_organization,
-            hf_token=os.getenv("HF_TOKEN"),
-            push_to_hub=args.push_to_hub,
-            wandb_project=args.wandb_project,
-            wandb_entity=args.wandb_entity,
-            use_wandb=args.use_wandb
-        )
-
-        print("🚀 Starting basic training...")
-        training_start = time.time()
-        trainer.train(
-            coco_data_path=args.coco_data,
-            num_epochs=args.num_epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate
-        )
-        training_time = time.time() - training_start
-
-        print("✅ Basic training completed!")
-
+        print(f"❌ Training failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return
 
     finally:
         # Stop carbon tracking
@@ -326,7 +309,102 @@ def train_with_monitoring(args):
             print("🌍 CodeCarbon tracking stopped")
 
         # Generate training report
-        generate_training_report(args, training_time, total_flops, model_flops_info, carbon_tracker)
+        try:
+            generate_training_report(args, training_time, total_flops, model_flops_info, carbon_tracker)
+        except Exception as e:
+            print(f"⚠️ Could not generate training report: {e}")
+
+def download_coco_data(args):
+    """Download COCO dataset using Kaggle API"""
+    print("📥 Downloading COCO dataset...")
+
+    try:
+        from download_coco_dataset import COCODownloader
+
+        # Initialize downloader
+        downloader = COCODownloader(args.output_dir)
+
+        # Try Kaggle download first
+        success = downloader.download_from_kaggle()
+
+        if success:
+            print("✅ COCO dataset downloaded successfully!")
+            # Process the downloaded data
+            downloader.process_dataset()
+
+            # Validate the dataset
+            if downloader.validate_dataset():
+                print("✅ Dataset validation successful!")
+                print(f"🚀 Ready to train! Use:")
+                print(f"python bitgen_cli.py train --coco_data {args.output_dir}/validated_coco.json")
+            else:
+                print("⚠️ Dataset validation issues detected - check logs")
+        else:
+            print("❌ Kaggle download failed - creating sample dataset")
+            downloader.download_sample_data()
+
+    except ImportError as e:
+        print(f"❌ Missing dependencies: {e}")
+        print("💡 Install kaggle API: pip install kaggle")
+        print("🔑 Setup Kaggle credentials: https://www.kaggle.com/docs/api")
+
+    except Exception as e:
+        print(f"❌ Error downloading dataset: {e}")
+        print("Creating basic sample dataset for testing...")
+
+        # Create basic sample data as fallback
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        sample_data = [
+            {"image_id": 1, "caption": "A robot arm picking up objects", "image_path": str(output_dir / "sample1.jpg")},
+            {"image_id": 2, "caption": "Mobile robot navigating corridor", "image_path": str(output_dir / "sample2.jpg")},
+            {"image_id": 3, "caption": "Robot performing assembly task", "image_path": str(output_dir / "sample3.jpg")}
+        ]
+
+        sample_file = output_dir / "validated_coco.json"
+        with open(sample_file, 'w') as f:
+            json.dump(sample_data, f, indent=2)
+
+        print(f"✅ Created sample dataset: {sample_file}")
+
+def generate_training_report(args, training_time, total_flops, model_flops_info, carbon_tracker):
+    """Generate comprehensive training report"""
+    report = {
+        "training_config": {
+            "model_size": args.model_size,
+            "batch_size": args.batch_size,
+            "num_epochs": args.num_epochs,
+            "learning_rate": args.learning_rate,
+        },
+        "performance": {
+            "training_time_hours": training_time / 3600,
+            "total_flops": total_flops,
+            "flops_per_second": total_flops / training_time if training_time > 0 else 0,
+        }
+    }
+
+    if carbon_tracker:
+        try:
+            emissions = carbon_tracker.final_emissions
+            report["sustainability"] = {
+                "co2_emissions_kg": emissions,
+                "energy_consumed_kwh": getattr(carbon_tracker, 'energy_consumed', 0)
+            }
+        except:
+            pass
+
+    # Save report
+    report_path = os.path.join(args.monitoring_dir, "training_report.json")
+    os.makedirs(args.monitoring_dir, exist_ok=True)
+
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2)
+
+    print(f"📊 Training report saved: {report_path}")
+    print(f"🔢 Total training FLOPS: {total_flops:,}")
+    if carbon_tracker:
+        print("🌍 CodeCarbon results saved to emissions.csv")
 
 def inference_with_metrics(args):
     """Run inference with comprehensive performance metrics"""

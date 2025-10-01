@@ -19,9 +19,9 @@ import numpy as np
 from collections import defaultdict
 
 # Import BitGen components
-from bitgen_model import BitGenModel, BitGenConfig, create_bitgen_model
-from adaptive_loss import BitGenLoss, AdaptiveLossManager, PerformanceTracker, EmbeddedTrainingUtils
-from data_loader import COCODataset, BitGenDataLoader, RobotSelectionDataset
+from .bitgen_model import BitGenModel, BitGenConfig, create_bitgen_model
+from .adaptive_loss import BitGenLoss, AdaptiveLossManager, PerformanceTracker, EmbeddedTrainingUtils
+from .data_loader import COCODataset, BitGenDataLoader, RobotSelectionDataset
 
 class BitGenTrainer:
     """Complete training system for BitGen models"""
