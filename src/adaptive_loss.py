@@ -309,7 +309,7 @@ class BitGenLoss(nn.Module):
                 labels: torch.Tensor,
                 images: Optional[torch.Tensor] = None,
                 target_robot: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
-        """Complete forward pass with adaptive loss - FIXED NaN ISSUE"""
+        """Complete forward pass with adaptive loss - ENHANCED FOR FIBER-STYLE FUSION"""
 
         losses = {}
 
@@ -326,7 +326,27 @@ class BitGenLoss(nn.Module):
             # For debugging - let's see what the actual loss value is
             print(f"DEBUG: Raw LM loss = {lm_loss.item():.6f}")
 
-        # FIXED: Simplified vision loss that won't cause NaN
+        # ENHANCED: FIBER-style contrastive learning loss (ITC)
+        if images is not None and 'contrastive_features' in model_outputs:
+            try:
+                contrastive_features = model_outputs['contrastive_features']
+                text_features = contrastive_features['text_features']
+                image_features = contrastive_features['image_features']
+                temperature = contrastive_features['temperature']
+
+                # Compute FIBER-style contrastive loss
+                itc_loss = self.compute_fiber_contrastive_loss(text_features, image_features, temperature)
+
+                if not torch.isnan(itc_loss) and not torch.isinf(itc_loss):
+                    losses['contrastive_itc'] = itc_loss
+                    print(f"DEBUG: Contrastive ITC loss = {itc_loss.item():.6f}")
+                else:
+                    print("WARNING: Contrastive ITC loss is NaN/Inf, skipping")
+
+            except Exception as e:
+                print(f"WARNING: Contrastive loss computation failed: {e}")
+
+        # ENHANCED: Vision-text alignment loss (improved)
         if images is not None:
             try:
                 # Much simpler vision loss - just use the mean of images as a regularization term
@@ -345,6 +365,16 @@ class BitGenLoss(nn.Module):
                 print(f"WARNING: Vision loss computation failed: {e}")
                 # Skip vision loss if it fails
 
+        # Robot selection loss
+        if 'robot_selection' in model_outputs and model_outputs['robot_selection'] is not None and target_robot is not None:
+            try:
+                robot_loss = self.robot_selection_accuracy_loss(model_outputs['robot_selection'], target_robot)
+                if not torch.isnan(robot_loss) and not torch.isinf(robot_loss):
+                    losses['robot_selection'] = robot_loss
+                    print(f"DEBUG: Robot selection loss = {robot_loss.item():.6f}")
+            except Exception as e:
+                print(f"WARNING: Robot selection loss computation failed: {e}")
+
         # SIMPLIFIED: Just use the language modeling loss as primary
         if 'language_modeling' in losses:
             total_loss = losses['language_modeling']
@@ -354,8 +384,16 @@ class BitGenLoss(nn.Module):
                 if loss_name != 'language_modeling':
                     # Check for NaN/Inf before adding
                     if not torch.isnan(loss_value) and not torch.isinf(loss_value):
-                        total_loss = total_loss + loss_value * 0.1  # Smaller weight for secondary losses
-                        print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f}")
+                        # Weight different losses appropriately
+                        if 'contrastive' in loss_name:
+                            weight = 0.2  # Higher weight for contrastive learning
+                        elif 'robot' in loss_name:
+                            weight = 0.1  # Lower weight for robot selection
+                        else:
+                            weight = 0.1  # Default weight for other losses
+
+                        total_loss = total_loss + loss_value * weight
+                        print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f} (weight={weight})")
                     else:
                         print(f"WARNING: Skipping {loss_name} due to NaN/Inf")
         else:
@@ -387,95 +425,22 @@ class BitGenLoss(nn.Module):
 
         return total_loss, loss_dict
 
-class PerformanceTracker:
-    """Track training performance across different modalities"""
+    def compute_fiber_contrastive_loss(self, text_features: torch.Tensor,
+                                     image_features: torch.Tensor,
+                                     temperature: torch.Tensor) -> torch.Tensor:
+        """FIBER-style Image-Text Contrastive (ITC) loss"""
+        batch_size = text_features.size(0)
 
-    def __init__(self, window_size: int = 1000):
-        self.window_size = window_size
-        self.metrics_history = defaultdict(lambda: deque(maxlen=window_size))
-        self.step_count = 0
+        # Compute similarity matrix
+        logits_per_text = torch.matmul(text_features, image_features.T) / temperature
+        logits_per_image = logits_per_text.T
 
-    def update(self, metrics: Dict[str, float]):
-        """Update performance metrics"""
-        self.step_count += 1
+        # Labels for contrastive learning (diagonal matching)
+        labels = torch.arange(batch_size, device=text_features.device)
 
-        for metric_name, value in metrics.items():
-            if not (torch.isnan(torch.tensor(value)) or torch.isinf(torch.tensor(value))):
-                self.metrics_history[metric_name].append(value)
+        # Compute symmetric contrastive loss
+        text_loss = F.cross_entropy(logits_per_text, labels)
+        image_loss = F.cross_entropy(logits_per_image, labels)
 
-    def get_recent_average(self, metric_name: str, steps: int = 100) -> float:
-        """Get recent average of a metric"""
-        if metric_name not in self.metrics_history:
-            return 0.0
+        return (text_loss + image_loss) / 2
 
-        history = list(self.metrics_history[metric_name])
-        if len(history) == 0:
-            return 0.0
-
-        recent_history = history[-steps:] if len(history) >= steps else history
-        return sum(recent_history) / len(recent_history)
-
-    def get_trend(self, metric_name: str, steps: int = 100) -> str:
-        """Get trend direction for a metric"""
-        if len(self.metrics_history[metric_name]) < 20:
-            return "stable"
-
-        history = list(self.metrics_history[metric_name])
-        recent = history[-steps//2:] if len(history) >= steps else history[len(history)//2:]
-        older = history[-steps:-steps//2] if len(history) >= steps else history[:len(history)//2]
-
-        if not recent or not older:
-            return "stable"
-
-        recent_avg = sum(recent) / len(recent)
-        older_avg = sum(older) / len(older)
-
-        relative_change = abs(recent_avg - older_avg) / (older_avg + 1e-8)
-
-        if relative_change < 0.05:
-            return "stable"
-        elif recent_avg > older_avg:
-            return "increasing"
-        else:
-            return "decreasing"
-
-    def get_summary(self) -> Dict:
-        """Get performance summary"""
-        summary = {}
-
-        for metric_name in self.metrics_history.keys():
-            summary[metric_name] = {
-                'current': self.get_recent_average(metric_name, 10),
-                'recent_100': self.get_recent_average(metric_name, 100),
-                'trend': self.get_trend(metric_name),
-                'history_length': len(self.metrics_history[metric_name])
-            }
-
-        return summary
-
-# Memory-efficient training utilities for embedded systems
-class EmbeddedTrainingUtils:
-    """Utilities for memory-efficient training on resource-constrained systems"""
-
-    @staticmethod
-    def compute_memory_usage():
-        """Compute current memory usage"""
-        import psutil
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        return {
-            'rss_mb': memory_info.rss / (1024 * 1024),
-            'vms_mb': memory_info.vms / (1024 * 1024)
-        }
-
-    @staticmethod
-    def gradient_accumulation_steps(target_batch_size: int, max_memory_mb: int = 512) -> int:
-        """Calculate optimal gradient accumulation steps for memory constraints"""
-        # Rough heuristic: each sample uses ~1MB during training
-        max_batch_size = max(1, max_memory_mb // 4)  # Conservative estimate
-        return max(1, target_batch_size // max_batch_size)
-
-    @staticmethod
-    def should_checkpoint_gradients(model_size_mb: float, available_memory_mb: float) -> bool:
-        """Determine if gradient checkpointing should be used"""
-        return model_size_mb * 2 > available_memory_mb * 0.7  # Use 70% threshold

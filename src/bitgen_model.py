@@ -251,64 +251,187 @@ class AttentionSink(nn.Module):
         return output, new_cache
 
 class CrossModalFusion(nn.Module):
-    """FIBER-inspired cross-modal fusion for image-text understanding"""
+    """FIBER-inspired advanced cross-modal fusion for image-text understanding"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
         self.embed_dim = config.embed_dim
         self.vision_embed_dim = config.vision_embed_dim
+        self.num_fuse_layers = config.fusion_layers
 
-        # Vision encoder (simplified DinoV2-like)
-        self.vision_encoder = nn.Sequential(
-            BitNetLinear(3 * 14 * 14, config.vision_embed_dim),  # Patch embedding
-            nn.ReLU(),
-            BitNetLinear(config.vision_embed_dim, config.embed_dim)
+        # FIBER-style vision encoder with patch embeddings
+        self.patch_size = 16  # Standard patch size
+        self.num_patches = (224 // self.patch_size) ** 2  # Assuming 224x224 images
+
+        self.patch_embed = BitNetLinear(3 * self.patch_size * self.patch_size, config.vision_embed_dim)
+        self.vision_pos_embed = nn.Parameter(torch.randn(1, self.num_patches, config.vision_embed_dim))
+
+        # Vision transformer layers (simplified)
+        self.vision_layers = nn.ModuleList([
+            AttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
+        ])
+
+        # FIBER-style cross-modal transforms
+        self.cross_modal_text_transform = BitNetLinear(config.embed_dim, config.embed_dim)
+        self.cross_modal_image_transform = BitNetLinear(config.vision_embed_dim, config.embed_dim)
+
+        # Contrastive learning transforms (ITC)
+        self.cross_modal_text_transform_itc = BitNetLinear(config.embed_dim, config.embed_dim)
+        self.cross_modal_image_transform_itc = BitNetLinear(config.vision_embed_dim, config.embed_dim)
+
+        # FIBER-style poolers
+        self.cross_modal_text_pooler = nn.Sequential(
+            BitNetLinear(config.embed_dim, config.embed_dim),
+            nn.Tanh()
+        )
+        self.cross_modal_image_pooler = nn.Sequential(
+            BitNetLinear(config.embed_dim, config.embed_dim),
+            nn.Tanh()
         )
 
-        # Cross-modal attention
-        self.text_to_vision_attn = AttentionSink(config)
-        self.vision_to_text_attn = AttentionSink(config)
+        # ITC poolers for contrastive learning
+        self.cross_modal_text_pooler_itc = nn.Sequential(
+            BitNetLinear(config.embed_dim, config.embed_dim),
+            nn.Tanh()
+        )
+        self.cross_modal_image_pooler_itc = nn.Sequential(
+            BitNetLinear(config.embed_dim, config.embed_dim),
+            nn.Tanh()
+        )
 
-        # Fusion layers
+        # Cross-modal attention layers (FIBER-style progressive fusion)
+        self.cross_modal_att_layers = nn.ModuleList([
+            BitNetLinear(config.embed_dim, config.embed_dim // 2)
+            for _ in range(self.num_fuse_layers)
+        ])
+
+        # Temperature parameter for contrastive learning
+        self.temperature = nn.Parameter(torch.ones([]) * 0.07)
+
+        # Fusion MLP
         self.fusion_mlp = nn.Sequential(
             BitNetLinear(config.embed_dim * 2, config.ffn_dim),
             nn.ReLU(),
+            nn.Dropout(0.1),
             BitNetLinear(config.ffn_dim, config.embed_dim)
         )
 
-    def encode_vision(self, images):
-        """Encode images with quantized vision backbone"""
+        # Average pooling for image features
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
+
+    def encode_vision_fiber_style(self, images):
+        """FIBER-style vision encoding with patch embeddings and transformer layers"""
         batch_size, channels, height, width = images.shape
 
-        # Simple patch extraction (14x14 patches for efficiency)
-        patches = F.adaptive_avg_pool2d(images, (14, 14))
-        patches = patches.view(batch_size, -1)
+        # Patch embedding (similar to FIBER's approach)
+        # Resize image to 224x224 and create patches
+        images_resized = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
 
-        # Vision encoding with quantization
-        vision_features = self.vision_encoder(patches)
-        return vision_features.unsqueeze(1)  # [B, 1, embed_dim]
+        # Extract patches
+        patches = F.unfold(images_resized, kernel_size=self.patch_size, stride=self.patch_size)
+        patches = patches.transpose(1, 2)  # [B, num_patches, patch_dim]
 
-    def forward(self, text_embeddings, images=None):
-        """Cross-modal fusion of text and vision"""
+        # Patch embedding
+        patch_embeds = self.patch_embed(patches.view(batch_size, self.num_patches, -1))
+
+        # Add positional embeddings
+        patch_embeds = patch_embeds + self.vision_pos_embed
+
+        # Apply vision transformer layers
+        for layer in self.vision_layers:
+            patch_embeds, _ = layer(patch_embeds)
+
+        return patch_embeds  # [B, num_patches, vision_embed_dim]
+
+    def forward(self, text_embeddings, images=None, return_contrastive_features=False):
+        """FIBER-style cross-modal fusion with progressive attention"""
         if images is None:
             return text_embeddings
 
-        # Encode vision
-        vision_features = self.encode_vision(images)
+        batch_size, seq_len, embed_dim = text_embeddings.shape
 
-        # Cross-modal attention
-        text_attended, _ = self.text_to_vision_attn(
-            torch.cat([text_embeddings, vision_features], dim=1)
-        )
+        # Encode vision with FIBER-style approach
+        image_embeds = self.encode_vision_fiber_style(images)  # [B, num_patches, vision_embed_dim]
 
-        # Take only text part
-        text_attended = text_attended[:, :-1, :]
+        # Transform to common embedding space
+        image_embeds = self.cross_modal_image_transform(image_embeds)  # [B, num_patches, embed_dim]
+        text_embeds = self.cross_modal_text_transform(text_embeddings)  # [B, seq_len, embed_dim]
 
-        # Fusion
-        fused = torch.cat([text_embeddings, text_attended], dim=-1)
-        output = self.fusion_mlp(fused)
+        # FIBER-style progressive cross-modal attention fusion
+        fused_text = text_embeds.clone()
 
-        return output
+        for i, cross_att_layer in enumerate(self.cross_modal_att_layers):
+            # Apply cross-attention from text to image (similar to FIBER's encoder-decoder approach)
+            # Simplified cross-attention mechanism
+
+            # Query from text, Key-Value from image
+            q = fused_text  # [B, seq_len, embed_dim]
+            k = v = cross_att_layer(image_embeds)  # [B, num_patches, embed_dim//2]
+
+            # Expand k, v to match text embedding dimension
+            k = torch.cat([k, k], dim=-1)  # [B, num_patches, embed_dim]
+            v = torch.cat([v, v], dim=-1)  # [B, num_patches, embed_dim]
+
+            # Simplified attention computation
+            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(embed_dim)
+            attn_weights = F.softmax(attn_scores, dim=-1)
+
+            # Apply attention to values
+            cross_attended = torch.matmul(attn_weights, v)  # [B, seq_len, embed_dim]
+
+            # Residual connection
+            fused_text = fused_text + cross_attended * 0.1  # Small weight for stability
+
+        # Final fusion
+        # Create image summary for concatenation
+        avg_image_features = self.avgpool(image_embeds.transpose(1, 2)).view(batch_size, 1, embed_dim)
+        avg_image_features = avg_image_features.expand(-1, seq_len, -1)
+
+        # Concatenate and fuse
+        concatenated = torch.cat([fused_text, avg_image_features], dim=-1)
+        fused_output = self.fusion_mlp(concatenated)
+
+        # Generate contrastive features if requested (for ITC loss)
+        if return_contrastive_features:
+            # Text features for contrastive learning
+            text_itc = self.cross_modal_text_transform_itc(text_embeddings)
+            text_cls = self.cross_modal_text_pooler_itc(text_itc[:, 0:1])  # Use first token as CLS
+            text_cls = F.normalize(text_cls.squeeze(1), dim=-1)
+
+            # Image features for contrastive learning
+            image_itc = self.cross_modal_image_transform_itc(image_embeds)
+            image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
+            image_cls = self.cross_modal_image_pooler_itc(image_avg)
+            image_cls = F.normalize(image_cls.squeeze(1), dim=-1)
+
+            return fused_output, {
+                'text_features': text_cls,
+                'image_features': image_cls,
+                'temperature': self.temperature
+            }
+
+        return fused_output
+
+    def compute_contrastive_loss(self, text_features, image_features, temperature):
+        """FIBER-style contrastive loss computation"""
+        batch_size = text_features.size(0)
+
+        # Compute similarity matrix
+        logits_per_text = torch.matmul(text_features, image_features.T) / temperature
+        logits_per_image = logits_per_text.T
+
+        # Labels for contrastive learning (diagonal)
+        labels = torch.arange(batch_size, device=text_features.device)
+
+        # Compute losses
+        text_loss = F.cross_entropy(logits_per_text, labels)
+        image_loss = F.cross_entropy(logits_per_image, labels)
+
+        return (text_loss + image_loss) / 2
+
+    def encode_vision(self, images):
+        """Legacy method for backward compatibility"""
+        return self.encode_vision_fiber_style(images)
 
 class ReasoningModule(nn.Module):
     """Tiny-R1 inspired reasoning module for embedded systems"""
@@ -479,8 +602,13 @@ class BitGenModel(nn.Module):
         # Episodic memory integration with analysis data
         x, memory_info = self.episodic_memory(x)
 
-        # Cross-modal fusion with images
-        x = self.cross_modal_fusion(x, images)
+        # Cross-modal fusion with images - ENHANCED FOR FIBER-STYLE FUSION
+        contrastive_features = None
+        if images is not None:
+            # Get contrastive features for loss computation
+            x, contrastive_features = self.cross_modal_fusion(x, images, return_contrastive_features=True)
+        else:
+            x = self.cross_modal_fusion(x, images)
 
         # Multi-layer attention with sinks - collect attention weights for analysis
         new_cache = []
@@ -530,6 +658,10 @@ class BitGenModel(nn.Module):
             'robot_selection': robot_probs,
             'attention_cache': new_cache
         }
+
+        # Add contrastive features if available
+        if contrastive_features is not None:
+            outputs['contrastive_features'] = contrastive_features
 
         # Add analysis data if requested
         if return_analysis_data:
