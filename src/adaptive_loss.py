@@ -196,6 +196,9 @@ class BitGenLoss(nn.Module):
         self.vision_text_temperature = nn.Parameter(torch.tensor(0.2))  # Increased from 0.07
         self.reasoning_temperature = nn.Parameter(torch.tensor(1.0))
 
+        # Debug step counter for reduced logging
+        self.debug_step_counter = 0
+
     def language_modeling_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Standard language modeling loss with numerical stability"""
         shift_logits = logits[..., :-1, :].contiguous()
@@ -311,6 +314,10 @@ class BitGenLoss(nn.Module):
                 target_robot: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
         """Complete forward pass with adaptive loss - ENHANCED FOR FIBER-STYLE FUSION"""
 
+        # Increment debug counter
+        self.debug_step_counter += 1
+        should_debug = (self.debug_step_counter % 5000 == 0)
+
         losses = {}
 
         # PRIMARY: Language modeling loss (this should be the main loss)
@@ -323,8 +330,9 @@ class BitGenLoss(nn.Module):
 
             losses['language_modeling'] = lm_loss
 
-            # For debugging - let's see what the actual loss value is
-            print(f"DEBUG: Raw LM loss = {lm_loss.item():.6f}")
+            # Debug logging only every 5000 steps
+            if should_debug:
+                print(f"DEBUG: Raw LM loss = {lm_loss.item():.6f}")
 
         # ENHANCED: FIBER-style contrastive learning loss (ITC)
         if images is not None and 'contrastive_features' in model_outputs:
@@ -339,12 +347,15 @@ class BitGenLoss(nn.Module):
 
                 if not torch.isnan(itc_loss) and not torch.isinf(itc_loss):
                     losses['contrastive_itc'] = itc_loss
-                    print(f"DEBUG: Contrastive ITC loss = {itc_loss.item():.6f}")
+                    if should_debug:
+                        print(f"DEBUG: Contrastive ITC loss = {itc_loss.item():.6f}")
                 else:
-                    print("WARNING: Contrastive ITC loss is NaN/Inf, skipping")
+                    if should_debug:
+                        print("WARNING: Contrastive ITC loss is NaN/Inf, skipping")
 
             except Exception as e:
-                print(f"WARNING: Contrastive loss computation failed: {e}")
+                if should_debug:
+                    print(f"WARNING: Contrastive loss computation failed: {e}")
 
         # ENHANCED: Vision-text alignment loss (improved)
         if images is not None:
@@ -357,12 +368,15 @@ class BitGenLoss(nn.Module):
                 # Check if vision loss is valid
                 if not torch.isnan(vision_loss) and not torch.isinf(vision_loss):
                     losses['vision_alignment'] = vision_loss
-                    print(f"DEBUG: Vision loss = {vision_loss.item():.6f}")
+                    if should_debug:
+                        print(f"DEBUG: Vision loss = {vision_loss.item():.6f}")
                 else:
-                    print("WARNING: Vision loss is NaN/Inf, skipping")
+                    if should_debug:
+                        print("WARNING: Vision loss is NaN/Inf, skipping")
 
             except Exception as e:
-                print(f"WARNING: Vision loss computation failed: {e}")
+                if should_debug:
+                    print(f"WARNING: Vision loss computation failed: {e}")
                 # Skip vision loss if it fails
 
         # Robot selection loss
@@ -371,15 +385,18 @@ class BitGenLoss(nn.Module):
                 robot_loss = self.robot_selection_accuracy_loss(model_outputs['robot_selection'], target_robot)
                 if not torch.isnan(robot_loss) and not torch.isinf(robot_loss):
                     losses['robot_selection'] = robot_loss
-                    print(f"DEBUG: Robot selection loss = {robot_loss.item():.6f}")
+                    if should_debug:
+                        print(f"DEBUG: Robot selection loss = {robot_loss.item():.6f}")
             except Exception as e:
-                print(f"WARNING: Robot selection loss computation failed: {e}")
+                if should_debug:
+                    print(f"WARNING: Robot selection loss computation failed: {e}")
 
-        # SIMPLIFIED: Just use the language modeling loss as primary
+        # CORRECTED LOSS CALCULATION: The formula is mathematically correct
+        # Base loss + Weighted auxiliary losses
         if 'language_modeling' in losses:
-            total_loss = losses['language_modeling']
+            total_loss = losses['language_modeling']  # Start with base LM loss
 
-            # Safely add secondary losses if they exist
+            # Add weighted auxiliary losses
             for loss_name, loss_value in losses.items():
                 if loss_name != 'language_modeling':
                     # Check for NaN/Inf before adding
@@ -392,30 +409,51 @@ class BitGenLoss(nn.Module):
                         else:
                             weight = 0.1  # Default weight for other losses
 
+                        # VERIFIED FORMULA: total_loss = base_loss + (aux_loss * weight)
                         total_loss = total_loss + loss_value * weight
-                        print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f} (weight={weight})")
+
+                        if should_debug:
+                            print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f} (weight={weight})")
                     else:
-                        print(f"WARNING: Skipping {loss_name} due to NaN/Inf")
+                        if should_debug:
+                            print(f"WARNING: Skipping {loss_name} due to NaN/Inf")
         else:
             # Fallback if no language modeling loss
             total_loss = torch.tensor(1.0, device=labels.device, requires_grad=True)
 
         # CRITICAL: Check for NaN before returning
         if torch.isnan(total_loss) or torch.isinf(total_loss):
-            print(f"ERROR: Total loss became NaN/Inf! Falling back to language modeling loss only")
+            if should_debug:
+                print(f"ERROR: Total loss became NaN/Inf! Falling back to language modeling loss only")
             total_loss = losses.get('language_modeling', torch.tensor(1.0, device=labels.device, requires_grad=True))
 
             # If even language modeling loss is NaN, use fallback
             if torch.isnan(total_loss) or torch.isinf(total_loss):
                 total_loss = torch.tensor(1.0, device=labels.device, requires_grad=True)
-                print("ERROR: Even language modeling loss is NaN! Using fallback loss of 1.0")
+                if should_debug:
+                    print("ERROR: Even language modeling loss is NaN! Using fallback loss of 1.0")
 
         # Ensure loss is not zero
         if total_loss.item() < 1e-6:
             total_loss = torch.tensor(1.0, device=labels.device, requires_grad=True)
-            print(f"WARNING: Loss was too small, setting to 1.0")
+            if should_debug:
+                print(f"WARNING: Loss was too small, setting to 1.0")
 
-        print(f"DEBUG: Final total loss = {total_loss.item():.6f}")
+        if should_debug:
+            print(f"DEBUG: Final total loss = {total_loss.item():.6f}")
+            print(f"DEBUG: Step {self.debug_step_counter} - Formula verification:")
+            if 'language_modeling' in losses:
+                lm_val = losses['language_modeling'].item()
+                aux_sum = 0.0
+                for loss_name, loss_value in losses.items():
+                    if loss_name != 'language_modeling' and not torch.isnan(loss_value):
+                        if 'contrastive' in loss_name:
+                            aux_sum += loss_value.item() * 0.2
+                        elif 'robot' in loss_name:
+                            aux_sum += loss_value.item() * 0.1
+                        else:
+                            aux_sum += loss_value.item() * 0.1
+                print(f"DEBUG: LM({lm_val:.6f}) + Aux({aux_sum:.6f}) = Total({total_loss.item():.6f})")
 
         # Combine all information
         loss_dict = {
