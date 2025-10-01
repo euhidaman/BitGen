@@ -187,35 +187,53 @@ class BitGenLoss(nn.Module):
         # Initialize adaptive loss manager
         self.adaptive_loss = AdaptiveLossManager()
 
-        # Loss functions
-        self.ce_loss = nn.CrossEntropyLoss(ignore_index=-100)
+        # Loss functions with label smoothing for stability
+        self.ce_loss = nn.CrossEntropyLoss(ignore_index=-100, label_smoothing=0.1)
         self.mse_loss = nn.MSELoss()
         self.cosine_loss = nn.CosineEmbeddingLoss()
 
-        # Temperature parameters for different losses
-        self.vision_text_temperature = nn.Parameter(torch.tensor(0.07))
+        # Temperature parameters with safer initialization
+        self.vision_text_temperature = nn.Parameter(torch.tensor(0.2))  # Increased from 0.07
         self.reasoning_temperature = nn.Parameter(torch.tensor(1.0))
 
     def language_modeling_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Standard language modeling loss"""
+        """Standard language modeling loss with numerical stability"""
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
+
+        # Check for invalid logits
+        if torch.isnan(shift_logits).any() or torch.isinf(shift_logits).any():
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+
+        # Clamp logits to prevent extreme values
+        shift_logits = torch.clamp(shift_logits, min=-50, max=50)
 
         return self.ce_loss(shift_logits.view(-1, self.vocab_size), shift_labels.view(-1))
 
     def vision_text_alignment_loss(self, text_features: torch.Tensor,
                                  vision_features: torch.Tensor) -> torch.Tensor:
-        """CLIP-style vision-text alignment loss"""
+        """CLIP-style vision-text alignment loss with stability checks"""
         if vision_features is None:
-            return torch.tensor(0.0, device=text_features.device)
+            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
 
-        # Normalize features
-        text_features = F.normalize(text_features.mean(dim=1), dim=-1)
-        vision_features = F.normalize(vision_features.squeeze(1), dim=-1)
+        # Check for invalid features
+        if torch.isnan(text_features).any() or torch.isnan(vision_features).any():
+            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
+
+        # Normalize features with epsilon to prevent division by zero
+        text_features = F.normalize(text_features.mean(dim=1), dim=-1, eps=1e-8)
+        vision_features = F.normalize(vision_features.squeeze(1), dim=-1, eps=1e-8)
+
+        # Clamp temperature to prevent division by very small numbers
+        temperature = torch.clamp(self.vision_text_temperature, min=0.1, max=5.0)
 
         # Compute similarity matrix
-        logits_per_text = torch.matmul(text_features, vision_features.T) / self.vision_text_temperature
+        logits_per_text = torch.matmul(text_features, vision_features.T) / temperature
         logits_per_vision = logits_per_text.T
+
+        # Clamp logits for stability
+        logits_per_text = torch.clamp(logits_per_text, min=-50, max=50)
+        logits_per_vision = torch.clamp(logits_per_vision, min=-50, max=50)
 
         # Symmetric loss
         batch_size = text_features.size(0)
@@ -233,33 +251,44 @@ class BitGenLoss(nn.Module):
 
     def reasoning_consistency_loss(self, reasoning_logits: torch.Tensor,
                                  base_logits: torch.Tensor) -> torch.Tensor:
-        """Ensure reasoning steps are consistent with final output"""
-        # KL divergence between reasoning and base distributions
-        reasoning_probs = F.softmax(reasoning_logits / self.reasoning_temperature, dim=-1)
-        base_probs = F.softmax(base_logits / self.reasoning_temperature, dim=-1)
+        """Ensure reasoning steps are consistent with final output - numerically stable"""
+        # Check for invalid logits
+        if torch.isnan(reasoning_logits).any() or torch.isnan(base_logits).any():
+            return torch.tensor(0.0, device=reasoning_logits.device, requires_grad=True)
 
-        kl_loss = F.kl_div(
-            F.log_softmax(reasoning_logits / self.reasoning_temperature, dim=-1),
-            base_probs,
-            reduction='batchmean'
-        )
+        # Clamp logits to prevent extreme values
+        reasoning_logits = torch.clamp(reasoning_logits, min=-50, max=50)
+        base_logits = torch.clamp(base_logits, min=-50, max=50)
 
-        return kl_loss
+        # Clamp temperature
+        temperature = torch.clamp(self.reasoning_temperature, min=0.5, max=2.0)
+
+        # Use MSE loss instead of KL divergence for better stability
+        reasoning_probs = F.softmax(reasoning_logits / temperature, dim=-1)
+        base_probs = F.softmax(base_logits / temperature, dim=-1)
+
+        # MSE loss is more stable than KL divergence
+        mse_loss = F.mse_loss(reasoning_probs, base_probs)
+
+        return mse_loss
 
     def episodic_memory_consistency_loss(self, memory_retrieved: torch.Tensor,
                                        current_context: torch.Tensor) -> torch.Tensor:
-        """Ensure retrieved memories are relevant to current context"""
-        # Cosine similarity loss
-        batch_size = memory_retrieved.size(0)
-        target = torch.ones(batch_size, device=memory_retrieved.device)
+        """Ensure retrieved memories are relevant to current context - numerically stable"""
+        # Check for invalid tensors
+        if torch.isnan(memory_retrieved).any() or torch.isnan(current_context).any():
+            return torch.tensor(0.0, device=memory_retrieved.device, requires_grad=True)
 
-        similarity_loss = self.cosine_loss(
-            memory_retrieved.mean(dim=1),
-            current_context.mean(dim=1),
-            target
-        )
+        # Use MSE loss instead of cosine similarity for better stability
+        retrieved_mean = memory_retrieved.mean(dim=1)
+        context_mean = current_context.mean(dim=1)
 
-        return similarity_loss
+        # Normalize for stability
+        retrieved_norm = F.normalize(retrieved_mean, dim=-1, eps=1e-8)
+        context_norm = F.normalize(context_mean, dim=-1, eps=1e-8)
+
+        # MSE loss on normalized features
+        return F.mse_loss(retrieved_norm, context_norm)
 
     def robot_selection_accuracy_loss(self, robot_probs: torch.Tensor,
                                     target_robot: torch.Tensor) -> torch.Tensor:
