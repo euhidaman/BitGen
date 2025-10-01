@@ -664,16 +664,18 @@ class BitGenModel(nn.Module):
 
         x = self.dropout(token_emb + pos_emb)
 
-        # Episodic memory integration with analysis data
-        x, memory_info = self.episodic_memory(x)
-
-        # Cross-modal fusion with images - ENHANCED FOR FIBER-STYLE FUSION
+        # CORRECTED ARCHITECTURE: Cross-modal fusion BEFORE episodic memory
+        # This ensures multimodal representations are stored in memory
         contrastive_features = None
         if images is not None:
             # Get contrastive features for loss computation
             x, contrastive_features = self.cross_modal_fusion(x, images, return_contrastive_features=True)
         else:
             x = self.cross_modal_fusion(x, images)
+
+        # CORRECTED: Episodic memory now processes MULTIMODAL representations
+        # This stores the fused text+image features, not just text
+        x, memory_info = self.episodic_memory(x)
 
         # Multi-layer attention with sinks - collect attention weights for analysis
         new_cache = []
