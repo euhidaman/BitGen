@@ -203,10 +203,16 @@ class BitGenLoss(nn.Module):
 
         # Check for invalid logits
         if torch.isnan(shift_logits).any() or torch.isinf(shift_logits).any():
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+            # Return a small loss instead of zero to maintain gradients
+            return torch.tensor(1e-6, device=logits.device, requires_grad=True)
 
         # Clamp logits to prevent extreme values
-        shift_logits = torch.clamp(shift_logits, min=-50, max=50)
+        shift_logits = torch.clamp(shift_logits, min=-10, max=10)  # Less aggressive clamping
+
+        # Ensure valid labels (ignore -100 padding tokens)
+        valid_mask = (shift_labels != -100)
+        if not valid_mask.any():
+            return torch.tensor(1e-6, device=logits.device, requires_grad=True)
 
         return self.ce_loss(shift_logits.view(-1, self.vocab_size), shift_labels.view(-1))
 

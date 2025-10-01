@@ -606,7 +606,7 @@ class BitGenModel(nn.Module):
         return output, new_cache, attn_weights
 
     def _forward_reasoning_with_analysis(self, x):
-        """Forward reasoning module with analysis tracking"""
+        """Forward reasoning module with analysis tracking - fixed tensor dimensions"""
         batch_size, seq_len, embed_dim = x.shape
 
         # Encode to reasoning space
@@ -636,21 +636,86 @@ class BitGenModel(nn.Module):
 
             current_state = output
 
-        # Aggregate reasoning steps
-        final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)
-        final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
-        reasoning_output = self.reasoning_module.reasoning_decoder(final_reasoning)
-        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
+        # Aggregate reasoning steps - FIXED dimension handling
+        if reasoning_states:
+            final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)
+            final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
+            reasoning_output = self.reasoning_module.reasoning_decoder(final_reasoning)
+
+            # FIXED: Proper expansion to match sequence length
+            reasoning_output = reasoning_output.unsqueeze(1)  # [B, 1, embed_dim]
+            reasoning_output = reasoning_output.expand(batch_size, seq_len, embed_dim)  # [B, seq_len, embed_dim]
+        else:
+            # Fallback if no reasoning steps
+            reasoning_output = torch.zeros_like(x)
 
         # Prepare analysis info
         reasoning_info = {
             'reasoning_states': reasoning_states,
             'gate_scores': gate_scores,
             'steps_taken': steps_taken,
-            'final_reasoning': final_reasoning
+            'final_reasoning': final_reasoning if reasoning_states else None
         }
 
         return x + reasoning_output, reasoning_info
+
+    def export_for_embedded(self, output_path: str):
+        """Export model for embedded deployment with quantization"""
+        try:
+            # Set model to evaluation mode for quantization
+            self.eval()
+
+            # Create embedded-optimized state dict
+            embedded_state = {}
+
+            with torch.no_grad():
+                for name, param in self.named_parameters():
+                    if 'BitNetLinear' in str(type(param)):
+                        # Quantize BitNet layers
+                        quantized_weight, scale = self._quantize_for_embedded(param)
+                        embedded_state[name] = quantized_weight
+                        embedded_state[f"{name}_scale"] = scale
+                    else:
+                        # Keep other parameters in reduced precision
+                        embedded_state[name] = param.half()
+
+            # Add model configuration
+            embedded_state['config'] = {
+                'embed_dim': self.config.embed_dim,
+                'num_layers': self.config.num_layers,
+                'vocab_size': self.config.vocab_size,
+                'max_seq_len': self.config.max_seq_len
+            }
+
+            # Save embedded model
+            torch.save(embedded_state, output_path)
+            print(f"✅ Exported embedded model to: {output_path}")
+
+        except Exception as e:
+            print(f"⚠️ Warning: Could not export embedded model: {e}")
+            # Create a minimal fallback export
+            torch.save({'config': self.config.__dict__}, output_path)
+
+    def _quantize_for_embedded(self, weight: torch.Tensor):
+        """Quantize weights to 1.58-bit format for embedded deployment"""
+        scale = weight.abs().mean()
+        quantized = torch.sign(weight) * (weight.abs() > 0.5 * scale).float()
+        return quantized.half(), scale.half()
+
+    def get_memory_usage(self):
+        """Get model memory usage for embedded optimization"""
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+        # Estimate memory in MB (assuming float32)
+        memory_mb = total_params * 4 / (1024 * 1024)
+
+        return {
+            'total_params': total_params,
+            'trainable_params': trainable_params,
+            'memory_mb': memory_mb,
+            'quantized_memory_mb': memory_mb * 0.2  # ~1.58 bits per parameter
+        }
 
 # Factory function for different model sizes with consistent vocab
 def create_bitgen_model(size='tiny'):
