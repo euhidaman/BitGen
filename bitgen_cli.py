@@ -12,11 +12,14 @@ from pathlib import Path
 
 # Import core BitGen components
 try:
-    from src import BitGen, quick_train, quick_evaluate, create_embedded_deployment
+    from src.bitgen_model import create_bitgen_model, BitGenConfig
+    from src.train_bitgen import BitGenTrainer
+    from src.data_loader import COCODataset
+    from src.adaptive_loss import BitGenLoss
     BITGEN_CORE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     BITGEN_CORE_AVAILABLE = False
-    print("Warning: Core BitGen components not available")
+    print(f"Warning: Core BitGen components not available: {e}")
 
 # GPU-focused monitoring (no Raspberry Pi dependencies)
 MONITORING_AVAILABLE = True
@@ -236,17 +239,12 @@ def train_with_monitoring(args):
 
     try:
         # Use the available BitGen trainer
-        from src import BitGenTrainer, BitGenConfig
-
-        # Create model configuration based on size
-        if args.model_size == 'nano':
-            config_dict = {'embed_dim': 128, 'num_layers': 4, 'vocab_size': 8192, 'max_seq_len': 512}
-        elif args.model_size == 'tiny':
-            config_dict = {'embed_dim': 256, 'num_layers': 6, 'vocab_size': 16384, 'max_seq_len': 1024}
-        else:  # small
-            config_dict = {'embed_dim': 512, 'num_layers': 8, 'vocab_size': 32768, 'max_seq_len': 2048}
-
-        config = BitGenConfig(**config_dict)
+        config = BitGenConfig(
+            embed_dim=256 if args.model_size == 'tiny' else (128 if args.model_size == 'nano' else 512),
+            num_layers=6 if args.model_size == 'tiny' else (4 if args.model_size == 'nano' else 8),
+            vocab_size=16384 if args.model_size == 'tiny' else (8192 if args.model_size == 'nano' else 32768),
+            max_seq_len=1024 if args.model_size == 'tiny' else (512 if args.model_size == 'nano' else 2048)
+        )
 
         # Initialize trainer
         trainer = BitGenTrainer(
@@ -257,7 +255,7 @@ def train_with_monitoring(args):
         )
 
         print("🚀 Starting BitGen training...")
-        print(f"📊 Model: {args.model_size} ({config_dict['embed_dim']}d, {config_dict['num_layers']} layers)")
+        print(f"📊 Model: {args.model_size} ({config.embed_dim}d, {config.num_layers} layers)")
 
         if args.push_to_hub:
             print(f"🤗 Will push to HuggingFace: {args.hf_repo_name}")
@@ -295,7 +293,6 @@ def train_with_monitoring(args):
                     print("⚠️ Final checkpoint not found, skipping HuggingFace upload")
             except Exception as e:
                 print(f"⚠️ HuggingFace upload failed: {e}")
-
     except Exception as e:
         print(f"❌ Training failed: {e}")
         import traceback
