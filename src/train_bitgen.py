@@ -163,12 +163,13 @@ class BitGenTrainer:
         
         return train_loader, robot_loader
     
-    def train_step(self, batch: Dict, optimizer: optim.Optimizer) -> Dict:
-        """Single training step with comprehensive token validation"""
+    def train_step(self, batch: Dict, optimizer) -> Dict:
+        """Single training step with enhanced monitoring"""
         self.model.train()
         
-        # Move batch to device
+        # Extract batch data
         input_ids = batch['input_ids'].to(self.device)
+        attention_mask = batch['attention_mask'].to(self.device)
         labels = batch['labels'].to(self.device)
         images = batch.get('images')
         if images is not None:
@@ -177,27 +178,16 @@ class BitGenTrainer:
         target_robot = batch.get('target_robot')
         if target_robot is not None:
             target_robot = target_robot.to(self.device)
-        
-        # CRITICAL: Validate token IDs before model forward pass (reduced logging)
-        max_token_id = input_ids.max().item()
-        min_token_id = input_ids.min().item()
-        vocab_size = self.config.vocab_size
 
-        # Only log if there's an actual problem
-        if max_token_id >= vocab_size or min_token_id < 0:
-            input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
-            labels = torch.clamp(labels, 0, vocab_size - 1)
-
-        # Forward pass with NaN protection
         try:
+            # Forward pass with autocast for mixed precision
             with autocast('cuda'):
                 outputs = self.model(
                     input_ids=input_ids,
-                    images=images,
-                    return_robot_selection=(target_robot is not None)
+                    attention_mask=attention_mask,
+                    images=images
                 )
 
-                # Compute loss with NaN checking
                 total_loss, loss_dict = self.loss_fn(
                     outputs,
                     labels,
@@ -219,38 +209,50 @@ class BitGenTrainer:
         except RuntimeError as e:
             if "device-side assert" in str(e) or "index" in str(e).lower():
                 self.logger.error(f"CUDA indexing error detected. Input shape: {input_ids.shape}")
-                # Return a small loss to continue training
-                return {'total_loss': 1.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+                # Return a small loss to continue training - handle None optimizer
+                lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+                return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
             else:
                 raise
-
-        # Backward pass with enhanced numerical stability
-        optimizer.zero_grad()
 
         # Check gradients before backward pass - FIXED: Don't check for zero loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):
             self.logger.error(f"Loss is NaN/Inf before backward pass: {total_loss.item()}")
-            return {'total_loss': 1.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+            lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+            return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
 
-        total_loss.backward()
-        
-        # Enhanced gradient clipping with NaN checking
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)  # Reduced from 1.0 to 0.5
+        # FIXED: Only call zero_grad if optimizer is not None
+        if optimizer is not None:
+            optimizer.zero_grad()
 
-        if torch.isnan(grad_norm) or torch.isinf(grad_norm):
-            self.logger.error(f"NaN/Inf gradients detected! Grad norm: {grad_norm}")
-            optimizer.zero_grad()  # Clear bad gradients
-            return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+        # Scale loss for gradient accumulation if optimizer is None
+        if optimizer is None:
+            # During gradient accumulation, just do backward pass without optimizer step
+            total_loss.backward()
+        else:
+            # Normal training step with optimizer
+            total_loss.backward()
 
-        if grad_norm > 10.0:  # Very large gradients
-            self.logger.warning(f"Large gradient norm detected: {grad_norm:.4f}")
+            # Enhanced gradient clipping with NaN checking
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
 
-        optimizer.step()
-        
+            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+                self.logger.error(f"NaN/Inf gradients detected! Grad norm: {grad_norm}")
+                # FIXED: Only clear gradients if optimizer is not None
+                if optimizer is not None:
+                    optimizer.zero_grad()  # Clear bad gradients
+                return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+
+            if grad_norm > 10.0:  # Very large gradients
+                self.logger.warning(f"Large gradient norm detected: {grad_norm:.4f}")
+
+            optimizer.step()
+
         # Update metrics
+        lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
         metrics = {
             'total_loss': total_loss.item(),
-            'learning_rate': optimizer.param_groups[0]['lr']
+            'learning_rate': lr
         }
         
         # Add individual loss components
