@@ -188,28 +188,31 @@ class BitGenTrainer:
                     target_robot=target_robot
                 )
 
-                # Check for NaN/inf loss and handle it
-                if torch.isnan(total_loss) or torch.isinf(total_loss) or total_loss.item() == 0.0:
+                # FIXED: Only check for actual NaN/Inf, not zero values
+                if torch.isnan(total_loss) or torch.isinf(total_loss):
                     self.logger.error(f"Invalid loss detected! Loss value: {total_loss.item()}")
                     # Create a small valid loss to maintain training
-                    total_loss = torch.tensor(0.001, device=total_loss.device, requires_grad=True)
+                    total_loss = torch.tensor(1.0, device=total_loss.device, requires_grad=True)
                     loss_dict['total_loss'] = total_loss
+                else:
+                    # DEBUG: Print the actual loss being used for training
+                    print(f"TRAINING: Using loss = {total_loss.item():.6f}")
 
         except RuntimeError as e:
             if "device-side assert" in str(e) or "index" in str(e).lower():
                 self.logger.error(f"CUDA indexing error detected. Input shape: {input_ids.shape}")
                 # Return a small loss to continue training
-                return {'total_loss': 0.001, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+                return {'total_loss': 1.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
             else:
                 raise
 
         # Backward pass with enhanced numerical stability
         optimizer.zero_grad()
 
-        # Check gradients before backward pass
+        # Check gradients before backward pass - FIXED: Don't check for zero loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):
             self.logger.error(f"Loss is NaN/Inf before backward pass: {total_loss.item()}")
-            return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+            return {'total_loss': 1.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
 
         total_loss.backward()
         
