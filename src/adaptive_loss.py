@@ -444,3 +444,102 @@ class BitGenLoss(nn.Module):
 
         return (text_loss + image_loss) / 2
 
+class PerformanceTracker:
+    """Track training performance across different modalities"""
+
+    def __init__(self, window_size: int = 1000):
+        self.window_size = window_size
+        self.metrics_history = defaultdict(lambda: deque(maxlen=window_size))
+        self.step_count = 0
+
+    def update(self, metrics: Dict[str, float]):
+        """Update performance metrics"""
+        self.step_count += 1
+
+        for metric_name, value in metrics.items():
+            if not (torch.isnan(torch.tensor(value)) or torch.isinf(torch.tensor(value))):
+                self.metrics_history[metric_name].append(value)
+
+    def get_recent_average(self, metric_name: str, steps: int = 100) -> float:
+        """Get recent average of a metric"""
+        if metric_name not in self.metrics_history:
+            return 0.0
+
+        history = list(self.metrics_history[metric_name])
+        if len(history) == 0:
+            return 0.0
+
+        recent_history = history[-steps:] if len(history) >= steps else history
+        return sum(recent_history) / len(recent_history)
+
+    def get_trend(self, metric_name: str, steps: int = 100) -> str:
+        """Get trend direction for a metric"""
+        if len(self.metrics_history[metric_name]) < 20:
+            return "stable"
+
+        history = list(self.metrics_history[metric_name])
+        recent = history[-steps//2:] if len(history) >= steps else history[len(history)//2:]
+        older = history[-steps:-steps//2] if len(history) >= steps else history[:len(history)//2]
+
+        if not recent or not older:
+            return "stable"
+
+        recent_avg = sum(recent) / len(recent)
+        older_avg = sum(older) / len(older)
+
+        relative_change = abs(recent_avg - older_avg) / (older_avg + 1e-8)
+
+        if relative_change < 0.05:
+            return "stable"
+        elif recent_avg > older_avg:
+            return "increasing"
+        else:
+            return "decreasing"
+
+    def get_summary(self) -> Dict:
+        """Get performance summary"""
+        summary = {}
+
+        for metric_name in self.metrics_history.keys():
+            summary[metric_name] = {
+                'current': self.get_recent_average(metric_name, 10),
+                'recent_100': self.get_recent_average(metric_name, 100),
+                'trend': self.get_trend(metric_name),
+                'history_length': len(self.metrics_history[metric_name])
+            }
+
+        return summary
+
+# Memory-efficient training utilities for embedded systems
+class EmbeddedTrainingUtils:
+    """Utilities for memory-efficient training on resource-constrained systems"""
+
+    @staticmethod
+    def compute_memory_usage():
+        """Compute current memory usage"""
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            return {
+                'rss_mb': memory_info.rss / (1024 * 1024),
+                'vms_mb': memory_info.vms / (1024 * 1024)
+            }
+        except ImportError:
+            # Fallback if psutil is not available
+            return {
+                'rss_mb': 0.0,
+                'vms_mb': 0.0
+            }
+
+    @staticmethod
+    def gradient_accumulation_steps(target_batch_size: int, max_memory_mb: int = 512) -> int:
+        """Calculate optimal gradient accumulation steps for memory constraints"""
+        # Rough heuristic: each sample uses ~1MB during training
+        max_batch_size = max(1, max_memory_mb // 4)  # Conservative estimate
+        return max(1, target_batch_size // max_batch_size)
+
+    @staticmethod
+    def should_checkpoint_gradients(model_size_mb: float, available_memory_mb: float) -> bool:
+        """Determine if gradient checkpointing should be used"""
+        return model_size_mb * 2 > available_memory_mb * 0.7  # Use 70% threshold
