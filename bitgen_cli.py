@@ -9,6 +9,7 @@ import sys
 import os
 import time
 from pathlib import Path
+import torch  # MISSING IMPORT - Fix for torch error
 
 # Import core BitGen components
 try:
