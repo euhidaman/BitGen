@@ -354,11 +354,11 @@ class ReasoningModule(nn.Module):
         # Aggregate reasoning steps
         final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)  # [B, 1, reasoning_dim]
 
-        # Decode back to embedding space
-        reasoning_output = self.reasoning_decoder(final_reasoning)  # [B, embed_dim]
+        # Fix: Squeeze the extra dimension before decoding
+        final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
 
-        # Broadcast to sequence length
-        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)
+        reasoning_output = self.reasoning_decoder(final_reasoning)  # [B, embed_dim]
+        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
 
         return x + reasoning_output
 
@@ -638,8 +638,9 @@ class BitGenModel(nn.Module):
 
         # Aggregate reasoning steps
         final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)
+        final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
         reasoning_output = self.reasoning_module.reasoning_decoder(final_reasoning)
-        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)
+        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
 
         # Prepare analysis info
         reasoning_info = {
