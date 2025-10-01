@@ -388,11 +388,11 @@ class CrossModalFusion(nn.Module):
         batch_size, seq_len, embed_dim = text_embeddings.shape
 
         # Encode vision with FIBER-style approach
-        image_embeds = self.encode_vision_fiber_style(images)  # [B, num_patches, vision_embed_dim]
+        original_image_embeds = self.encode_vision_fiber_style(images)  # [B, num_patches, vision_embed_dim=128]
 
         # Transform to common embedding space
-        image_embeds = self.cross_modal_image_transform(image_embeds)  # [B, num_patches, embed_dim]
-        text_embeds = self.cross_modal_text_transform(text_embeddings)  # [B, seq_len, embed_dim]
+        image_embeds = self.cross_modal_image_transform(original_image_embeds)  # [B, num_patches, embed_dim=256]
+        text_embeds = self.cross_modal_text_transform(text_embeddings)  # [B, seq_len, embed_dim=256]
 
         # FIBER-style progressive cross-modal attention fusion
         fused_text = text_embeds.clone()
@@ -435,8 +435,8 @@ class CrossModalFusion(nn.Module):
             text_cls = self.cross_modal_text_pooler_itc(text_itc[:, 0:1])  # Use first token as CLS
             text_cls = F.normalize(text_cls.squeeze(1), dim=-1)
 
-            # Image features for contrastive learning
-            image_itc = self.cross_modal_image_transform_itc(image_embeds)
+            # Image features for contrastive learning - USE ORIGINAL EMBEDDINGS
+            image_itc = self.cross_modal_image_transform_itc(original_image_embeds)  # Use original 128-dim embeddings
             image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
             image_cls = self.cross_modal_image_pooler_itc(image_avg)
             image_cls = F.normalize(image_cls.squeeze(1), dim=-1)

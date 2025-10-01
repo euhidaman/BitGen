@@ -7,7 +7,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+# Updated PyTorch AMP imports to fix deprecation warnings
+from torch.amp import GradScaler, autocast
 import os
 import json
 import logging
@@ -173,7 +174,7 @@ class BitGenTrainer:
 
         # Forward pass with NaN protection
         try:
-            with autocast():
+            with autocast('cuda'):
                 outputs = self.model(
                     input_ids=input_ids,
                     images=images,
@@ -354,8 +355,8 @@ class BitGenTrainer:
         
         # Training loop
         self.model.train()
-        scaler = GradScaler()
-        
+        scaler = GradScaler('cuda')
+
         for epoch in range(num_epochs):
             self.epoch = epoch
             epoch_metrics = defaultdict(list)
