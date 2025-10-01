@@ -288,7 +288,7 @@ class AttentionSink(nn.Module):
         return output, new_cache
 
 class CrossModalFusion(nn.Module):
-    """FIBER-inspired advanced cross-modal fusion for image-text understanding"""
+    """FIBER-inspired advanced cross-modal fusion with DINOv2 vision encoding"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
@@ -296,17 +296,28 @@ class CrossModalFusion(nn.Module):
         self.vision_embed_dim = config.vision_embed_dim
         self.num_fuse_layers = config.fusion_layers
 
-        # FIBER-style vision encoder with patch embeddings
-        self.patch_size = 16  # Standard patch size
-        self.num_patches = (224 // self.patch_size) ** 2  # Assuming 224x224 images
+        # ENHANCED: DINOv2 Vision Encoder (much better than basic patches)
+        self.use_dinov2 = True
+        try:
+            # Try to load DINOv2 - this will dramatically improve image understanding
+            import timm
+            self.dinov2_model = timm.create_model('vit_small_patch14_dinov2.lvd142m', pretrained=True)
+            self.dinov2_model.eval()  # Keep in eval mode for feature extraction
 
-        self.patch_embed = BitNetLinear(3 * self.patch_size * self.patch_size, config.vision_embed_dim)
-        self.vision_pos_embed = nn.Parameter(torch.randn(1, self.num_patches, config.vision_embed_dim))
+            # DINOv2 outputs 384 dimensions for vit_small
+            self.dinov2_dim = 384
+            self.dinov2_to_vision = BitNetLinear(self.dinov2_dim, config.vision_embed_dim)
 
-        # Vision transformer layers (simplified)
-        self.vision_layers = nn.ModuleList([
-            VisionAttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
-        ])
+            print("✅ DINOv2 vision encoder loaded - enhanced image understanding enabled!")
+
+        except ImportError:
+            print("⚠️ DINOv2 not available, falling back to basic patch embeddings")
+            self.use_dinov2 = False
+            self._init_basic_vision_encoder(config)
+
+        # Initialize basic vision encoder as fallback
+        if not self.use_dinov2:
+            self._init_basic_vision_encoder(config)
 
         # FIBER-style cross-modal transforms
         self.cross_modal_text_transform = BitNetLinear(config.embed_dim, config.embed_dim)
@@ -356,29 +367,73 @@ class CrossModalFusion(nn.Module):
         # Average pooling for image features
         self.avgpool = nn.AdaptiveAvgPool1d(1)
 
-    def encode_vision_fiber_style(self, images):
-        """FIBER-style vision encoding with patch embeddings and transformer layers"""
+    def _init_basic_vision_encoder(self, config):
+        """Initialize basic vision encoder as fallback"""
+        # FIBER-style vision encoder with patch embeddings (fallback)
+        self.patch_size = 16  # Standard patch size
+        self.num_patches = (224 // self.patch_size) ** 2  # Assuming 224x224 images
+
+        self.patch_embed = BitNetLinear(3 * self.patch_size * self.patch_size, config.vision_embed_dim)
+        self.vision_pos_embed = nn.Parameter(torch.randn(1, self.num_patches, config.vision_embed_dim))
+
+        # Vision transformer layers (simplified)
+        self.vision_layers = nn.ModuleList([
+            VisionAttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
+        ])
+
+    def encode_vision_dinov2(self, images):
+        """Enhanced DINOv2-based vision encoding - much better image understanding!"""
         batch_size, channels, height, width = images.shape
 
-        # Patch embedding (similar to FIBER's approach)
-        # Resize image to 224x224 and create patches
-        images_resized = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+        # Preprocess images for DINOv2 (expects 224x224)
+        if height != 224 or width != 224:
+            images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
 
-        # Extract patches
-        patches = F.unfold(images_resized, kernel_size=self.patch_size, stride=self.patch_size)
-        patches = patches.transpose(1, 2)  # [B, num_patches, patch_dim]
+        # Normalize for DINOv2 (ImageNet normalization)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
+        images_normalized = (images - mean) / std
 
-        # Patch embedding
-        patch_embeds = self.patch_embed(patches.view(batch_size, self.num_patches, -1))
+        # Extract DINOv2 features (no gradients to keep it frozen)
+        with torch.no_grad():
+            # DINOv2 returns patch features + CLS token
+            dinov2_features = self.dinov2_model.forward_features(images_normalized)
 
-        # Add positional embeddings
-        patch_embeds = patch_embeds + self.vision_pos_embed
+            # dinov2_features shape: [batch_size, num_patches + 1, dinov2_dim]
+            # Remove CLS token, keep only patch features
+            patch_features = dinov2_features[:, 1:, :]  # [batch_size, num_patches, dinov2_dim]
 
-        # Apply vision transformer layers
-        for layer in self.vision_layers:
-            patch_embeds, _ = layer(patch_embeds)
+        # Project DINOv2 features to our vision embedding dimension
+        vision_features = self.dinov2_to_vision(patch_features)  # [batch_size, num_patches, vision_embed_dim]
 
-        return patch_embeds  # [B, num_patches, vision_embed_dim]
+        return vision_features
+
+    def encode_vision_fiber_style(self, images):
+        """FIBER-style vision encoding with enhanced DINOv2 or fallback to basic patches"""
+        if self.use_dinov2:
+            return self.encode_vision_dinov2(images)
+        else:
+            # Fallback to basic patch embeddings
+            batch_size, channels, height, width = images.shape
+
+            # Patch embedding (basic approach)
+            images_resized = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+
+            # Extract patches
+            patches = F.unfold(images_resized, kernel_size=self.patch_size, stride=self.patch_size)
+            patches = patches.transpose(1, 2)  # [B, num_patches, patch_dim]
+
+            # Patch embedding
+            patch_embeds = self.patch_embed(patches.view(batch_size, self.num_patches, -1))
+
+            # Add positional embeddings
+            patch_embeds = patch_embeds + self.vision_pos_embed
+
+            # Apply vision transformer layers
+            for layer in self.vision_layers:
+                patch_embeds, _ = layer(patch_embeds)
+
+            return patch_embeds  # [B, num_patches, vision_embed_dim]
 
     def forward(self, text_embeddings, images=None, return_contrastive_features=False):
         """FIBER-style cross-modal fusion with progressive attention"""
