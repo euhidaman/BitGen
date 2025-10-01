@@ -288,7 +288,7 @@ class AttentionSink(nn.Module):
         return output, new_cache
 
 class CrossModalFusion(nn.Module):
-    """FIBER-inspired advanced cross-modal fusion with DINOv2 vision encoding"""
+    """FIBER-inspired advanced cross-modal fusion with mandatory DINOv2 vision encoding"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
@@ -296,28 +296,37 @@ class CrossModalFusion(nn.Module):
         self.vision_embed_dim = config.vision_embed_dim
         self.num_fuse_layers = config.fusion_layers
 
-        # ENHANCED: DINOv2 Vision Encoder (much better than basic patches)
-        self.use_dinov2 = True
+        # MANDATORY: DINOv2 Vision Encoder - no fallback allowed
         try:
-            # Try to load DINOv2 - this will dramatically improve image understanding
-            import timm
-            self.dinov2_model = timm.create_model('vit_small_patch14_dinov2.lvd142m', pretrained=True)
-            self.dinov2_model.eval()  # Keep in eval mode for feature extraction
+            from transformers import Dinov2Model, Dinov2Config
+            print("🔄 Loading facebook/dinov2-base from HuggingFace...")
 
-            # DINOv2 outputs 384 dimensions for vit_small
-            self.dinov2_dim = 384
+            # Load DINOv2-base model from HuggingFace
+            self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
+            self.dinov2_model.eval()  # Keep in eval mode for feature extraction only
+
+            # Freeze DINOv2 parameters - feature extraction only
+            for param in self.dinov2_model.parameters():
+                param.requires_grad = False
+
+            # DINOv2-base outputs 768 dimensions
+            self.dinov2_dim = 768
             self.dinov2_to_vision = BitNetLinear(self.dinov2_dim, config.vision_embed_dim)
 
-            print("✅ DINOv2 vision encoder loaded - enhanced image understanding enabled!")
+            print("✅ facebook/dinov2-base loaded successfully - frozen for feature extraction only!")
 
-        except ImportError:
-            print("⚠️ DINOv2 not available, falling back to basic patch embeddings")
-            self.use_dinov2 = False
-            self._init_basic_vision_encoder(config)
-
-        # Initialize basic vision encoder as fallback
-        if not self.use_dinov2:
-            self._init_basic_vision_encoder(config)
+        except ImportError as e:
+            raise ImportError(
+                f"❌ CRITICAL: transformers library required for DINOv2. "
+                f"Install with: pip install transformers\n"
+                f"Original error: {e}"
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"❌ CRITICAL: Failed to load facebook/dinov2-base from HuggingFace. "
+                f"Check internet connection and HuggingFace access.\n"
+                f"Original error: {e}"
+            )
 
         # FIBER-style cross-modal transforms
         self.cross_modal_text_transform = BitNetLinear(config.embed_dim, config.embed_dim)
@@ -367,22 +376,8 @@ class CrossModalFusion(nn.Module):
         # Average pooling for image features
         self.avgpool = nn.AdaptiveAvgPool1d(1)
 
-    def _init_basic_vision_encoder(self, config):
-        """Initialize basic vision encoder as fallback"""
-        # FIBER-style vision encoder with patch embeddings (fallback)
-        self.patch_size = 16  # Standard patch size
-        self.num_patches = (224 // self.patch_size) ** 2  # Assuming 224x224 images
-
-        self.patch_embed = BitNetLinear(3 * self.patch_size * self.patch_size, config.vision_embed_dim)
-        self.vision_pos_embed = nn.Parameter(torch.randn(1, self.num_patches, config.vision_embed_dim))
-
-        # Vision transformer layers (simplified)
-        self.vision_layers = nn.ModuleList([
-            VisionAttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
-        ])
-
     def encode_vision_dinov2(self, images):
-        """Enhanced DINOv2-based vision encoding - much better image understanding!"""
+        """Mandatory DINOv2-base feature extraction from HuggingFace - no fallback"""
         batch_size, channels, height, width = images.shape
 
         # Preprocess images for DINOv2 (expects 224x224)
@@ -394,46 +389,24 @@ class CrossModalFusion(nn.Module):
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
         images_normalized = (images - mean) / std
 
-        # Extract DINOv2 features (no gradients to keep it frozen)
+        # Extract DINOv2 features (frozen - no gradients for feature extraction only)
         with torch.no_grad():
-            # DINOv2 returns patch features + CLS token
-            dinov2_features = self.dinov2_model.forward_features(images_normalized)
+            # DINOv2 forward pass - feature extraction only
+            outputs = self.dinov2_model(pixel_values=images_normalized)
 
-            # dinov2_features shape: [batch_size, num_patches + 1, dinov2_dim]
-            # Remove CLS token, keep only patch features
-            patch_features = dinov2_features[:, 1:, :]  # [batch_size, num_patches, dinov2_dim]
+            # Get patch embeddings (exclude CLS token)
+            # outputs.last_hidden_state shape: [batch_size, num_patches + 1, 768]
+            patch_features = outputs.last_hidden_state[:, 1:, :]  # Remove CLS token
 
         # Project DINOv2 features to our vision embedding dimension
+        # This is the only trainable part - projection from frozen DINOv2 features
         vision_features = self.dinov2_to_vision(patch_features)  # [batch_size, num_patches, vision_embed_dim]
 
         return vision_features
 
     def encode_vision_fiber_style(self, images):
-        """FIBER-style vision encoding with enhanced DINOv2 or fallback to basic patches"""
-        if self.use_dinov2:
-            return self.encode_vision_dinov2(images)
-        else:
-            # Fallback to basic patch embeddings
-            batch_size, channels, height, width = images.shape
-
-            # Patch embedding (basic approach)
-            images_resized = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
-
-            # Extract patches
-            patches = F.unfold(images_resized, kernel_size=self.patch_size, stride=self.patch_size)
-            patches = patches.transpose(1, 2)  # [B, num_patches, patch_dim]
-
-            # Patch embedding
-            patch_embeds = self.patch_embed(patches.view(batch_size, self.num_patches, -1))
-
-            # Add positional embeddings
-            patch_embeds = patch_embeds + self.vision_pos_embed
-
-            # Apply vision transformer layers
-            for layer in self.vision_layers:
-                patch_embeds, _ = layer(patch_embeds)
-
-            return patch_embeds  # [B, num_patches, vision_embed_dim]
+        """FIBER-style vision encoding using mandatory DINOv2-base"""
+        return self.encode_vision_dinov2(images)
 
     def forward(self, text_embeddings, images=None, return_contrastive_features=False):
         """FIBER-style cross-modal fusion with progressive attention"""
