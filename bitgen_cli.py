@@ -240,11 +240,11 @@ def train_with_monitoring(args):
 
         # Create model configuration based on size
         if args.model_size == 'nano':
-            config_dict = {'hidden_size': 128, 'num_layers': 4, 'vocab_size': 8192, 'max_seq_len': 512}
+            config_dict = {'embed_dim': 128, 'num_layers': 4, 'vocab_size': 8192, 'max_seq_len': 512}
         elif args.model_size == 'tiny':
-            config_dict = {'hidden_size': 256, 'num_layers': 6, 'vocab_size': 16384, 'max_seq_len': 1024}
+            config_dict = {'embed_dim': 256, 'num_layers': 6, 'vocab_size': 16384, 'max_seq_len': 1024}
         else:  # small
-            config_dict = {'hidden_size': 512, 'num_layers': 8, 'vocab_size': 32768, 'max_seq_len': 2048}
+            config_dict = {'embed_dim': 512, 'num_layers': 8, 'vocab_size': 32768, 'max_seq_len': 2048}
 
         config = BitGenConfig(**config_dict)
 
@@ -257,7 +257,7 @@ def train_with_monitoring(args):
         )
 
         print("🚀 Starting BitGen training...")
-        print(f"📊 Model: {args.model_size} ({config_dict['hidden_size']}d, {config_dict['num_layers']} layers)")
+        print(f"📊 Model: {args.model_size} ({config_dict['embed_dim']}d, {config_dict['num_layers']} layers)")
 
         if args.push_to_hub:
             print(f"🤗 Will push to HuggingFace: {args.hf_repo_name}")

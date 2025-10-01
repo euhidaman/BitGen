@@ -29,11 +29,11 @@ class BitGen:
 
         # Create model configuration
         if model_size == 'nano':
-            config_dict = {'hidden_size': 128, 'num_layers': 4, 'vocab_size': 8192}
+            config_dict = {'embed_dim': 128, 'num_layers': 4, 'vocab_size': 8192}
         elif model_size == 'tiny':
-            config_dict = {'hidden_size': 256, 'num_layers': 6, 'vocab_size': 16384}
+            config_dict = {'embed_dim': 256, 'num_layers': 6, 'vocab_size': 16384}
         elif model_size == 'small':
-            config_dict = {'hidden_size': 512, 'num_layers': 8, 'vocab_size': 32768}
+            config_dict = {'embed_dim': 512, 'num_layers': 8, 'vocab_size': 32768}
         else:
             raise ValueError(f"Unknown model size: {model_size}")
 
