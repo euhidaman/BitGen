@@ -85,23 +85,29 @@ class BitGenTrainer:
         )
     
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with embedded-friendly settings"""
-        # Use AdamW with lower memory footprint
+        """Setup optimizer with enhanced numerical stability"""
+        # Reduce learning rate for better stability
+        stable_lr = learning_rate * 0.1  # Reduce by 10x to prevent gradient explosion
+
+        # Use AdamW with more conservative settings for numerical stability
         optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.95),
-            weight_decay=0.1,
-            eps=1e-8
+            lr=stable_lr,
+            betas=(0.9, 0.999),  # More conservative beta2
+            weight_decay=0.01,   # Reduced weight decay
+            eps=1e-8,
+            amsgrad=True        # More stable variant
         )
         
-        # Learning rate scheduler
+        # More gradual learning rate scheduler
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=1000,  # Adjust based on training steps
-            eta_min=learning_rate * 0.1
+            T_max=1000,
+            eta_min=stable_lr * 0.01  # Lower minimum LR
         )
-        
+
+        self.logger.info(f"Optimizer setup with stable learning rate: {stable_lr}")
+
         return optimizer, scheduler
     
     def setup_data_loaders(self, 
@@ -155,26 +161,19 @@ class BitGenTrainer:
         if target_robot is not None:
             target_robot = target_robot.to(self.device)
         
-        # CRITICAL: Validate token IDs before model forward pass
+        # CRITICAL: Validate token IDs before model forward pass (reduced logging)
         max_token_id = input_ids.max().item()
         min_token_id = input_ids.min().item()
         vocab_size = self.config.vocab_size
 
-        self.logger.info(f"Token validation: min={min_token_id}, max={max_token_id}, vocab_size={vocab_size}")
-
-        if max_token_id >= vocab_size:
-            self.logger.error(f"CRITICAL: Token ID {max_token_id} exceeds vocab size {vocab_size}")
-            # Emergency fix: clamp all token IDs
+        # Only log if there's an actual problem
+        if max_token_id >= vocab_size or min_token_id < 0:
+            self.logger.warning(f"Token validation issue: min={min_token_id}, max={max_token_id}, vocab_size={vocab_size}")
             input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
             labels = torch.clamp(labels, 0, vocab_size - 1)
             self.logger.warning(f"Applied emergency token clamping")
 
-        if min_token_id < 0:
-            self.logger.error(f"CRITICAL: Negative token ID {min_token_id}")
-            input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
-            labels = torch.clamp(labels, 0, vocab_size - 1)
-
-        # Forward pass with error handling
+        # Forward pass with NaN protection
         try:
             with autocast():
                 outputs = self.model(
@@ -183,13 +182,20 @@ class BitGenTrainer:
                     return_robot_selection=(target_robot is not None)
                 )
 
-                # Compute loss
+                # Compute loss with NaN checking
                 total_loss, loss_dict = self.loss_fn(
                     outputs,
                     labels,
                     images=images,
                     target_robot=target_robot
                 )
+
+                # Check for NaN/inf loss and handle it
+                if torch.isnan(total_loss) or torch.isinf(total_loss):
+                    self.logger.error(f"NaN/Inf loss detected! Loss value: {total_loss.item()}")
+                    # Skip this batch to prevent training corruption
+                    return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+
         except RuntimeError as e:
             if "device-side assert" in str(e) or "index" in str(e).lower():
                 self.logger.error(f"CUDA indexing error detected. Input shape: {input_ids.shape}")
@@ -200,13 +206,27 @@ class BitGenTrainer:
             else:
                 raise
 
-        # Backward pass
+        # Backward pass with enhanced numerical stability
         optimizer.zero_grad()
+
+        # Check gradients before backward pass
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            self.logger.error(f"Loss is NaN/Inf before backward pass: {total_loss.item()}")
+            return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+
         total_loss.backward()
         
-        # Gradient clipping for stability
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        
+        # Enhanced gradient clipping with NaN checking
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)  # Reduced from 1.0 to 0.5
+
+        if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+            self.logger.error(f"NaN/Inf gradients detected! Grad norm: {grad_norm}")
+            optimizer.zero_grad()  # Clear bad gradients
+            return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+
+        if grad_norm > 10.0:  # Very large gradients
+            self.logger.warning(f"Large gradient norm detected: {grad_norm:.4f}")
+
         optimizer.step()
         
         # Update metrics
