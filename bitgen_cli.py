@@ -260,14 +260,34 @@ def train_with_monitoring(args):
         if args.push_to_hub:
             print(f"🤗 Will push to HuggingFace: {args.hf_repo_name}")
 
-        # Start training
+        # Start training with GPU-optimized settings
         training_start = time.time()
+
+        # GPU-OPTIMIZED: Automatically scale settings for A4500/A5000 GPUs
+        optimized_batch_size = args.batch_size
+        optimized_memory_mb = 1024  # Default for small GPUs
+
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+
+            if total_vram_gb > 15:  # A4500 has 20GB, A5000 has 24GB
+                # DRAMATICALLY increase for better GPU utilization
+                optimized_batch_size = max(args.batch_size, 64)  # Minimum 64 for A4500
+                optimized_memory_mb = int(total_vram_gb * 800)  # Use 80% of VRAM
+
+                print(f"🚀 A4500/A5000 GPU OPTIMIZATION ENABLED:")
+                print(f"   Batch size: {args.batch_size} → {optimized_batch_size}")
+                print(f"   Memory limit: 1024MB → {optimized_memory_mb}MB")
+                print(f"   Target GPU utilization: >90%")
+
         trainer.train(
             coco_data_path=args.coco_data,
             robot_data_path=args.robot_data,
             num_epochs=args.num_epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate
+            batch_size=optimized_batch_size,  # Use optimized batch size
+            learning_rate=args.learning_rate,
+            max_memory_mb=optimized_memory_mb  # Use optimized memory limit
         )
         training_time = time.time() - training_start
 

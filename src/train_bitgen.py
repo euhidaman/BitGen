@@ -18,6 +18,7 @@ import wandb
 from tqdm import tqdm
 import numpy as np
 from collections import defaultdict
+import psutil
 
 # Import BitGen components
 from .bitgen_model import BitGenModel, BitGenConfig, create_bitgen_model
@@ -116,8 +117,20 @@ class BitGenTrainer:
                           robot_data_path: Optional[str] = None,
                           batch_size: int = 4,
                           num_workers: int = 2):
-        """Setup data loaders for multi-modal training"""
-        
+        """Setup data loaders for multi-modal training - OPTIMIZED FOR A4500 GPU"""
+
+        # OPTIMIZED: Detect GPU capability and adjust settings
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+            self.logger.info(f"Detected GPU: {gpu_name} with {total_memory:.1f}GB VRAM")
+
+            # Optimize for A4500/A5000 class GPUs
+            if total_memory > 15:  # A4500 has 20GB, A5000 has 24GB
+                # Increase workers for powerful GPUs
+                num_workers = min(16, psutil.cpu_count())  # Use more CPU cores
+                self.logger.info(f"GPU-optimized: Using {num_workers} data loading workers")
+
         # COCO dataset for vision-language training
         coco_dataset = COCODataset(
             coco_data_path,
@@ -131,7 +144,9 @@ class BitGenTrainer:
             shuffle=True,
             num_workers=num_workers,
             pin_memory=True,
-            drop_last=True
+            drop_last=True,
+            persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
+            prefetch_factor=4 if num_workers > 0 else None  # Prefetch more batches
         )
         
         # Robot selection dataset (if available)
@@ -142,7 +157,8 @@ class BitGenTrainer:
                 robot_dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                num_workers=num_workers
+                num_workers=num_workers,
+                persistent_workers=True if num_workers > 0 else False
             )
         
         return train_loader, robot_loader
@@ -334,27 +350,65 @@ class BitGenTrainer:
              eval_steps: int = 500,
              save_steps: int = 1000,
              max_memory_mb: int = 1024):
-        """Main training loop"""
-        
+        """Main training loop - OPTIMIZED FOR A4500 GPU"""
+
         self.logger.info("Starting BitGen training for embedded deployment")
         
+        # GPU-OPTIMIZED: Detect and optimize for A4500/A5000 class GPUs
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            self.logger.info(f"Detected GPU: {gpu_name} with {total_vram_gb:.1f}GB VRAM")
+
+            # OPTIMIZE FOR A4500: Dramatically increase utilization
+            if total_vram_gb > 15:  # A4500 has 20GB, A5000 has 24GB
+                # Increase batch size significantly for better GPU utilization
+                optimized_batch_size = max(batch_size, 32)  # Minimum 32 for A4500
+
+                # Increase memory limit to utilize more GPU memory
+                optimized_memory_mb = min(16000, int(total_vram_gb * 800))  # Use ~80% of VRAM
+
+                self.logger.info(f"🚀 A4500/A5000 OPTIMIZATION ENABLED:")
+                self.logger.info(f"   Original batch_size: {batch_size} → Optimized: {optimized_batch_size}")
+                self.logger.info(f"   Original memory_mb: {max_memory_mb} → Optimized: {optimized_memory_mb}")
+
+                batch_size = optimized_batch_size
+                max_memory_mb = optimized_memory_mb
+            else:
+                self.logger.info(f"Using standard configuration for {gpu_name}")
+
         # Check memory constraints
         memory_info = self.memory_utils.compute_memory_usage()
         self.logger.info(f"Initial memory usage: {memory_info['rss_mb']:.1f} MB")
         
-        # Calculate gradient accumulation steps for memory efficiency
-        grad_accum_steps = self.memory_utils.gradient_accumulation_steps(batch_size, max_memory_mb)
-        actual_batch_size = batch_size // grad_accum_steps
-        
-        self.logger.info(f"Using batch size: {actual_batch_size}, gradient accumulation: {grad_accum_steps}")
-        
+        # GPU-OPTIMIZED: Smart gradient accumulation for large batch processing
+        if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 15 * 1024**3:
+            # For A4500+: Use minimal gradient accumulation, maximize actual batch size
+            grad_accum_steps = max(1, batch_size // 16)  # Process larger actual batches
+            actual_batch_size = batch_size // grad_accum_steps
+
+            # Ensure we're using significant batch sizes
+            if actual_batch_size < 8:
+                actual_batch_size = 8
+                grad_accum_steps = batch_size // actual_batch_size
+        else:
+            # Conservative for smaller GPUs
+            grad_accum_steps = self.memory_utils.gradient_accumulation_steps(batch_size, max_memory_mb)
+            actual_batch_size = batch_size // grad_accum_steps
+
+        self.logger.info(f"🎯 FINAL TRAINING CONFIG:")
+        self.logger.info(f"   Effective batch size: {batch_size}")
+        self.logger.info(f"   Actual batch size: {actual_batch_size}")
+        self.logger.info(f"   Gradient accumulation: {grad_accum_steps}")
+        self.logger.info(f"   Memory limit: {max_memory_mb}MB")
+
         # Setup training components
         optimizer, scheduler = self.setup_optimizer(learning_rate)
         train_loader, robot_loader = self.setup_data_loaders(
             coco_data_path, robot_data_path, actual_batch_size
         )
         
-        # Training loop
+        # Training loop with GPU optimization
         self.model.train()
         scaler = GradScaler('cuda')
 
@@ -372,6 +426,7 @@ class BitGenTrainer:
             
             progress_bar = tqdm(data_iterator, desc=desc)
             
+            accumulated_loss = 0.0
             for step, batch_data in enumerate(progress_bar):
                 if robot_loader and isinstance(batch_data, tuple):
                     coco_batch, robot_batch = batch_data
@@ -380,51 +435,63 @@ class BitGenTrainer:
                 else:
                     batch = batch_data
                 
-                # Training step with gradient accumulation
-                step_metrics = self.train_step(batch, optimizer)
-                
-                # Update metrics
-                for key, value in step_metrics.items():
-                    epoch_metrics[key].append(value)
-                
-                # Update performance tracker
-                self.performance_tracker.update(step_metrics)
-                
-                # Update progress bar
-                progress_bar.set_postfix({
-                    'loss': f"{step_metrics['total_loss']:.4f}",
-                    'lr': f"{step_metrics['learning_rate']:.6f}"
-                })
-                
-                self.global_step += 1
-                
-                # Evaluation
-                if self.global_step % eval_steps == 0:
-                    eval_metrics = self.evaluate(train_loader)  # Use subset for speed
-                    
-                    avg_eval_loss = eval_metrics['eval_loss']
-                    self.logger.info(f"Step {self.global_step}: Eval Loss = {avg_eval_loss:.4f}")
-                    
-                    # Save best model
-                    if avg_eval_loss < self.best_loss:
-                        self.best_loss = avg_eval_loss
-                        self.save_checkpoint(optimizer, scheduler, "_best")
-                    
-                    # Log to wandb
-                    if wandb.run:
-                        wandb.log(eval_metrics, step=self.global_step)
-                
-                # Regular checkpointing
-                if self.global_step % save_steps == 0:
-                    self.save_checkpoint(optimizer, scheduler, f"_step_{self.global_step}")
-                
-                # Memory monitoring
-                if self.global_step % 100 == 0:
-                    memory_info = self.memory_utils.compute_memory_usage()
-                    if memory_info['rss_mb'] > max_memory_mb * 0.9:
-                        self.logger.warning(f"High memory usage: {memory_info['rss_mb']:.1f} MB")
-                        torch.cuda.empty_cache()  # Clear GPU cache if available
-            
+                # GPU-OPTIMIZED: Gradient accumulation for large effective batch sizes
+                with autocast('cuda'):
+                    step_metrics = self.train_step(batch, optimizer if (step + 1) % grad_accum_steps == 0 else None)
+
+                accumulated_loss += step_metrics['total_loss']
+
+                # Only step optimizer after accumulating gradients
+                if (step + 1) % grad_accum_steps == 0:
+                    # Scale loss by accumulation steps
+                    step_metrics['total_loss'] = accumulated_loss / grad_accum_steps
+                    accumulated_loss = 0.0
+
+                    # Update metrics
+                    for key, value in step_metrics.items():
+                        epoch_metrics[key].append(value)
+
+                    # Update performance tracker
+                    self.performance_tracker.update(step_metrics)
+
+                    # Update progress bar
+                    progress_bar.set_postfix({
+                        'loss': f"{step_metrics['total_loss']:.4f}",
+                        'lr': f"{step_metrics['learning_rate']:.6f}",
+                        'gpu_util': f"{self._get_gpu_utilization():.0f}%"
+                    })
+
+                    self.global_step += 1
+
+                    # Evaluation
+                    if self.global_step % eval_steps == 0:
+                        eval_metrics = self.evaluate(train_loader)  # Use subset for speed
+
+                        avg_eval_loss = eval_metrics['eval_loss']
+                        self.logger.info(f"Step {self.global_step}: Eval Loss = {avg_eval_loss:.4f}")
+
+                        # Save best model
+                        if avg_eval_loss < self.best_loss:
+                            self.best_loss = avg_eval_loss
+                            self.save_checkpoint(optimizer, scheduler, "_best")
+
+                        # Log to wandb
+                        if wandb.run:
+                            wandb.log(eval_metrics, step=self.global_step)
+
+                    # Regular checkpointing
+                    if self.global_step % save_steps == 0:
+                        self.save_checkpoint(optimizer, scheduler, f"_step_{self.global_step}")
+
+                    # GPU memory monitoring
+                    if self.global_step % 50 == 0:  # More frequent monitoring for GPU
+                        gpu_memory_used = torch.cuda.memory_allocated() / 1024**3  # GB
+                        gpu_memory_cached = torch.cuda.memory_reserved() / 1024**3  # GB
+
+                        if gpu_memory_used > total_vram_gb * 0.9:  # 90% threshold
+                            self.logger.warning(f"High GPU memory usage: {gpu_memory_used:.1f}GB/{total_vram_gb:.1f}GB")
+                            torch.cuda.empty_cache()
+
             # End of epoch
             scheduler.step()
             
@@ -432,6 +499,11 @@ class BitGenTrainer:
             epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
             self.logger.info(f"Epoch {epoch+1} completed. Avg Loss: {epoch_avg['total_loss']:.4f}")
             
+            # Log GPU utilization summary
+            gpu_util = self._get_gpu_utilization()
+            gpu_memory_used = torch.cuda.memory_allocated() / 1024**3
+            self.logger.info(f"GPU Utilization: {gpu_util:.1f}%, Memory: {gpu_memory_used:.1f}GB")
+
             if wandb.run:
                 wandb.log(epoch_avg, step=self.global_step)
         
@@ -445,6 +517,18 @@ class BitGenTrainer:
         for metric, stats in summary.items():
             self.logger.info(f"  {metric}: {stats['current']:.4f} (trend: {stats['trend']})")
     
+    def _get_gpu_utilization(self) -> float:
+        """Get current GPU utilization percentage"""
+        try:
+            import subprocess
+            result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                return float(result.stdout.strip())
+        except:
+            pass
+        return 0.0
+
     def merge_batches(self, coco_batch: Dict, robot_batch: Dict) -> Dict:
         """Merge COCO and robot selection batches"""
         merged = coco_batch.copy()
