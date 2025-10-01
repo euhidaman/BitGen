@@ -185,8 +185,45 @@ class EpisodicMemory(nn.Module):
                     self.memory_values.data[m] = (1 - weight * 0.1) * self.memory_values.data[m] + \
                                                 weight * 0.1 * values[b, best_seq_idx]
 
+class VisionAttentionSink(nn.Module):
+    """Attention layer specifically for vision processing with correct dimensions"""
+
+    def __init__(self, config: BitGenConfig):
+        super().__init__()
+        self.num_heads = config.num_heads
+        self.head_dim = config.vision_embed_dim // config.num_heads  # Use vision_embed_dim
+        self.attention_sinks = config.attention_sinks
+        self.window_size = config.window_size
+
+        # Linear projections for vision embeddings
+        self.q_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.k_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.v_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.out_proj = BitNetLinear(config.num_heads * self.head_dim, config.vision_embed_dim)
+
+    def forward(self, x, cache=None):
+        batch_size, seq_len, embed_dim = x.shape
+
+        # Project to Q, K, V
+        q = self.q_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Compute attention
+        scale = 1.0 / math.sqrt(self.head_dim)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+
+        attn_weights = F.softmax(scores, dim=-1)
+        out = torch.matmul(attn_weights, v)
+
+        # Reshape and project output
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        output = self.out_proj(out)
+
+        return output, None  # No cache for vision processing
+
 class AttentionSink(nn.Module):
-    """Attention sinks for memory-efficient long sequences on embedded systems"""
+    """Attention with sliding window and sink tokens for memory efficiency"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
@@ -268,7 +305,7 @@ class CrossModalFusion(nn.Module):
 
         # Vision transformer layers (simplified)
         self.vision_layers = nn.ModuleList([
-            AttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
+            VisionAttentionSink(config) for _ in range(2)  # 2 vision layers for efficiency
         ])
 
         # FIBER-style cross-modal transforms
