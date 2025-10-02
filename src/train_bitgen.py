@@ -8,7 +8,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 # Updated PyTorch AMP imports to fix deprecation warnings
-from torch.amp import GradScaler, autocast
+try:
+    from torch.amp import GradScaler, autocast
+except ImportError:
+    from torch.cuda.amp import GradScaler, autocast
 import os
 import json
 import logging

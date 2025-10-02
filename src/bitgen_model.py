@@ -625,7 +625,7 @@ class BitGenModel(nn.Module):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids, images=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False):
+    def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False):
         """Forward pass through BitGen model with comprehensive token validation"""
         batch_size, seq_len = input_ids.shape
 
@@ -687,7 +687,7 @@ class BitGenModel(nn.Module):
 
             # Modified to capture attention weights
             layer_output, cache, attention_weights = self._forward_attention_with_weights(
-                attention_layer, x, layer_cache
+                attention_layer, x, layer_cache, attention_mask
             )
 
             x = layer_output
@@ -756,7 +756,7 @@ class BitGenModel(nn.Module):
 
         return outputs
 
-    def _forward_attention_with_weights(self, attention_layer, x, cache):
+    def _forward_attention_with_weights(self, attention_layer, x, cache, attention_mask=None):
         """Forward attention layer and capture attention weights"""
         batch_size, seq_len, embed_dim = x.shape
 
@@ -791,6 +791,20 @@ class BitGenModel(nn.Module):
             mask = torch.triu(torch.ones(seq_len, k.size(2)), diagonal=1).bool()
             mask = mask.to(scores.device)
             scores.masked_fill_(mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+
+        # Apply attention mask if provided
+        if attention_mask is not None:
+            # Expand attention_mask to match scores dimensions [batch, heads, seq_len, key_len]
+            if attention_mask.dim() == 2:
+                # [batch, seq_len] -> [batch, 1, 1, seq_len]
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            elif attention_mask.dim() == 3:
+                # [batch, 1, seq_len] -> [batch, 1, 1, seq_len]
+                attention_mask = attention_mask.unsqueeze(1)
+            
+            # Convert attention_mask (0s and 1s) to additive mask (0s and -inf)
+            attention_mask = (1.0 - attention_mask) * -10000.0
+            scores = scores + attention_mask
 
         attn_weights = F.softmax(scores, dim=-1)
         out = torch.matmul(attn_weights, v)
