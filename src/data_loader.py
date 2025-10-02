@@ -170,6 +170,9 @@ class COCODataset(Dataset):
         max_valid_id = self.tokenizer.vocab_size - 1
         input_ids = [min(max(tid, 0), max_valid_id) for tid in input_ids]
 
+        # Create attention mask (1 for real tokens, 0 for padding)
+        attention_mask = [1 if token_id != self.tokenizer.special_tokens['<pad>'] else 0 for token_id in input_ids]
+
         # Create labels (shifted input_ids for language modeling)
         labels = input_ids[1:] + [self.tokenizer.special_tokens['<pad>']]
 
@@ -178,6 +181,7 @@ class COCODataset(Dataset):
 
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
+            'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
             'labels': torch.tensor(labels, dtype=torch.long),
             'images': image,
             'caption': caption,
@@ -253,10 +257,15 @@ class RobotSelectionDataset(Dataset):
 
         # Tokenize task description
         input_ids = self.tokenizer.encode(task_desc, max_length=128)
+
+        # Create attention mask (1 for real tokens, 0 for padding)
+        attention_mask = [1 if token_id != self.tokenizer.special_tokens['<pad>'] else 0 for token_id in input_ids]
+
         labels = input_ids[1:] + [self.tokenizer.special_tokens['<pad>']]
 
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
+            'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
             'labels': torch.tensor(labels, dtype=torch.long),
             'target_robot': torch.tensor(robot_id, dtype=torch.long),
             'task_description': task_desc,
