@@ -367,10 +367,10 @@ class BitGenTrainer:
 
             # OPTIMIZE FOR A40/A100: Maximize utilization for high-end GPUs
             if total_vram_gb > 40:  # A40 has 46GB, A100 has 40-80GB
-                # FIXED: Reduce batch size to avoid OOM, use gradient accumulation instead
-                optimized_batch_size = max(batch_size, 64)  # Reduced from 128 to 64
+                # INCREASED: Boost batch size to 96 for better GPU utilization
+                optimized_batch_size = max(batch_size, 96)  # Increased from 64 to 96
 
-                # Use less GPU memory to avoid fragmentation (up to 30GB out of 46GB)
+                # Target 30GB memory usage (65% of 46GB)
                 optimized_memory_mb = min(30000, int(total_vram_gb * 650))  # Use ~65% of VRAM
 
                 self.logger.info(f"🚀 A40/A100 OPTIMIZATION ENABLED:")
@@ -405,10 +405,10 @@ class BitGenTrainer:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
             if vram_gb > 40:  # A40/A100 class GPUs
-                # For A40+: Use gradient accumulation to simulate larger batch size
-                # Effective batch size = 64 * 2 = 128
-                grad_accum_steps = 2  # Accumulate gradients over 2 steps
-                actual_batch_size = batch_size // grad_accum_steps  # 64 / 2 = 32 per step
+                # For A40+: Increased batch size, reduced gradient accumulation
+                # Effective batch size = 96 * 1 = 96 (or with grad accum: 48 * 2 = 96)
+                grad_accum_steps = 2  # Keep at 2 for stability
+                actual_batch_size = batch_size // grad_accum_steps  # 96 / 2 = 48 per step
 
                 self.logger.info(f"💡 Using gradient accumulation for A40:")
                 self.logger.info(f"   Physical batch size: {actual_batch_size}")
