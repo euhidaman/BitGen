@@ -355,18 +355,32 @@ class BitGenTrainer:
              eval_steps: int = 500,
              save_steps: int = 1000,
              max_memory_mb: int = 1024):
-        """Main training loop - OPTIMIZED FOR A4500 GPU"""
+        """Main training loop - OPTIMIZED FOR A40 GPU"""
 
         self.logger.info("Starting BitGen training for embedded deployment")
         
-        # GPU-OPTIMIZED: Detect and optimize for A4500/A5000 class GPUs
+        # GPU-OPTIMIZED: Detect and optimize for high-end GPUs (A40, A100, etc.)
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
             self.logger.info(f"Detected GPU: {gpu_name} with {total_vram_gb:.1f}GB VRAM")
 
-            # OPTIMIZE FOR A4500: Dramatically increase utilization
-            if total_vram_gb > 15:  # A4500 has 20GB, A5000 has 24GB
+            # OPTIMIZE FOR A40/A100: Maximize utilization for high-end GPUs
+            if total_vram_gb > 40:  # A40 has 46GB, A100 has 40-80GB
+                # DRAMATICALLY increase batch size for A40
+                optimized_batch_size = max(batch_size, 128)  # Minimum 128 for A40
+
+                # Use much more GPU memory (up to 35GB out of 46GB)
+                optimized_memory_mb = min(35000, int(total_vram_gb * 750))  # Use ~75% of VRAM
+
+                self.logger.info(f"🚀 A40/A100 OPTIMIZATION ENABLED:")
+                self.logger.info(f"   Original batch_size: {batch_size} → Optimized: {optimized_batch_size}")
+                self.logger.info(f"   Original memory_mb: {max_memory_mb} → Optimized: {optimized_memory_mb}")
+
+                batch_size = optimized_batch_size
+                max_memory_mb = optimized_memory_mb
+
+            elif total_vram_gb > 15:  # A4500 has 20GB, A5000 has 24GB
                 # Increase batch size significantly for better GPU utilization
                 optimized_batch_size = max(batch_size, 32)  # Minimum 32 for A4500
 
@@ -387,17 +401,29 @@ class BitGenTrainer:
         self.logger.info(f"Initial memory usage: {memory_info['rss_mb']:.1f} MB")
         
         # GPU-OPTIMIZED: Smart gradient accumulation for large batch processing
-        if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 15 * 1024**3:
-            # For A4500+: Use minimal gradient accumulation, maximize actual batch size
-            grad_accum_steps = max(1, batch_size // 16)  # Process larger actual batches
-            actual_batch_size = batch_size // grad_accum_steps
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
-            # Ensure we're using significant batch sizes
-            if actual_batch_size < 8:
-                actual_batch_size = 8
-                grad_accum_steps = batch_size // actual_batch_size
+            if vram_gb > 40:  # A40/A100 class GPUs
+                # For A40+: Minimize gradient accumulation, maximize actual batch size
+                grad_accum_steps = 1  # Process full batches at once on A40
+                actual_batch_size = batch_size
+
+            elif vram_gb > 15:  # A4500/A5000 class GPUs
+                # For A4500+: Use minimal gradient accumulation
+                grad_accum_steps = max(1, batch_size // 16)
+                actual_batch_size = batch_size // grad_accum_steps
+
+                # Ensure we're using significant batch sizes
+                if actual_batch_size < 8:
+                    actual_batch_size = 8
+                    grad_accum_steps = batch_size // actual_batch_size
+            else:
+                # Conservative for smaller GPUs
+                grad_accum_steps = self.memory_utils.gradient_accumulation_steps(batch_size, max_memory_mb)
+                actual_batch_size = batch_size // grad_accum_steps
         else:
-            # Conservative for smaller GPUs
+            # CPU fallback
             grad_accum_steps = self.memory_utils.gradient_accumulation_steps(batch_size, max_memory_mb)
             actual_batch_size = batch_size // grad_accum_steps
 
