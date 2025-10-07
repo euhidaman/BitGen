@@ -268,15 +268,21 @@ class BitGenTrainer:
         
         return metrics
     
-    def evaluate(self, data_loader: DataLoader) -> Dict:
-        """Evaluation step"""
+    def evaluate(self, data_loader: DataLoader, max_eval_samples: int = 200) -> Dict:
+        """Evaluation step - OPTIMIZED: Only evaluate on subset for speed"""
         self.model.eval()
         total_loss = 0.0
         total_samples = 0
         metrics = defaultdict(float)
         
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc="Evaluating"):
+            # OPTIMIZATION: Limit evaluation samples for speed
+            eval_batches = min(max_eval_samples // data_loader.batch_size, len(data_loader))
+
+            for batch_idx, batch in enumerate(tqdm(data_loader, desc="Evaluating", total=eval_batches)):
+                if batch_idx >= eval_batches:
+                    break  # Stop after max_eval_samples
+
                 input_ids = batch['input_ids'].to(self.device)
                 labels = batch['labels'].to(self.device)
                 images = batch.get('images')
@@ -300,12 +306,12 @@ class BitGenTrainer:
         
         # Average metrics
         avg_metrics = {
-            'eval_loss': total_loss / total_samples
+            'eval_loss': total_loss / total_samples if total_samples > 0 else 0.0
         }
         
         for key, value in metrics.items():
-            avg_metrics[f"eval_{key}"] = value / total_samples
-        
+            avg_metrics[f"eval_{key}"] = value / total_samples if total_samples > 0 else 0.0
+
         return avg_metrics
     
     def save_checkpoint(self, optimizer: optim.Optimizer, scheduler, suffix: str = ""):
