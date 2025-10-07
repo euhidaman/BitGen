@@ -367,11 +367,11 @@ class BitGenTrainer:
 
             # OPTIMIZE FOR A40/A100: Maximize utilization for high-end GPUs
             if total_vram_gb > 40:  # A40 has 46GB, A100 has 40-80GB
-                # DRAMATICALLY increase batch size for A40
-                optimized_batch_size = max(batch_size, 128)  # Minimum 128 for A40
+                # FIXED: Reduce batch size to avoid OOM, use gradient accumulation instead
+                optimized_batch_size = max(batch_size, 64)  # Reduced from 128 to 64
 
-                # Use much more GPU memory (up to 35GB out of 46GB)
-                optimized_memory_mb = min(35000, int(total_vram_gb * 750))  # Use ~75% of VRAM
+                # Use less GPU memory to avoid fragmentation (up to 30GB out of 46GB)
+                optimized_memory_mb = min(30000, int(total_vram_gb * 650))  # Use ~65% of VRAM
 
                 self.logger.info(f"🚀 A40/A100 OPTIMIZATION ENABLED:")
                 self.logger.info(f"   Original batch_size: {batch_size} → Optimized: {optimized_batch_size}")
@@ -405,9 +405,15 @@ class BitGenTrainer:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
             if vram_gb > 40:  # A40/A100 class GPUs
-                # For A40+: Minimize gradient accumulation, maximize actual batch size
-                grad_accum_steps = 1  # Process full batches at once on A40
-                actual_batch_size = batch_size
+                # For A40+: Use gradient accumulation to simulate larger batch size
+                # Effective batch size = 64 * 2 = 128
+                grad_accum_steps = 2  # Accumulate gradients over 2 steps
+                actual_batch_size = batch_size // grad_accum_steps  # 64 / 2 = 32 per step
+
+                self.logger.info(f"💡 Using gradient accumulation for A40:")
+                self.logger.info(f"   Physical batch size: {actual_batch_size}")
+                self.logger.info(f"   Gradient accumulation steps: {grad_accum_steps}")
+                self.logger.info(f"   Effective batch size: {batch_size}")
 
             elif vram_gb > 15:  # A4500/A5000 class GPUs
                 # For A4500+: Use minimal gradient accumulation
@@ -433,6 +439,13 @@ class BitGenTrainer:
         self.logger.info(f"   Gradient accumulation: {grad_accum_steps}")
         self.logger.info(f"   Memory limit: {max_memory_mb}MB")
 
+        # MEMORY OPTIMIZATION: Enable PyTorch memory optimizations
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Set environment variable for better memory management
+            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+            self.logger.info("✅ Enabled PyTorch CUDA memory optimization")
+
         # Setup training components
         optimizer, scheduler = self.setup_optimizer(learning_rate)
         train_loader, robot_loader = self.setup_data_loaders(
@@ -447,6 +460,10 @@ class BitGenTrainer:
             self.epoch = epoch
             epoch_metrics = defaultdict(list)
             
+            # MEMORY OPTIMIZATION: Clear cache at start of each epoch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             # Combine COCO and robot data if available
             if robot_loader:
                 data_iterator = zip(train_loader, robot_loader)
@@ -514,14 +531,16 @@ class BitGenTrainer:
                     if self.global_step % save_steps == 0:
                         self.save_checkpoint(optimizer, scheduler, f"_step_{self.global_step}")
 
-                    # GPU memory monitoring
-                    if self.global_step % 50 == 0:  # More frequent monitoring for GPU
-                        gpu_memory_used = torch.cuda.memory_allocated() / 1024**3  # GB
-                        gpu_memory_cached = torch.cuda.memory_reserved() / 1024**3  # GB
+                    # GPU memory monitoring - MORE AGGRESSIVE
+                    if self.global_step % 50 == 0:
+                        if torch.cuda.is_available():
+                            gpu_memory_used = torch.cuda.memory_allocated() / 1024**3  # GB
+                            gpu_memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
 
-                        if gpu_memory_used > total_vram_gb * 0.9:  # 90% threshold
-                            self.logger.warning(f"High GPU memory usage: {gpu_memory_used:.1f}GB/{total_vram_gb:.1f}GB")
-                            torch.cuda.empty_cache()
+                            # Clear cache if memory usage is high
+                            if gpu_memory_used > total_vram_gb * 0.7:  # 70% threshold (lowered from 90%)
+                                self.logger.warning(f"High GPU memory: {gpu_memory_used:.1f}GB/{total_vram_gb:.1f}GB - clearing cache")
+                                torch.cuda.empty_cache()
 
             # End of epoch
             scheduler.step()
@@ -531,9 +550,10 @@ class BitGenTrainer:
             self.logger.info(f"Epoch {epoch+1} completed. Avg Loss: {epoch_avg['total_loss']:.4f}")
             
             # Log GPU utilization summary
-            gpu_util = self._get_gpu_utilization()
-            gpu_memory_used = torch.cuda.memory_allocated() / 1024**3
-            self.logger.info(f"GPU Utilization: {gpu_util:.1f}%, Memory: {gpu_memory_used:.1f}GB")
+            if torch.cuda.is_available():
+                gpu_util = self._get_gpu_utilization()
+                gpu_memory_used = torch.cuda.memory_allocated() / 1024**3
+                self.logger.info(f"GPU Utilization: {gpu_util:.1f}%, Memory: {gpu_memory_used:.1f}GB")
 
             if wandb.run:
                 wandb.log(epoch_avg, step=self.global_step)
