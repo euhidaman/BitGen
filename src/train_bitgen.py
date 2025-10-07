@@ -90,28 +90,36 @@ class BitGenTrainer:
         )
     
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with enhanced numerical stability"""
-        # Reduce learning rate for better stability
-        stable_lr = learning_rate * 0.1  # Reduce by 10x to prevent gradient explosion
+        """Setup optimizer with balanced stability and convergence"""
+        # Use the learning rate directly without excessive reduction
+        # Original code reduced by 10x which was too conservative
+        stable_lr = learning_rate  # Use provided LR directly
 
-        # Use AdamW with more conservative settings for numerical stability
+        # Use AdamW with balanced settings for good convergence
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=stable_lr,
-            betas=(0.9, 0.999),  # More conservative beta2
-            weight_decay=0.01,   # Reduced weight decay
+            betas=(0.9, 0.98),  # Slightly faster adaptation with beta2=0.98
+            weight_decay=0.01,
             eps=1e-8,
-            amsgrad=True        # More stable variant
+            amsgrad=False  # Standard Adam for faster convergence
         )
         
-        # More gradual learning rate scheduler
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=1000,
-            eta_min=stable_lr * 0.01  # Lower minimum LR
-        )
+        # Warmup + Cosine decay for better training dynamics
+        def lr_lambda(step):
+            warmup_steps = 500
+            if step < warmup_steps:
+                # Linear warmup
+                return step / warmup_steps
+            else:
+                # Cosine decay after warmup
+                progress = (step - warmup_steps) / max(1, 10000 - warmup_steps)
+                return 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
 
-        self.logger.info(f"Optimizer setup with stable learning rate: {stable_lr}")
+        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        self.logger.info(f"Optimizer setup with learning rate: {stable_lr}")
+        self.logger.info(f"Using warmup + cosine decay scheduler")
 
         return optimizer, scheduler
     
