@@ -137,26 +137,26 @@ class BitGenTrainer:
         self.logger.info(f"WandB logging enabled: {project}/{entity}/{run_name}")
 
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with balanced stability and convergence"""
-        # Use the learning rate directly without excessive reduction
-        stable_lr = learning_rate  # Use provided LR directly
+        """Setup optimizer with balanced stability and convergence - FIXED FOR BETTER LEARNING"""
+        # FIXED: Use higher learning rate for faster convergence (BitMar uses 3e-4)
+        stable_lr = learning_rate * 3.0  # Increase from 1e-4 to 3e-4
 
         # Use AdamW with balanced settings for good convergence
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=stable_lr,
-            betas=(0.9, 0.98),  # Slightly faster adaptation with beta2=0.98
+            betas=(0.9, 0.999),  # FIXED: Standard Adam betas for better convergence
             weight_decay=0.01,
             eps=1e-8,
-            amsgrad=False  # Standard Adam for faster convergence
+            amsgrad=False
         )
         
         # FIXED: Store total training steps for proper scheduler
         self.total_training_steps = None  # Will be set in train() method
 
-        # FIXED: Warmup + Cosine decay that reaches minimum 10% LR (never zero)
+        # FIXED: Better warmup and cosine decay schedule
         def lr_lambda(step):
-            warmup_steps = 1000  # Warmup period
+            warmup_steps = 500  # FIXED: Reduced from 1000 to 500 for faster warmup
             if step < warmup_steps:
                 # Linear warmup
                 return step / warmup_steps
@@ -175,8 +175,9 @@ class BitGenTrainer:
 
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        self.logger.info(f"Optimizer setup with learning rate: {stable_lr}")
-        self.logger.info(f"Using warmup + cosine decay scheduler (min LR: {stable_lr * 0.1})")
+        self.logger.info(f"✅ FIXED: Optimizer setup with learning rate: {stable_lr} (3x increased)")
+        self.logger.info(f"   Warmup steps: 500 (reduced for faster learning)")
+        self.logger.info(f"   Min LR: {stable_lr * 0.1}")
 
         return optimizer, scheduler
     
