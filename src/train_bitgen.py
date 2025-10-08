@@ -5,6 +5,7 @@ Main training loop for embedded microcontroller deployment
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 # Updated PyTorch AMP imports to fix deprecation warnings
@@ -76,6 +77,11 @@ class BitGenTrainer:
         self.global_step = 0
         self.epoch = 0
         self.best_loss = float('inf')
+        
+        # Robot selection confusion matrix tracking
+        self.robot_confusion_matrix = np.zeros((config.num_robots, config.num_robots))
+        self.robot_selection_history = []
+        self.robot_accuracy_per_epoch = []
         
         # Memory optimization
         self.memory_utils = EmbeddedTrainingUtils()
@@ -429,6 +435,258 @@ class BitGenTrainer:
 
         return metrics
     
+    def train_robot_selection_step(self, batch: Dict, optimizer) -> Dict:
+        """
+        Robot selection training step with chain-of-thought reasoning (Tiny-R1 style)
+        Multi-label classification with top-K robot selection
+        """
+        self.model.train()
+        step_start_time = time.time()
+
+        # Extract batch data
+        input_ids = batch['input_ids'].to(self.device)
+        attention_mask = batch['attention_mask'].to(self.device)
+        robot_labels = batch['robot_labels'].to(self.device)  # Multi-hot vector [B, num_robots]
+        selected_robots = batch.get('selected_robots', [])  # For logging
+        task_description = batch.get('task_description', [])
+
+        try:
+            # Forward pass with robot selection and reasoning traces enabled
+            with autocast('cuda'):
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_robot_selection=True,  # Enable robot selector
+                    return_analysis_data=True  # Get reasoning traces
+                )
+
+                # Extract robot selection outputs
+                robot_selection = outputs.get('robot_selection')
+                if robot_selection is None or 'all_probs' not in robot_selection:
+                    self.logger.error("Robot selection output not found!")
+                    return {'total_loss': 0.0, 'robot_accuracy': 0.0, 'skipped_batch': True}
+
+                robot_probs = robot_selection['all_probs']  # [B, num_robots]
+                top_k_indices = robot_selection['top_k_indices']  # [B, top_k]
+
+                # Multi-label binary cross-entropy loss
+                robot_loss = F.binary_cross_entropy(
+                    robot_probs, robot_labels, reduction='mean'
+                )
+
+                # Optional: Language modeling loss on task description
+                if 'logits' in outputs and 'labels' in batch:
+                    labels = batch['labels'].to(self.device)
+                    lm_loss, _ = self.loss_fn(outputs, labels, images=None)
+                    total_loss = robot_loss + 0.1 * lm_loss  # Weight LM loss lower
+                else:
+                    total_loss = robot_loss
+
+                # Check for NaN/Inf
+                if torch.isnan(total_loss) or torch.isinf(total_loss):
+                    self.logger.error(f"Invalid robot loss: {total_loss.item()}")
+                    lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+                    return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
+
+        except Exception as e:
+            self.logger.error(f"Error in robot selection training: {e}")
+            lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+            return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
+
+        # Backward pass
+        if optimizer is not None:
+            optimizer.zero_grad()
+
+        if optimizer is None:
+            total_loss.backward()
+            grad_norm = 0.0
+        else:
+            total_loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+
+            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+                self.logger.error(f"NaN/Inf gradients in robot training! Grad norm: {grad_norm}")
+                if optimizer is not None:
+                    optimizer.zero_grad()
+                return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
+
+            optimizer.step()
+
+        # Compute top-K accuracy
+        robot_accuracy = self.compute_top_k_robot_accuracy(top_k_indices, robot_labels)
+
+        # Update confusion matrix
+        self.update_robot_confusion_matrix(top_k_indices, robot_labels)
+
+        # Extract reasoning info
+        reasoning_info = outputs.get('reasoning_info', {})
+        reasoning_steps = reasoning_info.get('num_steps', 0)
+
+        # Calculate metrics
+        step_time = time.time() - step_start_time
+        batch_size = input_ids.size(0)
+        lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+
+        metrics = {
+            'total_loss': total_loss.item(),
+            'robot_loss': robot_loss.item(),
+            'robot_accuracy': robot_accuracy,
+            'reasoning_steps': reasoning_steps,
+            'learning_rate': lr,
+            'gradient_norm': grad_norm if isinstance(grad_norm, float) else grad_norm.item(),
+            'samples_per_sec': batch_size / step_time if step_time > 0 else 0,
+            'batch_type': 'robot'
+        }
+
+        # Log reasoning trace periodically (every 100 robot batches)
+        if self.global_step % 100 == 0 and len(task_description) > 0:
+            self.log_reasoning_trace(batch, outputs, robot_selection)
+
+        # WandB logging for robot selection
+        if self.wandb_monitor and optimizer is not None:
+            robot_metrics = {
+                'robot/loss': robot_loss.item(),
+                'robot/accuracy': robot_accuracy,
+                'robot/reasoning_steps': reasoning_steps,
+                'robot/top_1_confidence': robot_selection['top_k_probs'][:, 0].mean().item(),
+                'robot/top_3_confidence': robot_selection['top_k_probs'].mean().item()
+            }
+            self.wandb_monitor.wandb_run.log(robot_metrics, step=self.global_step)
+
+        return metrics
+    
+    def compute_top_k_robot_accuracy(self, top_k_indices, robot_labels):
+        """
+        Compute accuracy: What percentage of ground truth robots appear in top-K predictions?
+        """
+        batch_size = robot_labels.size(0)
+        correct_predictions = 0
+
+        for i in range(batch_size):
+            true_robot_indices = torch.where(robot_labels[i] > 0.5)[0]  # Get ground truth robots
+            predicted_indices = top_k_indices[i]  # Top-K predictions
+
+            # Check how many true robots are in top-K predictions
+            for true_idx in true_robot_indices:
+                if true_idx in predicted_indices:
+                    correct_predictions += 1
+
+        # Accuracy = (correct predictions) / (total ground truth robots)
+        total_true_robots = (robot_labels > 0.5).sum().item()
+        accuracy = correct_predictions / total_true_robots if total_true_robots > 0 else 0.0
+
+        return accuracy
+    
+    def update_robot_confusion_matrix(self, top_k_indices, robot_labels):
+        """Update confusion matrix for robot selection tracking"""
+        batch_size = robot_labels.size(0)
+
+        for i in range(batch_size):
+            true_robot_indices = torch.where(robot_labels[i] > 0.5)[0]  # Ground truth
+            predicted_indices = top_k_indices[i]  # Top-K predictions
+
+            # Update confusion matrix: true_robot x predicted_robot
+            for true_idx in true_robot_indices:
+                for pred_idx in predicted_indices:
+                    self.robot_confusion_matrix[true_idx.item(), pred_idx.item()] += 1
+    
+    def log_reasoning_trace(self, batch, outputs, robot_selection):
+        """Log chain-of-thought reasoning traces for debugging"""
+        try:
+            # Sample one example from batch
+            task_desc = batch['task_description'][0] if len(batch['task_description']) > 0 else "N/A"
+            selected_robots = batch['selected_robots'][0] if len(batch['selected_robots']) > 0 else []
+            
+            predicted_robots = robot_selection['top_k_robots'][0]
+            confidences = robot_selection['top_k_probs'][0]
+            
+            reasoning_info = outputs.get('reasoning_info', {})
+            reasoning_steps = reasoning_info.get('num_steps', 0)
+            
+            trace = f"""
+            🤔 CHAIN-OF-THOUGHT REASONING TRACE (Step {self.global_step}):
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            📝 Task Description: {task_desc[:200]}...
+            
+            💭 Reasoning Process:
+               • Reasoning Steps Taken: {reasoning_steps}
+               • Multi-step chain-of-thought enabled
+            
+            🤖 Top-3 Predicted Robots:
+               1. {predicted_robots[0]:<20} (confidence: {confidences[0]:.3f})
+               2. {predicted_robots[1]:<20} (confidence: {confidences[1]:.3f})
+               3. {predicted_robots[2]:<20} (confidence: {confidences[2]:.3f})
+            
+            ✅ Ground Truth Robots: {', '.join(selected_robots)}
+            
+            📊 Match Analysis:
+               • Correct predictions: {sum(1 for r in predicted_robots if r in selected_robots)}/3
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """
+            
+            self.logger.info(trace)
+            
+            # Log to WandB as HTML
+            if self.wandb_monitor:
+                import wandb
+                self.wandb_monitor.wandb_run.log({
+                    'reasoning_trace': wandb.Html(trace.replace('\n', '<br>').replace(' ', '&nbsp;'))
+                }, step=self.global_step)
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to log reasoning trace: {e}")
+    
+    def plot_robot_confusion_matrix(self, epoch):
+        """Plot and save confusion matrix showing robot selection accuracy"""
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            
+            # Normalize confusion matrix by row (true labels)
+            row_sums = self.robot_confusion_matrix.sum(axis=1, keepdims=True)
+            normalized_cm = np.divide(
+                self.robot_confusion_matrix, 
+                row_sums, 
+                out=np.zeros_like(self.robot_confusion_matrix, dtype=float),
+                where=row_sums != 0
+            )
+            
+            # Plot
+            plt.figure(figsize=(14, 12))
+            sns.heatmap(
+                normalized_cm,
+                xticklabels=self.config.robot_types,
+                yticklabels=self.config.robot_types,
+                annot=True, 
+                fmt='.2f', 
+                cmap='Blues',
+                cbar_kws={'label': 'Prediction Frequency'}
+            )
+            plt.title(f'Robot Selection Confusion Matrix - Epoch {epoch+1}\n(Normalized by True Labels)', 
+                     fontsize=14, fontweight='bold')
+            plt.ylabel('True Robots', fontsize=12)
+            plt.xlabel('Predicted Robots (Top-K)', fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+            plt.yticks(rotation=0)
+            plt.tight_layout()
+            
+            # Save
+            save_path = self.output_dir / f'confusion_matrix_epoch_{epoch+1}.png'
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            self.logger.info(f"📊 Saved confusion matrix: {save_path}")
+            
+            # Log to WandB
+            if self.wandb_monitor:
+                import wandb
+                self.wandb_monitor.wandb_run.log({
+                    f'robot_confusion_matrix_epoch_{epoch+1}': wandb.Image(str(save_path))
+                }, step=self.global_step)
+            
+            plt.close()
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to plot confusion matrix: {e}")
+    
     def evaluate(self, data_loader: DataLoader, max_eval_samples: int = 1000) -> Dict:
         """Evaluation step - FIXED: Use more samples for stable metrics"""
         self.model.eval()
@@ -661,17 +919,17 @@ class BitGenTrainer:
                 gpu_mem_before = torch.cuda.memory_allocated() / 1024**3
                 self.logger.info(f"   GPU memory at epoch start: {gpu_mem_before:.2f}GB")
 
-            # Combine COCO and robot data if available
+            # INTERLEAVED TRAINING: 90% COCO vision-language, 10% robot selection
+            robot_iter = iter(robot_loader) if robot_loader else None
+            
             if robot_loader:
-                data_iterator = zip(train_loader, robot_loader)
-                desc = f"Epoch {epoch+1}/{num_epochs} (Multi-modal)"
-                # FIXED: Total should be based on optimizer steps, not data loader length
-                total_iterations = len(train_loader) // grad_accum_steps
+                desc = f"Epoch {epoch+1}/{num_epochs} (90% COCO + 10% Robot Selection)"
+                self.logger.info(f"   📊 Interleaved training enabled: Every 10th batch = Robot Selection")
             else:
-                data_iterator = train_loader
                 desc = f"Epoch {epoch+1}/{num_epochs} (COCO only)"
-                # FIXED: Total should be based on optimizer steps, not data loader length
-                total_iterations = len(train_loader) // grad_accum_steps
+            
+            # FIXED: Total should be based on optimizer steps, not data loader length
+            total_iterations = len(train_loader) // grad_accum_steps
 
             # FIXED: Progress bar shows optimizer steps, not batch steps
             progress_bar = tqdm(total=total_iterations, desc=desc)
@@ -680,17 +938,35 @@ class BitGenTrainer:
             batch_count = 0
             optimizer_step_count = 0  # FIXED: Track actual optimizer steps
 
-            for step, batch_data in enumerate(data_iterator):
-                if robot_loader and isinstance(batch_data, tuple):
-                    coco_batch, robot_batch = batch_data
-                    # Merge batches for multi-task learning
-                    batch = self.merge_batches(coco_batch, robot_batch)
+            for step, coco_batch in enumerate(train_loader):
+                # INTERLEAVED TRAINING LOGIC:
+                # Every 10th batch (steps 0, 10, 20, ...) = Robot selection training
+                # Other batches (steps 1-9, 11-19, ...) = COCO vision-language training
+                if robot_iter and step % 10 == 0:
+                    # Robot selection training with chain-of-thought reasoning
+                    try:
+                        robot_batch = next(robot_iter)
+                    except StopIteration:
+                        # Restart robot iterator if exhausted
+                        robot_iter = iter(robot_loader)
+                        robot_batch = next(robot_iter)
+                    
+                    # GPU-OPTIMIZED: Gradient accumulation for robot selection
+                    with autocast('cuda'):
+                        step_metrics = self.train_robot_selection_step(
+                            robot_batch, 
+                            optimizer if (step + 1) % grad_accum_steps == 0 else None
+                        )
+                    step_metrics['batch_type'] = 'robot'
+                    
                 else:
-                    batch = batch_data
-                
-                # GPU-OPTIMIZED: Gradient accumulation for large effective batch sizes
-                with autocast('cuda'):
-                    step_metrics = self.train_step(batch, optimizer if (step + 1) % grad_accum_steps == 0 else None)
+                    # Regular vision-language training (COCO)
+                    batch = coco_batch
+                    
+                    # GPU-OPTIMIZED: Gradient accumulation for large effective batch sizes
+                    with autocast('cuda'):
+                        step_metrics = self.train_step(batch, optimizer if (step + 1) % grad_accum_steps == 0 else None)
+                    step_metrics['batch_type'] = 'coco'
 
                 accumulated_loss += step_metrics['total_loss']
 
@@ -798,6 +1074,25 @@ class BitGenTrainer:
 
             if wandb.run:
                 wandb.log(epoch_avg, step=self.global_step)
+            
+            # Plot robot selection confusion matrix at end of each epoch
+            if robot_loader:
+                self.logger.info(f"📊 Generating robot selection confusion matrix for epoch {epoch+1}...")
+                self.plot_robot_confusion_matrix(epoch)
+                
+                # Calculate and log robot accuracy for this epoch
+                total_predictions = self.robot_confusion_matrix.sum()
+                if total_predictions > 0:
+                    # Accuracy = correct predictions / total predictions
+                    correct_predictions = np.trace(self.robot_confusion_matrix)  # Diagonal sum
+                    epoch_robot_accuracy = correct_predictions / total_predictions
+                    self.robot_accuracy_per_epoch.append(epoch_robot_accuracy)
+                    self.logger.info(f"   Robot Selection Accuracy: {epoch_robot_accuracy:.2%}")
+                    
+                    if self.wandb_monitor:
+                        self.wandb_monitor.wandb_run.log({
+                            'robot/epoch_accuracy': epoch_robot_accuracy
+                        }, step=self.global_step)
         
         # Final checkpoint
         self.save_checkpoint(optimizer, scheduler, "_final")

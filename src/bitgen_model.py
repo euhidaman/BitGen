@@ -44,9 +44,35 @@ class BitGenConfig:
     reasoning_dim: int = 64
     max_reasoning_steps: int = 8
 
-    # Robot Selection
-    num_robots: int = 16
+    # Robot Selection with Explicit Types
+    robot_types: List[str] = None  # Will be populated from dataset
+    num_robots: int = 16  # Will be updated based on robot_types length
+    top_k_robots: int = 3  # Top-3 robot selection for multi-robot deployment
     robot_embed_dim: int = 32
+    
+    def __post_init__(self):
+        """Initialize robot types from multi_robot_selection_dataset.json"""
+        if self.robot_types is None:
+            # Default robot types from the dataset
+            self.robot_types = [
+                "Drone",
+                "Robot with Legs", 
+                "Robot with Wheels",
+                "Underwater Robot",
+                "Humanoid",
+                "Aerial Robot",
+                "Ground Vehicle",
+                "Manipulator",
+                "Inspection Robot",
+                "Delivery Robot",
+                "Search and Rescue",
+                "Construction Robot",
+                "Agricultural Robot",
+                "Medical Robot",
+                "Security Robot",
+                "Service Robot"
+            ]
+        self.num_robots = len(self.robot_types)
 
     # Embedded Optimizations
     max_seq_len: int = 256  # Short sequences for embedded
@@ -501,30 +527,33 @@ class CrossModalFusion(nn.Module):
         return self.encode_vision_fiber_style(images)
 
 class ReasoningModule(nn.Module):
-    """Tiny-R1 inspired reasoning module for embedded systems"""
+    """Tiny-R1 inspired Chain-of-Thought reasoning module for robot selection"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
         self.reasoning_dim = config.reasoning_dim
         self.max_steps = config.max_reasoning_steps
 
-        # Reasoning components
+        # Chain-of-thought reasoning components
         self.reasoning_encoder = BitNetLinear(config.embed_dim, config.reasoning_dim)
         self.step_processor = nn.LSTM(config.reasoning_dim, config.reasoning_dim, batch_first=True)
         self.reasoning_decoder = BitNetLinear(config.reasoning_dim, config.embed_dim)
 
-        # Step controller
+        # Step controller with confidence tracking
         self.step_gate = BitNetLinear(config.reasoning_dim, 1)
+        self.step_confidence = BitNetLinear(config.reasoning_dim, 1)
 
-    def forward(self, x):
-        """Multi-step reasoning process"""
+    def forward(self, x, return_reasoning_trace=False):
+        """Multi-step reasoning process with explicit chain-of-thought traces"""
         batch_size, seq_len, embed_dim = x.shape
 
         # Encode to reasoning space
         reasoning_input = self.reasoning_encoder(x.mean(dim=1))  # [B, reasoning_dim]
 
-        # Multi-step reasoning
+        # Store reasoning traces for chain-of-thought analysis (like tiny-r1)
         reasoning_states = []
+        reasoning_confidences = []
+        gate_scores = []
         hidden = None
 
         current_state = reasoning_input.unsqueeze(1)  # [B, 1, reasoning_dim]
@@ -532,58 +561,113 @@ class ReasoningModule(nn.Module):
         for step in range(self.max_steps):
             # Process reasoning step
             output, hidden = self.step_processor(current_state, hidden)
-            reasoning_states.append(output)
+            reasoning_states.append(output.squeeze(1))  # Store for trace
+
+            # Compute confidence for this reasoning step
+            confidence = torch.sigmoid(self.step_confidence(output.squeeze(1)))
+            reasoning_confidences.append(confidence)
 
             # Check if reasoning should continue
             gate_score = torch.sigmoid(self.step_gate(output.squeeze(1)))
+            gate_scores.append(gate_score)
+            
             if (gate_score < 0.5).all() and step > 2:  # Minimum 3 steps
                 break
 
             current_state = output
 
         # Aggregate reasoning steps
-        final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)  # [B, 1, reasoning_dim]
-
-        # Fix: Squeeze the extra dimension before decoding
-        final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
+        final_reasoning = torch.stack(reasoning_states, dim=0).mean(dim=0)  # [B, reasoning_dim]
 
         reasoning_output = self.reasoning_decoder(final_reasoning)  # [B, embed_dim]
         reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
 
+        # Return with optional reasoning trace for logging
+        if return_reasoning_trace:
+            reasoning_info = {
+                'reasoning_states': reasoning_states,  # List of tensors [B, reasoning_dim]
+                'reasoning_confidences': reasoning_confidences,  # List of confidence scores
+                'gate_scores': gate_scores,  # List of gate decisions
+                'num_steps': len(reasoning_states)  # Number of reasoning steps taken
+            }
+            return x + reasoning_output, reasoning_info
+        
         return x + reasoning_output
 
 class RobotSelector(nn.Module):
-    """Robot selection module based on task requirements"""
+    """Top-K Multi-Label Robot Selection for multi-robot deployment scenarios"""
 
     def __init__(self, config: BitGenConfig):
         super().__init__()
         self.num_robots = config.num_robots
         self.robot_embed_dim = config.robot_embed_dim
+        self.top_k = config.top_k_robots
+        self.robot_types = config.robot_types
 
-        # Robot embeddings
-        self.robot_embeddings = nn.Parameter(torch.randn(config.num_robots, config.robot_embed_dim))
+        # Learnable robot embeddings (each robot has semantic meaning)
+        self.robot_embeddings = nn.Parameter(
+            torch.randn(config.num_robots, config.robot_embed_dim)
+        )
 
-        # Selection network
+        # Selection network for multi-label classification (NOT softmax)
         self.task_encoder = BitNetLinear(config.embed_dim, config.robot_embed_dim)
-        self.selector = BitNetLinear(config.robot_embed_dim * 2, config.num_robots)
+        self.robot_scorer = BitNetLinear(config.robot_embed_dim * 2, 1)  # Binary score per robot
 
-    def forward(self, task_representation):
-        """Select best robot for given task"""
+    def forward(self, task_representation, return_top_k=True):
+        """
+        Select top-K robots for given task using multi-label classification
+        
+        Args:
+            task_representation: [B, seq_len, embed_dim] - Task/scene representation
+            return_top_k: Whether to return top-K results with robot names
+            
+        Returns:
+            If return_top_k=True: Dict with all_probs, top_k_probs, top_k_indices, top_k_robots
+            If return_top_k=False: [B, num_robots] probability tensor
+        """
         batch_size = task_representation.size(0)
 
-        # Encode task
+        # Encode task representation to robot embedding space
         task_encoded = self.task_encoder(task_representation.mean(dim=1))  # [B, robot_embed_dim]
 
-        # Compute similarity with all robots
-        similarities = []
-        for robot_emb in self.robot_embeddings:
-            combined = torch.cat([task_encoded, robot_emb.unsqueeze(0).expand(batch_size, -1)], dim=-1)
-            sim = self.selector(combined)
-            similarities.append(sim)
+        # Compute independent score for each robot (multi-label, not mutually exclusive)
+        robot_scores = []
+        for i, robot_emb in enumerate(self.robot_embeddings):
+            # Concatenate task encoding with robot embedding
+            combined = torch.cat([
+                task_encoded, 
+                robot_emb.unsqueeze(0).expand(batch_size, -1)
+            ], dim=-1)
+            # Score: how suitable is this robot for this task?
+            score = self.robot_scorer(combined).squeeze(-1)  # [B]
+            robot_scores.append(score)
 
-        robot_scores = torch.stack(similarities, dim=-1).mean(dim=1)  # [B, num_robots]
+        robot_scores = torch.stack(robot_scores, dim=1)  # [B, num_robots]
+        
+        # Use sigmoid for independent probabilities (multi-label)
+        robot_probs = torch.sigmoid(robot_scores)  # Each robot has independent probability
 
-        return F.softmax(robot_scores, dim=-1)
+        if return_top_k:
+            # Get top-K most suitable robots
+            top_k_probs, top_k_indices = torch.topk(robot_probs, k=min(self.top_k, self.num_robots), dim=1)
+            
+            # Convert indices to robot type names for interpretability
+            top_k_robots = []
+            for batch_indices in top_k_indices:
+                batch_robots = [
+                    self.robot_types[idx.item()] if idx.item() < len(self.robot_types) else f"Robot_{idx.item()}"
+                    for idx in batch_indices
+                ]
+                top_k_robots.append(batch_robots)
+            
+            return {
+                'all_probs': robot_probs,  # [B, num_robots] - All robot probabilities
+                'top_k_probs': top_k_probs,  # [B, top_k] - Top-K probabilities
+                'top_k_indices': top_k_indices,  # [B, top_k] - Top-K robot indices
+                'top_k_robots': top_k_robots  # List[List[str]] - Top-K robot names
+            }
+        
+        return robot_probs
 
 class BitGenModel(nn.Module):
     """Complete BitGen model for embedded microcontrollers"""
@@ -713,9 +797,15 @@ class BitGenModel(nn.Module):
                 all_attention_weights.append(attention_weights)
             cache_idx += 1
 
-        # Reasoning module with reasoning state tracking
+        # Reasoning module with chain-of-thought traces (Tiny-R1 style)
         reasoning_input = x
-        x, reasoning_info = self._forward_reasoning_with_analysis(x)
+        if return_robot_selection or return_analysis_data:
+            # Get reasoning traces for robot selection and logging
+            x, reasoning_info = self.reasoning_module(x, return_reasoning_trace=True)
+        else:
+            # Standard reasoning without traces
+            x = self.reasoning_module(x, return_reasoning_trace=False)
+            reasoning_info = {}
 
         # Layer normalization
         x = self.layer_norm(x)
@@ -723,24 +813,27 @@ class BitGenModel(nn.Module):
         # Output projection
         logits = self.output_projection(x)
 
-        # Robot selection with confidence tracking
-        robot_probs = None
+        # Robot selection with top-K multi-label output
+        robot_selection_output = None
         robot_info = {}
         if return_robot_selection:
-            robot_probs = self.robot_selector(x)
+            # Get top-K robots with confidence scores
+            robot_selection_output = self.robot_selector(x, return_top_k=True)
 
-            # Add robot selection analysis info
+            # Extract robot selection info for analysis
             robot_info = {
-                'robot_probabilities': robot_probs,
-                'predicted_robots': robot_probs.argmax(dim=-1),
-                'prediction_confidence': robot_probs.max(dim=-1)[0],
-                'robot_embeddings': self.robot_selector.robot_embeddings
+                'all_robot_probs': robot_selection_output['all_probs'],
+                'top_k_robot_probs': robot_selection_output['top_k_probs'],
+                'top_k_robot_indices': robot_selection_output['top_k_indices'],
+                'top_k_robot_names': robot_selection_output['top_k_robots'],
+                'robot_embeddings': self.robot_selector.robot_embeddings,
+                'reasoning_info': reasoning_info  # Include reasoning traces
             }
 
         # Prepare output
         outputs = {
             'logits': logits,
-            'robot_selection': robot_probs,
+            'robot_selection': robot_selection_output,  # Full top-K robot selection output
             'attention_cache': new_cache
         }
 
@@ -779,14 +872,19 @@ class BitGenModel(nn.Module):
                 'input_embeddings': token_emb + pos_emb,
                 'final_embeddings': x,
 
-                # Reasoning analysis
+                # Chain-of-Thought Reasoning analysis (Tiny-R1 style)
                 'reasoning_states': reasoning_info.get('reasoning_states', []),
-                'reasoning_steps_taken': reasoning_info.get('steps_taken', 0),
+                'reasoning_steps_taken': reasoning_info.get('num_steps', 0),
+                'reasoning_confidences': reasoning_info.get('reasoning_confidences', []),
                 'reasoning_gate_scores': reasoning_info.get('gate_scores', []),
 
-                # Robot selection analysis
+                # Robot selection analysis (Top-K multi-label)
                 **robot_info
             })
+        
+        # Always include reasoning info if robot selection is enabled
+        if return_robot_selection and reasoning_info:
+            outputs['reasoning_info'] = reasoning_info
 
         return outputs
 
@@ -852,59 +950,9 @@ class BitGenModel(nn.Module):
 
         return output, new_cache, attn_weights
 
-    def _forward_reasoning_with_analysis(self, x):
-        """Forward reasoning module with analysis tracking - fixed tensor dimensions"""
-        batch_size, seq_len, embed_dim = x.shape
-
-        # Encode to reasoning space
-        reasoning_input = self.reasoning_module.reasoning_encoder(x.mean(dim=1))
-
-        # Multi-step reasoning with tracking
-        reasoning_states = []
-        gate_scores = []
-        hidden = None
-
-        current_state = reasoning_input.unsqueeze(1)
-
-        steps_taken = 0
-        for step in range(self.reasoning_module.max_steps):
-            # Process reasoning step
-            output, hidden = self.reasoning_module.step_processor(current_state, hidden)
-            reasoning_states.append(output.clone())
-
-            # Check if reasoning should continue
-            gate_score = torch.sigmoid(self.reasoning_module.step_gate(output.squeeze(1)))
-            gate_scores.append(gate_score.clone())
-
-            steps_taken += 1
-
-            if (gate_score < 0.5).all() and step > 2:
-                break
-
-            current_state = output
-
-        # Aggregate reasoning steps - FIXED dimension handling
-        if reasoning_states:
-            final_reasoning = torch.stack(reasoning_states, dim=1).mean(dim=1)
-            final_reasoning = final_reasoning.squeeze(1)  # [B, reasoning_dim]
-            reasoning_output = self.reasoning_module.reasoning_decoder(final_reasoning)
-
-            # FIXED: Proper expansion to match sequence length
-            reasoning_output = reasoning_output.unsqueeze(1)  # [B, 1, embed_dim]
-            reasoning_output = reasoning_output.expand(batch_size, seq_len, embed_dim)  # [B, seq_len, embed_dim]
-        else:
-            # Fallback if no reasoning steps
-            reasoning_output = torch.zeros_like(x)
-
-        # Prepare analysis info
-        reasoning_info = {
-            'reasoning_states': reasoning_states,
-            'gate_scores': gate_scores,
-            'steps_taken': steps_taken,
-            'final_reasoning': final_reasoning if reasoning_states else None
-        }
-
-        return x + reasoning_output, reasoning_info
+    # NOTE: _forward_reasoning_with_analysis() is now deprecated
+    # Reasoning traces are now handled directly in ReasoningModule.forward() 
+    # with return_reasoning_trace=True parameter
 
     def export_for_embedded(self, output_path: str):
         """Export model for embedded deployment with quantization"""

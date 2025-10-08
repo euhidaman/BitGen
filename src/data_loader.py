@@ -211,56 +211,72 @@ class COCODataset(Dataset):
         }
 
 class RobotSelectionDataset(Dataset):
-    """Dataset for robot selection training"""
+    """Dataset for multi-label robot selection training with top-K robot outputs"""
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
+        
+        # CRITICAL: Validate required dataset file exists
+        required_file = self.data_dir / "Multi-Robot-Selection" / "multi_robot_selection_dataset.json"
+        if not required_file.exists():
+            # Try alternate path
+            required_file = self.data_dir / "multi_robot_selection_dataset.json"
+            if not required_file.exists():
+                raise FileNotFoundError(
+                    f"❌ CRITICAL ERROR: Required dataset file not found!\n"
+                    f"Expected path: {self.data_dir / 'Multi-Robot-Selection' / 'multi_robot_selection_dataset.json'}\n"
+                    f"Or: {self.data_dir / 'multi_robot_selection_dataset.json'}\n"
+                    f"Robot selection training CANNOT proceed without multi_robot_selection_dataset.json\n"
+                    f"Please ensure the dataset is downloaded and placed in the correct directory."
+                )
+        
+        self.dataset_file = required_file
         self.data = self.load_robot_data()
         self.tokenizer = BitGenTokenizer()
 
-        # Robot type mapping
+        # Robot type mapping from dataset
         self.robot_types = self.extract_robot_types()
         self.robot_to_id = {robot: idx for idx, robot in enumerate(self.robot_types)}
+        
+        print(f"✅ Loaded robot selection dataset: {len(self.data)} samples")
+        print(f"✅ Robot types found: {self.robot_types}")
 
     def load_robot_data(self) -> List[Dict]:
-        """Load robot selection data from directory"""
-        data = []
-
-        # Check for different data formats
-        json_files = list(self.data_dir.rglob("*.json"))
-
-        for json_file in json_files:
-            with open(json_file, 'r') as f:
-                file_data = json.load(f)
-
-            if isinstance(file_data, list):
-                data.extend(file_data)
-            elif isinstance(file_data, dict):
-                if 'tasks' in file_data:
-                    data.extend(file_data['tasks'])
-                else:
-                    data.append(file_data)
-
+        """Load robot selection data from multi_robot_selection_dataset.json"""
+        with open(self.dataset_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if not isinstance(data, list):
+            raise ValueError(
+                f"❌ Dataset format error: Expected list, got {type(data)}\n"
+                f"File: {self.dataset_file}"
+            )
+        
+        if len(data) == 0:
+            raise ValueError(
+                f"❌ Dataset is empty!\n"
+                f"File: {self.dataset_file}"
+            )
+        
         return data
 
     def extract_robot_types(self) -> List[str]:
-        """Extract unique robot types from data"""
+        """Extract unique robot types from multi-robot output strings"""
         robot_types = set()
 
         for item in self.data:
-            if 'robot_type' in item:
-                robot_types.add(item['robot_type'])
-            elif 'robot' in item:
-                robot_types.add(item['robot'])
-            elif 'selected_robot' in item:
-                robot_types.add(item['selected_robot'])
-
-        # Add default robot types if none found
+            # Parse "original_single_robot_output": "Drone, Robot with Legs"
+            robot_output = item.get('original_single_robot_output', '')
+            if robot_output:
+                # Split by comma and extract individual robot names
+                robots = [r.strip() for r in robot_output.split(',')]
+                robot_types.update(robots)
+        
         if not robot_types:
-            robot_types = {
-                'manipulator', 'mobile_base', 'quadruped', 'humanoid',
-                'aerial_drone', 'ground_vehicle', 'gripper_robot', 'inspection_robot'
-            }
+            raise ValueError(
+                f"❌ No robot types found in dataset!\n"
+                f"Check 'original_single_robot_output' field in {self.dataset_file}"
+            )
 
         return sorted(list(robot_types))
 
@@ -273,10 +289,18 @@ class RobotSelectionDataset(Dataset):
         # Extract task description
         task_desc = item.get('task_description', item.get('description', item.get('task', '')))
 
-        # Extract robot selection
-        robot_type = item.get('robot_type', item.get('robot', item.get('selected_robot', 'manipulator')))
-        robot_id = self.robot_to_id.get(robot_type, 0)
-
+        # Parse multi-robot output: "Drone, Robot with Legs, Humanoid"
+        robot_output = item.get('original_single_robot_output', '')
+        selected_robots = [r.strip() for r in robot_output.split(',')] if robot_output else []
+        
+        # Create multi-hot label vector for multi-label classification
+        robot_labels = torch.zeros(len(self.robot_types), dtype=torch.float32)
+        valid_robots = []
+        for robot_name in selected_robots:
+            if robot_name in self.robot_to_id:
+                robot_labels[self.robot_to_id[robot_name]] = 1.0
+                valid_robots.append(robot_name)
+        
         # Tokenize task description
         input_ids = self.tokenizer.encode(task_desc, max_length=128)
 
@@ -289,9 +313,10 @@ class RobotSelectionDataset(Dataset):
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
             'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
             'labels': torch.tensor(labels, dtype=torch.long),
-            'target_robot': torch.tensor(robot_id, dtype=torch.long),
+            'robot_labels': robot_labels,  # Multi-hot vector [num_robots]
+            'selected_robots': valid_robots,  # List of robot names for logging
             'task_description': task_desc,
-            'robot_type': robot_type
+            'num_robots_selected': len(valid_robots)
         }
 
 class BitGenDataLoader:
