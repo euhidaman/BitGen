@@ -364,12 +364,12 @@ class WandbMonitor:
     def log_codecarbon(self, emissions_data: Dict, step: int):
         """Log CodeCarbon energy consumption metrics"""
         log_dict = {
-            'carbon/energy_consumed_kwh': emissions_data.get('energy_consumed', 0),
-            'carbon/co2_emissions_kg': emissions_data.get('emissions', 0),
-            'carbon/power_watts': emissions_data.get('power', 0),
-            'carbon/cpu_energy_kwh': emissions_data.get('cpu_energy', 0),
-            'carbon/gpu_energy_kwh': emissions_data.get('gpu_energy', 0),
-            'carbon/ram_energy_kwh': emissions_data.get('ram_energy', 0),
+            'carbon/energy_consumed_kwh': float(emissions_data.get('energy_consumed', 0)) if emissions_data.get('energy_consumed') else 0,
+            'carbon/co2_emissions_kg': float(emissions_data.get('emissions', 0)) if emissions_data.get('emissions') else 0,
+            'carbon/power_watts': float(emissions_data.get('power', 0)) if emissions_data.get('power') else 0,
+            'carbon/cpu_energy_kwh': float(emissions_data.get('cpu_energy', 0)) if emissions_data.get('cpu_energy') else 0,
+            'carbon/gpu_energy_kwh': float(emissions_data.get('gpu_energy', 0)) if emissions_data.get('gpu_energy') else 0,
+            'carbon/ram_energy_kwh': float(emissions_data.get('ram_energy', 0)) if emissions_data.get('ram_energy') else 0,
             'step': step
         }
         wandb.log(log_dict, step=step)
@@ -412,4 +412,3 @@ class WandbMonitor:
             'step': step
         }
         wandb.log(log_dict, step=step)
-
