@@ -66,34 +66,36 @@ class BitNetLinear(nn.Module):
         self.out_features = out_features
 
         # Store weights in full precision for training
-        self.weight = nn.Parameter(torch.randn(out_features, in_features) * 0.1)
+        # FIXED: Better initialization for faster convergence
+        self.weight = nn.Parameter(torch.randn(out_features, in_features) * math.sqrt(2.0 / in_features))
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_features))
         else:
             self.register_parameter('bias', None)
 
-        # Quantization parameters
+        # Quantization parameters (used only during inference)
         self.register_buffer('weight_scale', torch.ones(1))
         self.register_buffer('input_scale', torch.ones(1))
 
     def quantize_weights(self, weights):
-        """Quantize weights to {-1, 0, +1} (1.58 bits)"""
+        """Quantize weights to {-1, 0, +1} (1.58 bits) - INFERENCE ONLY"""
         # Calculate scale
-        scale = weights.abs().mean()
+        scale = weights.abs().mean().clamp(min=1e-5)
 
         # Quantize to ternary values
         quantized = torch.sign(weights) * (weights.abs() > 0.5 * scale).float()
         return quantized, scale
 
     def quantize_activations(self, x):
-        """Quantize activations to 8-bit for embedded efficiency"""
-        scale = x.abs().max() / 127.0
+        """Quantize activations to 8-bit for embedded efficiency - INFERENCE ONLY"""
+        scale = x.abs().max().clamp(min=1e-8) / 127.0
         quantized = torch.clamp(torch.round(x / scale), -128, 127)
         return quantized, scale
 
     def forward(self, x):
+        # FIXED: Always use full precision during training for proper gradient flow
         if self.training:
-            # Full precision during training
+            # Full precision during training - NO QUANTIZATION
             return F.linear(x, self.weight, self.bias)
         else:
             # Quantized inference for embedded deployment
