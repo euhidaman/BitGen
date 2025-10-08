@@ -216,19 +216,16 @@ class RobotSelectionDataset(Dataset):
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         
-        # CRITICAL: Validate required dataset file exists
+        # CRITICAL: Validate required dataset file exists - EXACT PATH ONLY
         required_file = self.data_dir / "Multi-Robot-Selection" / "multi_robot_selection_dataset.json"
         if not required_file.exists():
-            # Try alternate path
-            required_file = self.data_dir / "multi_robot_selection_dataset.json"
-            if not required_file.exists():
-                raise FileNotFoundError(
-                    f"❌ CRITICAL ERROR: Required dataset file not found!\n"
-                    f"Expected path: {self.data_dir / 'Multi-Robot-Selection' / 'multi_robot_selection_dataset.json'}\n"
-                    f"Or: {self.data_dir / 'multi_robot_selection_dataset.json'}\n"
-                    f"Robot selection training CANNOT proceed without multi_robot_selection_dataset.json\n"
-                    f"Please ensure the dataset is downloaded and placed in the correct directory."
-                )
+            raise FileNotFoundError(
+                f"❌ CRITICAL ERROR: Required dataset file not found!\n"
+                f"Expected path: {required_file.absolute()}\n"
+                f"Robot selection training CANNOT proceed without multi_robot_selection_dataset.json\n"
+                f"Please ensure the dataset is downloaded and placed in the correct directory.\n"
+                f"Training STOPPED."
+            )
         
         self.dataset_file = required_file
         self.data = self.load_robot_data()

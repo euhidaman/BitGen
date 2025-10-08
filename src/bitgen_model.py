@@ -46,31 +46,21 @@ class BitGenConfig:
 
     # Robot Selection with Explicit Types
     robot_types: List[str] = None  # Will be populated from dataset
-    num_robots: int = 16  # Will be updated based on robot_types length
+    num_robots: int = 5  # Exactly 5 robots from multi_robot_selection_dataset.json
     top_k_robots: int = 3  # Top-3 robot selection for multi-robot deployment
     robot_embed_dim: int = 32
     
     def __post_init__(self):
         """Initialize robot types from multi_robot_selection_dataset.json"""
         if self.robot_types is None:
-            # Default robot types from the dataset
+            # EXACT robot types from multi_robot_selection_dataset.json - DO NOT MODIFY
+            # These must match the dataset exactly for confusion matrix alignment
             self.robot_types = [
                 "Drone",
-                "Robot with Legs", 
-                "Robot with Wheels",
                 "Underwater Robot",
                 "Humanoid",
-                "Aerial Robot",
-                "Ground Vehicle",
-                "Manipulator",
-                "Inspection Robot",
-                "Delivery Robot",
-                "Search and Rescue",
-                "Construction Robot",
-                "Agricultural Robot",
-                "Medical Robot",
-                "Security Robot",
-                "Service Robot"
+                "Robot with Wheels",
+                "Robot with Legs"
             ]
         self.num_robots = len(self.robot_types)
 
@@ -651,11 +641,15 @@ class RobotSelector(nn.Module):
             # Get top-K most suitable robots
             top_k_probs, top_k_indices = torch.topk(robot_probs, k=min(self.top_k, self.num_robots), dim=1)
             
+            # SAFETY: Clamp indices to valid range to prevent index out of bounds
+            max_valid_idx = len(self.robot_types) - 1
+            top_k_indices = torch.clamp(top_k_indices, 0, max_valid_idx)
+            
             # Convert indices to robot type names for interpretability
             top_k_robots = []
             for batch_indices in top_k_indices:
                 batch_robots = [
-                    self.robot_types[idx.item()] if idx.item() < len(self.robot_types) else f"Robot_{idx.item()}"
+                    self.robot_types[idx.item()]
                     for idx in batch_indices
                 ]
                 top_k_robots.append(batch_robots)

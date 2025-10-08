@@ -78,10 +78,11 @@ class BitGenTrainer:
         self.epoch = 0
         self.best_loss = float('inf')
         
-        # Robot selection confusion matrix tracking
+        # Robot selection confusion matrix tracking (5x5 for exact dataset robots)
         self.robot_confusion_matrix = np.zeros((config.num_robots, config.num_robots))
-        self.robot_selection_history = []
+        self.robot_selection_history = []  # Reserved for future use (currently unused)
         self.robot_accuracy_per_epoch = []
+        self.MAX_HISTORY_SIZE = 1000  # Safety limit to prevent memory leaks if history gets used
         
         # Memory optimization
         self.memory_utils = EmbeddedTrainingUtils()

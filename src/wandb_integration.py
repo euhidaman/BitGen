@@ -148,7 +148,8 @@ class WandBIntegration:
                     "system/gpu_memory_cached_gb": gpu_memory.get('reserved_bytes.all.current', 0) / (1024**3),
                     "system/gpu_utilization_percent": torch.cuda.utilization() if hasattr(torch.cuda, 'utilization') else 0,
                 })
-        except:
+        except Exception as e:
+            # Log warning but don't crash on GPU metrics collection failure
             pass
 
         wandb.log(system_metrics, step=self.step)
