@@ -139,7 +139,6 @@ class BitGenTrainer:
     def setup_optimizer(self, learning_rate: float = 1e-4):
         """Setup optimizer with balanced stability and convergence"""
         # Use the learning rate directly without excessive reduction
-        # Original code reduced by 10x which was too conservative
         stable_lr = learning_rate  # Use provided LR directly
 
         # Use AdamW with balanced settings for good convergence
@@ -152,21 +151,32 @@ class BitGenTrainer:
             amsgrad=False  # Standard Adam for faster convergence
         )
         
-        # Warmup + Cosine decay for better training dynamics
+        # FIXED: Store total training steps for proper scheduler
+        self.total_training_steps = None  # Will be set in train() method
+
+        # FIXED: Warmup + Cosine decay that reaches minimum 10% LR (never zero)
         def lr_lambda(step):
-            warmup_steps = 500
+            warmup_steps = 1000  # Warmup period
             if step < warmup_steps:
                 # Linear warmup
                 return step / warmup_steps
             else:
-                # Cosine decay after warmup
-                progress = (step - warmup_steps) / max(1, 10000 - warmup_steps)
-                return 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
+                # Cosine decay after warmup - use actual total steps
+                if self.total_training_steps is None or self.total_training_steps <= warmup_steps:
+                    # Fallback: use a large number if not set
+                    total_steps = 100000
+                else:
+                    total_steps = self.total_training_steps
+
+                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                # FIXED: Decay from 1.0 to 0.1 (10% minimum, never reaches zero)
+                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
+                return 0.1 + 0.9 * cosine_decay  # Range: [0.1, 1.0]
 
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         self.logger.info(f"Optimizer setup with learning rate: {stable_lr}")
-        self.logger.info(f"Using warmup + cosine decay scheduler")
+        self.logger.info(f"Using warmup + cosine decay scheduler (min LR: {stable_lr * 0.1})")
 
         return optimizer, scheduler
     
@@ -174,8 +184,9 @@ class BitGenTrainer:
                           coco_data_path: str,
                           robot_data_path: Optional[str] = None,
                           batch_size: int = 4,
-                          num_workers: int = 2):
-        """Setup data loaders for multi-modal training - OPTIMIZED FOR A4500 GPU"""
+                          num_workers: int = 2,
+                          train_split: float = 0.7):
+        """Setup data loaders for multi-modal training with train/val split - OPTIMIZED FOR A4500 GPU"""
 
         # OPTIMIZED: Detect GPU capability and adjust settings
         if torch.cuda.is_available():
@@ -190,21 +201,48 @@ class BitGenTrainer:
                 self.logger.info(f"GPU-optimized: Using {num_workers} data loading workers")
 
         # COCO dataset for vision-language training
-        coco_dataset = COCODataset(
+        full_dataset = COCODataset(
             coco_data_path,
             max_seq_len=self.config.max_seq_len,
             vocab_size=self.config.vocab_size
         )
         
+        # FIXED: Split dataset into train (70%) and val (30%)
+        dataset_size = len(full_dataset)
+        train_size = int(train_split * dataset_size)
+        val_size = dataset_size - train_size
+
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            full_dataset,
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(42)  # Reproducible split
+        )
+
+        self.logger.info(f"📊 DATASET SPLIT:")
+        self.logger.info(f"   Total samples: {dataset_size:,}")
+        self.logger.info(f"   Training samples: {train_size:,} ({train_split*100:.0f}%)")
+        self.logger.info(f"   Validation samples: {val_size:,} ({(1-train_split)*100:.0f}%)")
+
         train_loader = DataLoader(
-            coco_dataset,
+            train_dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
-            prefetch_factor=4 if num_workers > 0 else None  # Prefetch more batches
+            persistent_workers=True if num_workers > 0 else False,
+            prefetch_factor=4 if num_workers > 0 else None
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=True if num_workers > 0 else False,
+            prefetch_factor=4 if num_workers > 0 else None
         )
         
         # Robot selection dataset (if available)
@@ -219,8 +257,8 @@ class BitGenTrainer:
                 persistent_workers=True if num_workers > 0 else False
             )
         
-        return train_loader, robot_loader
-    
+        return train_loader, val_loader, robot_loader
+
     def train_step(self, batch: Dict, optimizer) -> Dict:
         """Single training step with enhanced monitoring"""
         self.model.train()
@@ -390,15 +428,15 @@ class BitGenTrainer:
 
         return metrics
     
-    def evaluate(self, data_loader: DataLoader, max_eval_samples: int = 200) -> Dict:
-        """Evaluation step - OPTIMIZED: Only evaluate on subset for speed"""
+    def evaluate(self, data_loader: DataLoader, max_eval_samples: int = 1000) -> Dict:
+        """Evaluation step - FIXED: Use more samples for stable metrics"""
         self.model.eval()
         total_loss = 0.0
         total_samples = 0
         metrics = defaultdict(float)
         
         with torch.no_grad():
-            # OPTIMIZATION: Limit evaluation samples for speed
+            # FIXED: Increased from 200 to 1000 samples for more stable eval metrics
             eval_batches = min(max_eval_samples // data_loader.batch_size, len(data_loader))
 
             for batch_idx, batch in enumerate(tqdm(data_loader, desc="Evaluating", total=eval_batches)):
@@ -576,10 +614,19 @@ class BitGenTrainer:
 
         # Setup training components
         optimizer, scheduler = self.setup_optimizer(learning_rate)
-        train_loader, robot_loader = self.setup_data_loaders(
+        train_loader, val_loader, robot_loader = self.setup_data_loaders(
             coco_data_path, robot_data_path, actual_batch_size
         )
         
+        # CRITICAL: Set total training steps for proper LR scheduling
+        steps_per_epoch = len(train_loader)
+        self.total_training_steps = steps_per_epoch * num_epochs
+        self.logger.info(f"📈 LEARNING RATE SCHEDULE:")
+        self.logger.info(f"   Steps per epoch: {steps_per_epoch:,}")
+        self.logger.info(f"   Total training steps: {self.total_training_steps:,}")
+        self.logger.info(f"   Warmup steps: 1,000")
+        self.logger.info(f"   LR will decay from {learning_rate} to {learning_rate * 0.1}")
+
         # DIAGNOSTIC: Log data loader details
         self.logger.info(f"📊 DATA LOADER DETAILS:")
         self.logger.info(f"   Dataset samples: {len(train_loader.dataset):,}")
@@ -617,15 +664,22 @@ class BitGenTrainer:
             if robot_loader:
                 data_iterator = zip(train_loader, robot_loader)
                 desc = f"Epoch {epoch+1}/{num_epochs} (Multi-modal)"
+                # FIXED: Total should be based on optimizer steps, not data loader length
+                total_iterations = len(train_loader) // grad_accum_steps
             else:
                 data_iterator = train_loader
                 desc = f"Epoch {epoch+1}/{num_epochs} (COCO only)"
-            
-            progress_bar = tqdm(data_iterator, desc=desc)
-            
+                # FIXED: Total should be based on optimizer steps, not data loader length
+                total_iterations = len(train_loader) // grad_accum_steps
+
+            # FIXED: Progress bar shows optimizer steps, not batch steps
+            progress_bar = tqdm(total=total_iterations, desc=desc)
+
             accumulated_loss = 0.0
             batch_count = 0
-            for step, batch_data in enumerate(progress_bar):
+            optimizer_step_count = 0  # FIXED: Track actual optimizer steps
+
+            for step, batch_data in enumerate(data_iterator):
                 if robot_loader and isinstance(batch_data, tuple):
                     coco_batch, robot_batch = batch_data
                     # Merge batches for multi-task learning
@@ -652,7 +706,12 @@ class BitGenTrainer:
                     # Update performance tracker
                     self.performance_tracker.update(step_metrics)
 
-                    # Update progress bar
+                    # CRITICAL FIX: Step scheduler after each optimizer step (not per epoch)
+                    scheduler.step()
+
+                    # FIXED: Update progress bar only on optimizer steps
+                    optimizer_step_count += 1
+                    progress_bar.update(1)
                     progress_bar.set_postfix({
                         'loss': f"{step_metrics['total_loss']:.4f}",
                         'lr': f"{step_metrics['learning_rate']:.6f}",
@@ -663,10 +722,20 @@ class BitGenTrainer:
 
                     # Evaluation
                     if self.global_step % eval_steps == 0:
-                        eval_metrics = self.evaluate(train_loader)  # Use subset for speed
+                        eval_metrics = self.evaluate(val_loader)  # FIXED: Use validation loader
 
                         avg_eval_loss = eval_metrics['eval_loss']
+                        avg_train_loss = step_metrics['total_loss']
+
                         self.logger.info(f"Step {self.global_step}: Eval Loss = {avg_eval_loss:.4f}")
+
+                        # FIXED: Check for massive overfitting
+                        if avg_eval_loss > avg_train_loss * 10:
+                            self.logger.warning(f"⚠️⚠️⚠️ SEVERE OVERFITTING DETECTED!")
+                            self.logger.warning(f"   Train Loss: {avg_train_loss:.4f}")
+                            self.logger.warning(f"   Eval Loss: {avg_eval_loss:.4f}")
+                            self.logger.warning(f"   Gap: {avg_eval_loss/avg_train_loss:.1f}x")
+                            self.logger.warning(f"   Consider: reducing model size, adding dropout, or reducing learning rate")
 
                         # Save best model
                         if avg_eval_loss < self.best_loss:
@@ -692,27 +761,30 @@ class BitGenTrainer:
                                 self.logger.warning(f"High GPU memory: {gpu_memory_used:.1f}GB/{total_vram_gb:.1f}GB - clearing cache")
                                 torch.cuda.empty_cache()
 
+            # FIXED: Close progress bar properly
+            progress_bar.close()
+
             # End of epoch - DIAGNOSTIC LOGGING
             epoch_end_time = time.time()
             epoch_duration = epoch_end_time - epoch_start_time
 
-            scheduler.step()
-            
             # Comprehensive epoch summary
             self.logger.info(f"\n{'='*80}")
             self.logger.info(f"✅ COMPLETED EPOCH {epoch+1}/{num_epochs}")
             self.logger.info(f"{'='*80}")
-            self.logger.info(f"   Actual batches processed: {step+1:,}")
-            self.logger.info(f"   Expected batches: {len(train_loader):,}")
-            if step+1 != len(train_loader):
-                self.logger.warning(f"   ⚠️ MISMATCH: Processed {step+1:,} batches but expected {len(train_loader):,}!")
+            self.logger.info(f"   Data batches processed: {step+1:,}")
+            self.logger.info(f"   Optimizer steps: {optimizer_step_count:,}")
+            self.logger.info(f"   Expected optimizer steps: {total_iterations:,}")
+            if optimizer_step_count != total_iterations:
+                self.logger.warning(f"   ⚠️ MISMATCH: {optimizer_step_count:,} optimizer steps but expected {total_iterations:,}!")
             self.logger.info(f"   Epoch duration: {epoch_duration/3600:.2f} hours ({epoch_duration/60:.1f} minutes)")
             self.logger.info(f"   Samples per second: {len(train_loader.dataset)/epoch_duration:.2f}")
-            self.logger.info(f"   Avg seconds per batch: {epoch_duration/(step+1):.2f}")
+            self.logger.info(f"   Avg seconds per optimizer step: {epoch_duration/optimizer_step_count:.2f}")
 
             # Log epoch metrics
             epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
             self.logger.info(f"   Avg Loss: {epoch_avg['total_loss']:.4f}")
+            self.logger.info(f"   Current LR: {scheduler.get_last_lr()[0]:.6f}")
 
             # Log GPU utilization summary
             if torch.cuda.is_available():
