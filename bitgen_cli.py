@@ -80,8 +80,7 @@ def main():
     train_parser.add_argument('--monitoring_dir', type=str, default='training_monitoring')
     train_parser.add_argument('--enable_carbon_tracking', action='store_true', help='Enable CodeCarbon energy tracking')
     train_parser.add_argument('--track_flops', action='store_true', help='Enable FLOPS calculation and tracking')
-    train_parser.add_argument('--use_wandb', action='store_true')
-    # Enhanced WandB integration
+    # Enhanced WandB integration - now automatic, no flag needed
     train_parser.add_argument('--wandb_project', type=str, default='bitgen-training', help='WandB project name')
     train_parser.add_argument('--wandb_entity', type=str, default='babylm-ntust', help='WandB team/entity')
     train_parser.add_argument('--wandb_run_name', type=str, help='WandB run name (auto-generated if not provided)')
@@ -247,7 +246,7 @@ def train_with_monitoring(args):
             config=config,
             model_size=args.model_size,
             output_dir=args.output_dir,
-            use_wandb=args.use_wandb,
+            use_wandb=True,  # WandB logging is now automatic
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
             wandb_run_name=args.wandb_run_name,
