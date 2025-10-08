@@ -126,10 +126,32 @@ class COCODataset(Dataset):
                  data_file: str,
                  image_size: int = 224,
                  max_seq_len: int = 128,
-                 vocab_size: int = 8192):
+                 vocab_size: int = 8192,
+                 max_samples: Optional[int] = None):
 
+        print(f"📂 Loading dataset from: {data_file}")
         with open(data_file, 'r') as f:
             self.data = json.load(f)
+
+        original_size = len(self.data)
+        print(f"📊 Original dataset size: {original_size:,} samples")
+
+        # CRITICAL: Limit dataset size to prevent extremely long training
+        if max_samples is not None and max_samples < len(self.data):
+            print(f"⚠️ WARNING: Limiting dataset from {len(self.data):,} to {max_samples:,} samples")
+            print(f"   This will reduce training time from ~{len(self.data)//6000:.1f} hours to ~{max_samples//6000:.1f} hours per epoch")
+            random.seed(42)  # Reproducible sampling
+            self.data = random.sample(self.data, max_samples)
+
+        # Warn if dataset is extremely large
+        if len(self.data) > 50000:
+            print(f"⚠️⚠️⚠️ WARNING: Very large dataset detected: {len(self.data):,} samples")
+            print(f"   This will take approximately {len(self.data)//6000:.1f} hours per epoch!")
+            print(f"   Consider using --max_samples parameter to limit dataset size")
+            print(f"   Recommended: --max_samples 10000 for faster training")
+
+        print(f"✅ Final dataset size: {len(self.data):,} samples")
+        print(f"   Expected iterations per epoch (batch_size=64): {len(self.data)//64:,}")
 
         self.tokenizer = BitGenTokenizer(vocab_size)
         self.max_seq_len = max_seq_len

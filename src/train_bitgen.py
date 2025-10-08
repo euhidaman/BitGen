@@ -490,6 +490,14 @@ class BitGenTrainer:
             coco_data_path, robot_data_path, actual_batch_size
         )
         
+        # DIAGNOSTIC: Log data loader details
+        self.logger.info(f"📊 DATA LOADER DETAILS:")
+        self.logger.info(f"   Dataset samples: {len(train_loader.dataset):,}")
+        self.logger.info(f"   Batch size: {train_loader.batch_size}")
+        self.logger.info(f"   Expected batches per epoch: {len(train_loader):,}")
+        self.logger.info(f"   Num workers: {train_loader.num_workers}")
+        self.logger.info(f"   Drop last: {train_loader.drop_last}")
+
         # Training loop with GPU optimization
         self.model.train()
         scaler = GradScaler('cuda')
@@ -498,9 +506,22 @@ class BitGenTrainer:
             self.epoch = epoch
             epoch_metrics = defaultdict(list)
             
+            # DIAGNOSTIC: Start of epoch logging
+            import time
+            epoch_start_time = time.time()
+            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"🚀 STARTING EPOCH {epoch+1}/{num_epochs}")
+            self.logger.info(f"{'='*80}")
+            self.logger.info(f"   Dataset size (verified): {len(train_loader.dataset):,} samples")
+            self.logger.info(f"   Expected batches: {len(train_loader):,}")
+            self.logger.info(f"   Batch size: {actual_batch_size}")
+            self.logger.info(f"   Effective batch size (with grad accum): {batch_size}")
+
             # MEMORY OPTIMIZATION: Clear cache at start of each epoch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                gpu_mem_before = torch.cuda.memory_allocated() / 1024**3
+                self.logger.info(f"   GPU memory at epoch start: {gpu_mem_before:.2f}GB")
 
             # Combine COCO and robot data if available
             if robot_loader:
@@ -513,6 +534,7 @@ class BitGenTrainer:
             progress_bar = tqdm(data_iterator, desc=desc)
             
             accumulated_loss = 0.0
+            batch_count = 0
             for step, batch_data in enumerate(progress_bar):
                 if robot_loader and isinstance(batch_data, tuple):
                     coco_batch, robot_batch = batch_data
@@ -580,18 +602,36 @@ class BitGenTrainer:
                                 self.logger.warning(f"High GPU memory: {gpu_memory_used:.1f}GB/{total_vram_gb:.1f}GB - clearing cache")
                                 torch.cuda.empty_cache()
 
-            # End of epoch
+            # End of epoch - DIAGNOSTIC LOGGING
+            epoch_end_time = time.time()
+            epoch_duration = epoch_end_time - epoch_start_time
+
             scheduler.step()
             
+            # Comprehensive epoch summary
+            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"✅ COMPLETED EPOCH {epoch+1}/{num_epochs}")
+            self.logger.info(f"{'='*80}")
+            self.logger.info(f"   Actual batches processed: {step+1:,}")
+            self.logger.info(f"   Expected batches: {len(train_loader):,}")
+            if step+1 != len(train_loader):
+                self.logger.warning(f"   ⚠️ MISMATCH: Processed {step+1:,} batches but expected {len(train_loader):,}!")
+            self.logger.info(f"   Epoch duration: {epoch_duration/3600:.2f} hours ({epoch_duration/60:.1f} minutes)")
+            self.logger.info(f"   Samples per second: {len(train_loader.dataset)/epoch_duration:.2f}")
+            self.logger.info(f"   Avg seconds per batch: {epoch_duration/(step+1):.2f}")
+
             # Log epoch metrics
             epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
-            self.logger.info(f"Epoch {epoch+1} completed. Avg Loss: {epoch_avg['total_loss']:.4f}")
-            
+            self.logger.info(f"   Avg Loss: {epoch_avg['total_loss']:.4f}")
+
             # Log GPU utilization summary
             if torch.cuda.is_available():
                 gpu_util = self._get_gpu_utilization()
                 gpu_memory_used = torch.cuda.memory_allocated() / 1024**3
-                self.logger.info(f"GPU Utilization: {gpu_util:.1f}%, Memory: {gpu_memory_used:.1f}GB")
+                self.logger.info(f"   GPU Utilization: {gpu_util:.1f}%")
+                self.logger.info(f"   GPU Memory: {gpu_memory_used:.1f}GB")
+
+            self.logger.info(f"{'='*80}\n")
 
             if wandb.run:
                 wandb.log(epoch_avg, step=self.global_step)
