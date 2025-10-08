@@ -22,11 +22,21 @@ from tqdm import tqdm
 import numpy as np
 from collections import defaultdict
 import psutil
+import time
 
 # Import BitGen components
 from .bitgen_model import BitGenModel, BitGenConfig, create_bitgen_model
 from .adaptive_loss import BitGenLoss, AdaptiveLossManager, PerformanceTracker, EmbeddedTrainingUtils
 from .data_loader import COCODataset, BitGenDataLoader, RobotSelectionDataset
+from .wandb_monitor import WandbMonitor
+
+# CodeCarbon for energy tracking
+try:
+    from codecarbon import EmissionsTracker
+    CODECARBON_AVAILABLE = True
+except ImportError:
+    CODECARBON_AVAILABLE = False
+    print("⚠️ CodeCarbon not installed. Install with: pip install codecarbon")
 
 class BitGenTrainer:
     """Complete training system for BitGen models"""
@@ -75,8 +85,21 @@ class BitGenTrainer:
         
         # Wandb integration
         self.use_wandb = use_wandb
+        self.wandb_monitor = None
         if use_wandb:
             self.setup_wandb(wandb_project, wandb_entity, wandb_run_name, wandb_tags)
+            self.wandb_monitor = WandbMonitor(log_freq=100, log_attention_freq=100)
+            self.logger.info("📊 Comprehensive WandB monitoring enabled")
+
+        # CodeCarbon integration
+        self.emissions_tracker = None
+        if CODECARBON_AVAILABLE and use_wandb:
+            self.emissions_tracker = EmissionsTracker(
+                project_name="BitGen-Training",
+                output_dir=str(self.output_dir),
+                log_level='warning'
+            )
+            self.logger.info("🌱 CodeCarbon energy tracking enabled")
 
         # HuggingFace Hub integration
         self.push_to_hub = push_to_hub
@@ -201,7 +224,8 @@ class BitGenTrainer:
     def train_step(self, batch: Dict, optimizer) -> Dict:
         """Single training step with enhanced monitoring"""
         self.model.train()
-        
+        step_start_time = time.time()
+
         # Extract batch data
         input_ids = batch['input_ids'].to(self.device)
         attention_mask = batch['attention_mask'].to(self.device)
@@ -214,14 +238,30 @@ class BitGenTrainer:
         if target_robot is not None:
             target_robot = target_robot.to(self.device)
 
+        # Storage for intermediate outputs (for monitoring)
+        attention_weights = None
+        memory_bank = None
+        memory_usage_info = {}
+        text_features = None
+        image_features = None
+
         try:
             # Forward pass with autocast for mixed precision
             with autocast('cuda'):
                 outputs = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    images=images
+                    images=images,
+                    return_attention_weights=True  # Request attention weights for monitoring
                 )
+
+                # Extract monitoring data from outputs
+                if isinstance(outputs, dict):
+                    attention_weights = outputs.get('attention_weights')
+                    memory_bank = outputs.get('memory_bank')
+                    memory_usage_info = outputs.get('memory_usage', {})
+                    text_features = outputs.get('text_features')
+                    image_features = outputs.get('image_features')
 
                 total_loss, loss_dict = self.loss_fn(
                     outputs,
@@ -264,6 +304,7 @@ class BitGenTrainer:
         if optimizer is None:
             # During gradient accumulation, just do backward pass without optimizer step
             total_loss.backward()
+            grad_norm = 0.0
         else:
             # Normal training step with optimizer
             total_loss.backward()
@@ -281,13 +322,28 @@ class BitGenTrainer:
             if grad_norm > 10.0:  # Very large gradients
                 self.logger.warning(f"Large gradient norm detected: {grad_norm:.4f}")
 
+            # Log gradient flow to wandb (every 100 steps)
+            if self.wandb_monitor and self.global_step % 100 == 0:
+                self.wandb_monitor.log_gradient_flow(self.model, self.global_step)
+
             optimizer.step()
+
+        # Calculate throughput
+        step_time = time.time() - step_start_time
+        batch_size = input_ids.size(0)
+        seq_len = input_ids.size(1)
+        samples_per_sec = batch_size / step_time if step_time > 0 else 0
+        tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
 
         # Update metrics
         lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
         metrics = {
             'total_loss': total_loss.item(),
-            'learning_rate': lr
+            'learning_rate': lr,
+            'gradient_norm': grad_norm if isinstance(grad_norm, float) else grad_norm.item(),
+            'samples_per_sec': samples_per_sec,
+            'tokens_per_sec': tokens_per_sec,
+            'gpu_util': self._get_gpu_utilization()
         }
         
         # Add individual loss components
@@ -298,6 +354,40 @@ class BitGenTrainer:
                 for k, v in value.items():
                     metrics[f"{key}_{k}"] = v
         
+        # Comprehensive wandb logging
+        if self.wandb_monitor and optimizer is not None:  # Only log when optimizer steps
+            # Basic training metrics (every step)
+            self.wandb_monitor.log_training_step(metrics, self.model, self.global_step)
+
+            # Attention patterns (every 100 steps)
+            if attention_weights is not None:
+                self.wandb_monitor.log_attention_patterns(attention_weights, self.global_step, layer_idx=0)
+
+            # Episodic memory (every 100 steps)
+            if memory_bank is not None:
+                self.wandb_monitor.log_episodic_memory(memory_bank, memory_usage_info, self.global_step)
+
+            # Weight distributions (every 100 steps)
+            self.wandb_monitor.log_weight_distributions(self.model, self.global_step)
+
+            # Cross-modal fusion (every 100 steps)
+            if text_features is not None and image_features is not None:
+                similarity_matrix = None
+                if 'similarity_matrix' in outputs:
+                    similarity_matrix = outputs['similarity_matrix']
+                self.wandb_monitor.log_cross_modal_fusion(
+                    text_features, image_features, similarity_matrix, self.global_step
+                )
+
+            # CodeCarbon energy tracking (every 500 steps)
+            if self.emissions_tracker and self.global_step % 500 == 0:
+                emissions_data = {
+                    'energy_consumed': getattr(self.emissions_tracker, '_total_energy', 0),
+                    'emissions': getattr(self.emissions_tracker, '_total_emissions', 0),
+                    'power': getattr(self.emissions_tracker, '_total_power', 0)
+                }
+                self.wandb_monitor.log_codecarbon(emissions_data, self.global_step)
+
         return metrics
     
     def evaluate(self, data_loader: DataLoader, max_eval_samples: int = 200) -> Dict:

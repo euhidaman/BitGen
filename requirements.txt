@@ -21,6 +21,7 @@ bitarray
 numba
 cython
 pybind11
+scikit-learn
 # Monitoring and profiling for Raspberry Pi Zero
 codecarbon
 py-cpuinfo

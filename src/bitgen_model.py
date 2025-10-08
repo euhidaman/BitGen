@@ -625,7 +625,7 @@ class BitGenModel(nn.Module):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False):
+    def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False, return_attention_weights=False):
         """Forward pass through BitGen model with comprehensive token validation"""
         batch_size, seq_len = input_ids.shape
 
@@ -667,9 +667,24 @@ class BitGenModel(nn.Module):
         # CORRECTED ARCHITECTURE: Cross-modal fusion BEFORE episodic memory
         # This ensures multimodal representations are stored in memory
         contrastive_features = None
+        text_features = None
+        image_features = None
+        similarity_matrix = None
+
         if images is not None:
-            # Get contrastive features for loss computation
-            x, contrastive_features = self.cross_modal_fusion(x, images, return_contrastive_features=True)
+            # Get contrastive features and intermediate outputs for monitoring
+            fusion_output = self.cross_modal_fusion(x, images, return_contrastive_features=True)
+            if isinstance(fusion_output, tuple):
+                x, contrastive_features = fusion_output
+                # Extract text and image features for monitoring
+                if hasattr(self.cross_modal_fusion, 'last_text_features'):
+                    text_features = self.cross_modal_fusion.last_text_features
+                if hasattr(self.cross_modal_fusion, 'last_image_features'):
+                    image_features = self.cross_modal_fusion.last_image_features
+                if hasattr(self.cross_modal_fusion, 'last_similarity_matrix'):
+                    similarity_matrix = self.cross_modal_fusion.last_similarity_matrix
+            else:
+                x = fusion_output
         else:
             x = self.cross_modal_fusion(x, images)
 
@@ -692,7 +707,8 @@ class BitGenModel(nn.Module):
 
             x = layer_output
             new_cache.append(cache)
-            all_attention_weights.append(attention_weights)
+            if return_attention_weights or return_analysis_data:
+                all_attention_weights.append(attention_weights)
             cache_idx += 1
 
         # Reasoning module with reasoning state tracking
@@ -730,6 +746,22 @@ class BitGenModel(nn.Module):
         if contrastive_features is not None:
             outputs['contrastive_features'] = contrastive_features
 
+        # Add monitoring data for wandb
+        if return_attention_weights or return_analysis_data:
+            outputs['attention_weights'] = all_attention_weights[0] if len(all_attention_weights) > 0 else None
+            outputs['memory_bank'] = memory_info.get('memory_values')
+            outputs['memory_usage'] = {
+                'read_count': memory_info.get('read_count', 0),
+                'write_count': memory_info.get('write_count', 0),
+                'top_k_indices': memory_info.get('top_k_indices', [])
+            }
+            if text_features is not None:
+                outputs['text_features'] = text_features
+            if image_features is not None:
+                outputs['image_features'] = image_features
+            if similarity_matrix is not None:
+                outputs['similarity_matrix'] = similarity_matrix
+
         # Add analysis data if requested
         if return_analysis_data:
             outputs.update({
@@ -741,7 +773,7 @@ class BitGenModel(nn.Module):
                 'retrieved_memories': memory_info['retrieved_memories'],
 
                 # Attention analysis
-                'attention_weights': all_attention_weights,  # List of attention weights per layer
+                'all_attention_weights': all_attention_weights,  # List of attention weights per layer
                 'input_embeddings': token_emb + pos_emb,
                 'final_embeddings': x,
 
