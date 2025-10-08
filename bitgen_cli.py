@@ -252,7 +252,15 @@ def train_with_monitoring(args):
             config=config,
             model_size=args.model_size,
             output_dir=args.output_dir,
-            use_wandb=args.use_wandb
+            use_wandb=args.use_wandb,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            wandb_run_name=args.wandb_run_name,
+            wandb_tags=args.wandb_tags,
+            push_to_hub=args.push_to_hub,
+            hf_repo_name=args.hf_repo_name,
+            hf_organization=args.hf_organization,
+            hf_private=args.hf_private
         )
 
         print("🚀 Starting BitGen training...")

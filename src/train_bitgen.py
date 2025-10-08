@@ -35,8 +35,16 @@ class BitGenTrainer:
                  config: BitGenConfig,
                  model_size: str = 'tiny',
                  output_dir: str = 'checkpoints',
-                 use_wandb: bool = False):
-        
+                 use_wandb: bool = False,
+                 wandb_project: str = "bitgen-training",
+                 wandb_entity: Optional[str] = None,
+                 wandb_run_name: Optional[str] = None,
+                 wandb_tags: Optional[List[str]] = None,
+                 push_to_hub: bool = False,
+                 hf_repo_name: Optional[str] = None,
+                 hf_organization: Optional[str] = None,
+                 hf_private: bool = False):
+
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -66,9 +74,22 @@ class BitGenTrainer:
         self.setup_logging()
         
         # Wandb integration
+        self.use_wandb = use_wandb
         if use_wandb:
-            self.setup_wandb()
-    
+            self.setup_wandb(wandb_project, wandb_entity, wandb_run_name, wandb_tags)
+
+        # HuggingFace Hub integration
+        self.push_to_hub = push_to_hub
+        self.hf_integration = None
+        if push_to_hub:
+            from .huggingface_integration import HuggingFaceIntegration
+            self.hf_integration = HuggingFaceIntegration(
+                repo_name=hf_repo_name or "BitGen-Reasoning",
+                organization=hf_organization,
+                private=hf_private
+            )
+            self.hf_integration.create_repo()
+
     def setup_logging(self):
         """Setup logging for training"""
         logging.basicConfig(
@@ -81,14 +102,17 @@ class BitGenTrainer:
         )
         self.logger = logging.getLogger(__name__)
     
-    def setup_wandb(self):
+    def setup_wandb(self, project: str, entity: Optional[str], run_name: Optional[str], tags: Optional[List[str]]):
         """Setup Weights & Biases logging"""
         wandb.init(
-            project="bitgen-embedded",
+            project=project,
+            entity=entity,
             config=self.config.__dict__,
-            name=f"bitgen-{self.config.embed_dim}d-{self.config.num_layers}l"
+            name=run_name,
+            tags=tags
         )
-    
+        self.logger.info(f"WandB logging enabled: {project}/{entity}/{run_name}")
+
     def setup_optimizer(self, learning_rate: float = 1e-4):
         """Setup optimizer with balanced stability and convergence"""
         # Use the learning rate directly without excessive reduction
