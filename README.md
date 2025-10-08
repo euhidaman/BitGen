@@ -85,15 +85,18 @@ CORE PROCESSING LAYERS:
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                           Robot Selection System                                        │
+│                    Robot Selection System (Top-3 Multi-Label)                           │
 │ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────────────────────────┐  │
 │ │Task Encoder │  │Robot        │  │           Selection Process:                    │  │
-│ │             │  │Embeddings   │  │ 1. Encode task representation                  │  │
-│ │Similarity   │  │(16 robots)  │  │ 2. Compare with robot embeddings              │  │
-│ │Computation  │  │             │  │ 3. Calculate selection confidence              │  │
-│ │             │  │Selection    │  │ 4. Generate confusion matrices                 │  │
-│ │Confidence   │  │Network      │  │ 5. Track accuracy improvement                  │  │
+│ │             │  │Embeddings   │  │ 1. Encode task/scene representation            │  │
+│ │Tiny-R1      │  │(5 robots)   │  │ 2. Chain-of-thought reasoning (3-8 steps)     │  │
+│ │Reasoning    │  │             │  │ 3. Multi-label classification (sigmoid)        │  │
+│ │             │  │Top-3        │  │ 4. Select top-3 most suitable robots          │  │
+│ │Confusion    │  │Selection    │  │ 5. Generate 5x5 confusion matrix              │  │
+│ │Matrix 5x5   │  │Network      │  │ 6. Track accuracy improvement per epoch       │  │
 │ └─────────────┘  └─────────────┘  └─────────────────────────────────────────────────┘  │
+│                                                                                         │
+│  Robots: Drone | Underwater Robot | Humanoid | Robot with Wheels | Robot with Legs    │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -170,13 +173,16 @@ For each reasoning step (max 8 steps):
 Final Reasoning → Decoder → Enhanced Features
 ```
 
-### **7. Robot Selection**
+### **7. Robot Selection (Top-3 Multi-Label with Chain-of-Thought)**
 ```
-Task Representation → Task Encoder
-For each robot (16 types):
-  Task Features + Robot Embedding → Similarity Score
-All Similarities → Selection Network → Robot Probabilities
-Argmax → Selected Robot + Confidence Score
+Task/Scene Representation → Tiny-R1 Reasoning (3-8 steps)
+Reasoning Output → Task Encoder → Task Features
+For each robot (5 types: Drone, Underwater, Humanoid, Wheels, Legs):
+  Task Features + Robot Embedding → Binary Score (independent)
+  Sigmoid Activation → Robot Suitability Probability [0, 1]
+All Robot Probabilities → Top-K Selection (k=3)
+Top-3 Robots + Confidences → Multi-Robot Deployment Decision
+Ground Truth vs Predictions → 5x5 Confusion Matrix Update
 ```
 
 ### **8. Output Generation**
@@ -224,41 +230,75 @@ BitGen's episodic memory system provides **critical advantages for edge deployme
 - Attention sink detection and important token identification
 
 ### Reasoning Matrices
-- Robot selection confusion matrices showing correct vs incorrect decisions
-- Per-robot accuracy tracking that improves over training epochs
-- Interactive reasoning dashboards with improvement trends
+- **5x5 Robot Confusion Matrix**: Tracks prediction accuracy for 5 robot types
+  - Rows: True robots (Drone, Underwater Robot, Humanoid, Robot with Wheels, Robot with Legs)
+  - Columns: Predicted robots (top-3 selections per sample)
+  - Updated every epoch with normalized frequencies
+- **Per-Robot Accuracy**: Individual robot selection improvement over epochs
+- **Chain-of-Thought Traces**: Logged reasoning steps showing multi-step decision process
+- **Interactive Dashboards**: Real-time accuracy trends and confusion patterns
 
-## 🛠️ Installation
+## � Quick Start: Complete Setup (Sequential Steps)
 
+### Step 1: Clone and Install Dependencies
 ```bash
 git clone https://github.com/euhidaman/BitGen.git
 cd BitGen
 pip install -r requirements.txt
 ```
 
-## 📥 Setup Data & Authentication
-
-### 1. Download COCO Dataset
+### Step 2: Setup Kaggle API for Dataset Download
 ```bash
-# Set up Kaggle API credentials first
-# Place kaggle.json in ~/.kaggle/ with your API key
+# Place your kaggle.json in ~/.kaggle/ directory
+# Get kaggle.json from: https://www.kaggle.com/settings/account
+# Linux/Mac:
+mkdir -p ~/.kaggle
+mv kaggle.json ~/.kaggle/
+chmod 600 ~/.kaggle/kaggle.json
 
-python bitgen_cli.py download --output_dir data/coco
+# Windows (PowerShell):
+mkdir $env:USERPROFILE\.kaggle -Force
+Move-Item kaggle.json $env:USERPROFILE\.kaggle\
 ```
 
-### 2. Setup HuggingFace Hub (for model pushing)
+### Step 3: Download COCO Dataset from Kaggle
 ```bash
-# Set environment variable
-export HF_TOKEN="your_huggingface_token"
-# OR login via CLI
+python download_coco_dataset.py
+# This downloads COCO 2017 validation set to data/coco/
+```
+
+### Step 4: Download Robot Selection Dataset
+```bash
+# Download multi_robot_selection_dataset.json from your data source
+# Place it in: robot_selection_data/data/Multi-Robot-Selection/
+mkdir -p ../robot_selection_data/data/Multi-Robot-Selection
+# Copy your multi_robot_selection_dataset.json to this directory
+```
+
+### Step 5: Setup HuggingFace Hub (Optional - for model pushing)
+```bash
+# PowerShell:
+$env:HF_TOKEN="your_huggingface_token"
+
+# OR login via CLI:
 huggingface-cli login
 ```
 
-### 3. Setup WandB (for metrics tracking)
+### Step 6: Setup WandB (Optional - for metrics tracking)
 ```bash
-# Login to WandB
 wandb login
 # Make sure you have access to 'babylm-ntust' team
+```
+
+### Step 7: Train the Model
+```bash
+python bitgen_cli.py train `
+  --coco_data data/coco `
+  --robot_data ../robot_selection_data/data `
+  --model_size tiny `
+  --batch_size 16 `
+  --num_epochs 10 `
+  --use_wandb
 ```
 
 ## 🎓 Training
@@ -413,7 +453,11 @@ python bitgen_cli.py analyze --results_dir training_monitoring --generate_report
 - **Episodic Memory**: 64 memory slots with retrieval and update mechanisms
 - **Attention Sinks**: 4 sink tokens for efficient long-sequence processing
 - **Cross-Modal Fusion**: Text-image understanding with FIBER architecture
-- **Robot Selection**: 16 robot types with task-based selection
+- **Tiny-R1 Reasoning**: Chain-of-thought reasoning with 3-8 LSTM steps
+- **Robot Selection**: 5 robot types (Drone, Underwater Robot, Humanoid, Robot with Wheels, Robot with Legs)
+  - Top-3 multi-label classification with sigmoid activation
+  - 5x5 confusion matrix tracking per epoch
+  - Interleaved training: 90% COCO vision-language, 10% robot selection
 - **Quantization**: 1.58-bit weights for deployment efficiency
 
 ## 🎯 Use Cases
@@ -429,11 +473,23 @@ bitgen.load_checkpoint('checkpoints/best.pt')
 result = bitgen.process_image_and_text('image.jpg', 'Describe the scene')
 ```
 
-### 2. Robot Task Selection
+### 2. Robot Task Selection (Top-3 Multi-Label)
 ```python
-# Select appropriate robot for task
-robot_selection = bitgen.select_robot_for_task('Pick up heavy objects from floor')
-print(f"Selected: {robot_selection['selected_robot']} (confidence: {robot_selection['confidence']:.3f})")
+# Select top-3 most suitable robots for task/scene
+robot_selection = bitgen.select_robots_for_task(
+    task_description='Navigate rocky terrain to deliver medical supplies',
+    image_path='scene.jpg'  # Optional: scene image for visual context
+)
+
+print("🤖 Top-3 Robot Recommendations:")
+for i, (robot, confidence) in enumerate(zip(robot_selection['top_k_robots'], robot_selection['top_k_probs'])):
+    print(f"  {i+1}. {robot:<25} (confidence: {confidence:.3f})")
+
+# Output:
+# 🤖 Top-3 Robot Recommendations:
+#   1. Robot with Legs         (confidence: 0.892)
+#   2. Drone                   (confidence: 0.745)
+#   3. Robot with Wheels       (confidence: 0.623)
 ```
 
 ### 3. Text Generation with Reasoning
