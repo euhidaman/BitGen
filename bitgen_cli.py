@@ -81,11 +81,6 @@ def main():
     train_parser.add_argument('--enable_carbon_tracking', action='store_true', help='Enable CodeCarbon energy tracking')
     train_parser.add_argument('--track_flops', action='store_true', help='Enable FLOPS calculation and tracking')
     train_parser.add_argument('--use_wandb', action='store_true')
-    # HuggingFace Hub integration
-    train_parser.add_argument('--push_to_hub', action='store_true', help='Push model to HuggingFace Hub after every epoch')
-    train_parser.add_argument('--hf_repo_name', type=str, help='HuggingFace repository name (defaults to BitGen-Reasoning)')
-    train_parser.add_argument('--hf_organization', type=str, help='HuggingFace organization (uses authenticated user if not provided)')
-    train_parser.add_argument('--hf_private', action='store_true', help='Create private HuggingFace repository')
     # Enhanced WandB integration
     train_parser.add_argument('--wandb_project', type=str, default='bitgen-training', help='WandB project name')
     train_parser.add_argument('--wandb_entity', type=str, default='babylm-ntust', help='WandB team/entity')
@@ -257,17 +252,15 @@ def train_with_monitoring(args):
             wandb_entity=args.wandb_entity,
             wandb_run_name=args.wandb_run_name,
             wandb_tags=args.wandb_tags,
-            push_to_hub=args.push_to_hub,
-            hf_repo_name=args.hf_repo_name,
-            hf_organization=args.hf_organization,
-            hf_private=args.hf_private
+            push_to_hub=True,  # Always push to HuggingFace Hub automatically
+            hf_repo_name="BitGen-BabyLM-2025",  # Default repository name
+            hf_organization=None,  # Uses authenticated user's account
+            hf_private=False  # Public repository by default
         )
 
         print("🚀 Starting BitGen training...")
         print(f"📊 Model: {args.model_size} ({config.embed_dim}d, {config.num_layers} layers)")
-
-        if args.push_to_hub:
-            print(f"🤗 Will push to HuggingFace: {args.hf_repo_name}")
+        print(f"🤗 Will automatically push to HuggingFace: BitGen-BabyLM-2025")
 
         # Start training with GPU-optimized settings
         training_start = time.time()
