@@ -257,12 +257,27 @@ class BitGenTrainer:
         robot_loader = None
         if robot_data_path and Path(robot_data_path).exists():
             robot_dataset = RobotSelectionDataset(robot_data_path)
+            
+            # Custom collate function for robot dataset to handle variable-length lists
+            def robot_collate_fn(batch):
+                """Custom collate function for robot selection dataset"""
+                return {
+                    'input_ids': torch.stack([item['input_ids'] for item in batch]),
+                    'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
+                    'labels': torch.stack([item['labels'] for item in batch]),
+                    'robot_labels': torch.stack([item['robot_labels'] for item in batch]),
+                    'selected_robots': [item['selected_robots'] for item in batch],  # Keep as list
+                    'task_description': [item['task_description'] for item in batch],  # Keep as list
+                    'num_robots_selected': torch.tensor([item['num_robots_selected'] for item in batch])
+                }
+            
             robot_loader = DataLoader(
                 robot_dataset,
                 batch_size=batch_size,
                 shuffle=True,
                 num_workers=num_workers,
-                persistent_workers=True if num_workers > 0 else False
+                persistent_workers=True if num_workers > 0 else False,
+                collate_fn=robot_collate_fn  # Use custom collate function
             )
         
         return train_loader, val_loader, robot_loader
