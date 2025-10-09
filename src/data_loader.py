@@ -195,9 +195,9 @@ class COCODataset(Dataset):
         # Create attention mask (1 for real tokens, 0 for padding)
         attention_mask = [1 if token_id != self.tokenizer.special_tokens['<pad>'] else 0 for token_id in input_ids]
 
-        # Create labels (shifted input_ids for language modeling)
-        # CRITICAL: Padding positions must be -100 (ignore_index) not 0!
-        labels = input_ids[1:] + [self.tokenizer.special_tokens['<pad>']]
+        # Create labels - DON'T shift here, loss function will handle shifting
+        # CRITICAL: Padding positions must be -100 (ignore_index) for CrossEntropyLoss
+        labels = input_ids.copy()  # Use same sequence, loss function will shift
         
         # Replace padding tokens with -100 (ignore index for CrossEntropyLoss)
         pad_token_id = self.tokenizer.special_tokens['<pad>']
