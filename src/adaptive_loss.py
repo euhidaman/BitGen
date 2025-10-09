@@ -205,10 +205,25 @@ class BitGenLoss(nn.Module):
         # CrossEntropyLoss expects: (N, C) for logits and (N,) for labels where C is vocab_size
         batch_size, seq_len, vocab_size = logits.shape
         
+        # Check for NaN/Inf in logits BEFORE computing loss
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            print(f"[LM LOSS ERROR] NaN/Inf in logits before loss computation!")
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+        
+        # Clamp extreme logit values to prevent overflow
+        logits = torch.clamp(logits, min=-100, max=100)
+        
         # Reshape: [batch, seq, vocab] -> [batch*seq, vocab]
         logits_flat = logits.reshape(-1, vocab_size)
         # Reshape: [batch, seq] -> [batch*seq]
         labels_flat = labels.reshape(-1)
+        
+        # Check for invalid labels (must be in range [0, vocab_size) or -100)
+        invalid_labels = ((labels_flat < -100) | ((labels_flat >= vocab_size) & (labels_flat != -100)))
+        if invalid_labels.any():
+            print(f"[LM LOSS ERROR] Invalid labels detected! Min: {labels_flat.min()}, Max: {labels_flat.max()}, vocab_size: {vocab_size}")
+            # Clamp invalid labels
+            labels_flat = torch.clamp(labels_flat, min=-100, max=vocab_size-1)
         
         # Count valid tokens (not -100)
         valid_count = (labels_flat != -100).sum().item()
@@ -218,6 +233,13 @@ class BitGenLoss(nn.Module):
         
         # Compute loss - CrossEntropyLoss will ignore -100 automatically
         loss = F.cross_entropy(logits_flat, labels_flat, ignore_index=-100, reduction='mean')
+        
+        # Check if loss is NaN
+        if torch.isnan(loss):
+            print(f"[LM LOSS ERROR] Loss is NaN after computation!")
+            print(f"  Logits stats: min={logits_flat.min():.2f}, max={logits_flat.max():.2f}, mean={logits_flat.mean():.2f}")
+            print(f"  Labels stats: min={labels_flat.min()}, max={labels_flat.max()}, valid_count={valid_count}")
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
         
         # DEBUG: Print periodically
         if self.debug_step_counter % 100 == 0:
