@@ -200,17 +200,30 @@ class BitGenLoss(nn.Module):
         self.debug_step_counter = 0
 
     def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
-        """FIBER/CLIP-style image-text contrastive loss"""
+        """FIBER/CLIP-style image-text contrastive loss with numerical stability"""
         if text_features is None or vision_features is None:
             return torch.tensor(0.0, device=text_features.device if text_features is not None else vision_features.device, requires_grad=True)
         
-        # Normalize features
-        text_features = F.normalize(text_features, dim=-1)
-        vision_features = F.normalize(vision_features, dim=-1)
+        # STABILITY: Check for NaN/Inf in input features
+        if torch.isnan(text_features).any() or torch.isinf(text_features).any():
+            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
+        if torch.isnan(vision_features).any() or torch.isinf(vision_features).any():
+            return torch.tensor(0.0, device=vision_features.device, requires_grad=True)
+        
+        # Normalize features with epsilon for stability
+        text_features = F.normalize(text_features, p=2, dim=-1, eps=1e-8)
+        vision_features = F.normalize(vision_features, p=2, dim=-1, eps=1e-8)
+        
+        # STABILITY: Clamp temperature to prevent division by very small numbers
+        temperature = max(temperature, 0.01)  # Minimum temp = 0.01
         
         # Compute similarity matrices
         logits_per_text = torch.matmul(text_features, vision_features.t()) / temperature
         logits_per_vision = logits_per_text.t()
+        
+        # STABILITY: Clamp logits to prevent exp overflow in cross_entropy
+        logits_per_text = torch.clamp(logits_per_text, min=-100.0, max=100.0)
+        logits_per_vision = torch.clamp(logits_per_vision, min=-100.0, max=100.0)
         
         # Create labels (diagonal is positive pairs)
         batch_size = text_features.shape[0]
@@ -219,6 +232,12 @@ class BitGenLoss(nn.Module):
         # Symmetric cross-entropy loss
         loss_text = F.cross_entropy(logits_per_text, labels)
         loss_vision = F.cross_entropy(logits_per_vision, labels)
+        
+        # STABILITY: Check for NaN in losses
+        if torch.isnan(loss_text) or torch.isinf(loss_text):
+            loss_text = torch.tensor(0.0, device=text_features.device, requires_grad=True)
+        if torch.isnan(loss_vision) or torch.isinf(loss_vision):
+            loss_vision = torch.tensor(0.0, device=vision_features.device, requires_grad=True)
         
         loss = (loss_text + loss_vision) / 2.0
         

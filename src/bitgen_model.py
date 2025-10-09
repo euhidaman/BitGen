@@ -478,14 +478,30 @@ class CrossModalFusion(nn.Module):
         if return_contrastive_features:
             # Text features for contrastive learning
             text_itc = self.cross_modal_text_transform_itc(text_embeddings)
-            text_cls = self.cross_modal_text_pooler_itc(text_itc[:, 0:1])  # Use first token as CLS
-            text_cls = F.normalize(text_cls.squeeze(1), dim=-1)
+            
+            # STABILITY: Check for NaN before pooling
+            if torch.isnan(text_itc).any() or torch.isinf(text_itc).any():
+                # Return safe default features
+                text_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
+                image_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
+            else:
+                text_cls = self.cross_modal_text_pooler_itc(text_itc[:, 0:1])  # Use first token as CLS
+                text_cls = F.normalize(text_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
 
-            # Image features for contrastive learning - USE ORIGINAL EMBEDDINGS
-            image_itc = self.cross_modal_image_transform_itc(original_image_embeds)  # Use original 128-dim embeddings
-            image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
-            image_cls = self.cross_modal_image_pooler_itc(image_avg)
-            image_cls = F.normalize(image_cls.squeeze(1), dim=-1)
+                # Image features for contrastive learning - USE ORIGINAL EMBEDDINGS
+                image_itc = self.cross_modal_image_transform_itc(original_image_embeds)
+                
+                # STABILITY: Check for NaN in image features
+                if torch.isnan(image_itc).any() or torch.isinf(image_itc).any():
+                    image_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
+                else:
+                    image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
+                    image_cls = self.cross_modal_image_pooler_itc(image_avg)
+                    image_cls = F.normalize(image_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
+                
+                # STABILITY: Final check - clamp extreme values
+                text_cls = torch.clamp(text_cls, min=-10.0, max=10.0)
+                image_cls = torch.clamp(image_cls, min=-10.0, max=10.0)
 
             return fused_output, {
                 'text_features': text_cls,

@@ -392,6 +392,19 @@ class BitGenTrainer:
             lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
             return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
 
+        # STABILITY: Check model parameters for NaN before backward
+        has_nan_params = False
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and (torch.isnan(param).any() or torch.isinf(param).any()):
+                self.logger.error(f"NaN/Inf detected in parameter {name} before backward!")
+                has_nan_params = True
+                break
+        
+        if has_nan_params:
+            self.logger.error("Skipping batch due to NaN parameters")
+            lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+            return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
+
         # GRADIENT ACCUMULATION FIX: Always do backward pass first
         # Accumulate gradients regardless of whether we'll step optimizer
         total_loss.backward()
