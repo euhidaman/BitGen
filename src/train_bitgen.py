@@ -1016,12 +1016,16 @@ class BitGenTrainer:
                     accumulated_loss += current_loss
                     accumulated_count += 1
                     
-                    # DEBUG: Log ALL losses every 50 steps to diagnose zero loss issue
-                    if step % 50 == 0:
+                    # DEBUG: Log losses more frequently to diagnose zero loss issue
+                    if step % 20 == 0 or current_loss == 0.0:
                         batch_type = step_metrics.get('batch_type', 'unknown')
-                        self.logger.info(f"DEBUG Step {step}/{(step + 1) % grad_accum_steps}: "
+                        is_optim_step = (step + 1) % grad_accum_steps == 0
+                        self.logger.info(f"DEBUG Step {step} (optim={is_optim_step}): "
                                        f"{batch_type} loss={current_loss:.6f}, "
                                        f"accum={accumulated_loss:.6f}, count={accumulated_count}")
+                else:
+                    # Log skipped batches
+                    self.logger.warning(f"⚠️ Step {step}: Batch SKIPPED (type={step_metrics.get('batch_type', 'unknown')})")
 
                 # Only step optimizer after accumulating gradients
                 if (step + 1) % grad_accum_steps == 0:
@@ -1029,9 +1033,15 @@ class BitGenTrainer:
                     if accumulated_count > 0:
                         step_metrics['total_loss'] = accumulated_loss / accumulated_count
                         
-                        # DEBUG: Log when loss is suspiciously low
-                        if step_metrics['total_loss'] < 0.001 and step % 100 == 0:
-                            self.logger.warning(f"⚠️ Step {step}: Very low loss = {step_metrics['total_loss']:.6f}")
+                        # DEBUG: Always log the averaged loss on optimizer steps
+                        if step % 20 == 0:
+                            self.logger.info(f"✓ OPTIMIZER STEP {step}: "
+                                           f"Averaged loss = {step_metrics['total_loss']:.6f} "
+                                           f"(from {accumulated_count} batches, total={accumulated_loss:.6f})")
+                        
+                        # WARN: Log when loss is suspiciously low
+                        if step_metrics['total_loss'] < 0.001:
+                            self.logger.warning(f"⚠️ Step {step}: Very low averaged loss = {step_metrics['total_loss']:.6f}")
                             self.logger.warning(f"   Accumulated from {accumulated_count} batches: {accumulated_loss:.6f}")
                     else:
                         step_metrics['total_loss'] = 0.0  # All batches were skipped
