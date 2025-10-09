@@ -196,10 +196,15 @@ class COCODataset(Dataset):
         attention_mask = [1 if token_id != self.tokenizer.special_tokens['<pad>'] else 0 for token_id in input_ids]
 
         # Create labels (shifted input_ids for language modeling)
+        # CRITICAL: Padding positions must be -100 (ignore_index) not 0!
         labels = input_ids[1:] + [self.tokenizer.special_tokens['<pad>']]
+        
+        # Replace padding tokens with -100 (ignore index for CrossEntropyLoss)
+        pad_token_id = self.tokenizer.special_tokens['<pad>']
+        labels = [-100 if tid == pad_token_id else tid for tid in labels]
 
-        # Validate labels are also within bounds
-        labels = [min(max(tid, 0), max_valid_id) for tid in labels]
+        # Validate non-padding labels are within bounds
+        labels = [-100 if tid == -100 else min(max(tid, 0), max_valid_id) for tid in labels]
 
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
