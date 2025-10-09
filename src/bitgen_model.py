@@ -595,13 +595,20 @@ class RobotSelector(nn.Module):
         self.robot_types = config.robot_types
 
         # Learnable robot embeddings (each robot has semantic meaning)
+        # STABILITY: Use smaller initialization to prevent extreme values
         self.robot_embeddings = nn.Parameter(
-            torch.randn(config.num_robots, config.robot_embed_dim)
+            torch.randn(config.num_robots, config.robot_embed_dim) * 0.02
         )
 
         # Selection network for multi-label classification (NOT softmax)
         self.task_encoder = BitNetLinear(config.embed_dim, config.robot_embed_dim)
         self.robot_scorer = BitNetLinear(config.robot_embed_dim * 2, 1)  # Binary score per robot
+        
+        # STABILITY: Initialize scorer with small weights
+        if hasattr(self.robot_scorer, 'weight'):
+            nn.init.normal_(self.robot_scorer.weight, mean=0.0, std=0.02)
+            if hasattr(self.robot_scorer, 'bias') and self.robot_scorer.bias is not None:
+                nn.init.zeros_(self.robot_scorer.bias)
 
     def forward(self, task_representation, return_top_k=True):
         """
@@ -618,21 +625,47 @@ class RobotSelector(nn.Module):
         batch_size = task_representation.size(0)
 
         # Encode task representation to robot embedding space
-        task_encoded = self.task_encoder(task_representation.mean(dim=1))  # [B, robot_embed_dim]
+        task_repr_mean = task_representation.mean(dim=1)  # [B, embed_dim]
+        
+        # STABILITY: Check for NaN in input
+        if torch.isnan(task_repr_mean).any() or torch.isinf(task_repr_mean).any():
+            # Return safe default: uniform probabilities
+            robot_probs = torch.ones(batch_size, self.num_robots, device=task_representation.device) * 0.5
+            if return_top_k:
+                return {
+                    'all_probs': robot_probs,
+                    'all_logits': torch.zeros_like(robot_probs),
+                    'top_k_probs': robot_probs[:, :self.top_k],
+                    'top_k_indices': torch.arange(self.top_k, device=task_representation.device).unsqueeze(0).expand(batch_size, -1),
+                    'top_k_robots': [[self.robot_types[i] for i in range(self.top_k)] for _ in range(batch_size)]
+                }
+            return robot_probs
+        
+        task_encoded = self.task_encoder(task_repr_mean)  # [B, robot_embed_dim]
+        
+        # STABILITY: Normalize task encoding to prevent extreme values
+        task_encoded = torch.nn.functional.normalize(task_encoded, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
 
         # Compute independent score for each robot (multi-label, not mutually exclusive)
         robot_scores = []
         for i, robot_emb in enumerate(self.robot_embeddings):
+            # Normalize robot embedding too
+            robot_emb_norm = torch.nn.functional.normalize(robot_emb, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
+            
             # Concatenate task encoding with robot embedding
             combined = torch.cat([
                 task_encoded, 
-                robot_emb.unsqueeze(0).expand(batch_size, -1)
+                robot_emb_norm.unsqueeze(0).expand(batch_size, -1)
             ], dim=-1)
             # Score: how suitable is this robot for this task?
             score = self.robot_scorer(combined).squeeze(-1)  # [B]
             robot_scores.append(score)
 
         robot_scores = torch.stack(robot_scores, dim=1)  # [B, num_robots]
+        
+        # CRITICAL: Clamp logits to prevent numerical overflow in sigmoid
+        # sigmoid(x) = 1/(1+exp(-x)) can overflow if x is too large/small
+        robot_scores = torch.clamp(robot_scores, min=-50.0, max=50.0)
         
         # Use sigmoid for independent probabilities (multi-label)
         robot_probs = torch.sigmoid(robot_scores)  # Each robot has independent probability

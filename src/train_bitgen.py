@@ -543,25 +543,48 @@ class BitGenTrainer:
                 robot_probs = robot_selection['all_probs']  # [B, num_robots] - Probabilities for accuracy
                 top_k_indices = robot_selection['top_k_indices']  # [B, top_k]
 
+                # Check for NaN in logits BEFORE computing loss
+                if torch.isnan(robot_logits).any() or torch.isinf(robot_logits).any():
+                    self.logger.error(f"NaN/Inf detected in robot_logits!")
+                    self.logger.error(f"  robot_logits stats: min={robot_logits.min().item():.4f}, max={robot_logits.max().item():.4f}")
+                    self.logger.error(f"  robot_logits nan count: {torch.isnan(robot_logits).sum().item()}")
+                    self.logger.error(f"  robot_logits inf count: {torch.isinf(robot_logits).sum().item()}")
+                    lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+                    return {'total_loss': 1.0 / grad_accum_steps, 'learning_rate': lr, 'skipped_batch': True}
+
                 # Multi-label binary cross-entropy loss with logits (autocast-safe)
                 robot_loss = F.binary_cross_entropy_with_logits(
                     robot_logits, robot_labels, reduction='mean'
                 )
 
+                # Check robot_loss for NaN immediately after computation
+                if torch.isnan(robot_loss) or torch.isinf(robot_loss):
+                    self.logger.error(f"NaN/Inf in robot_loss after BCE computation!")
+                    self.logger.error(f"  robot_logits: min={robot_logits.min().item():.4f}, max={robot_logits.max().item():.4f}")
+                    self.logger.error(f"  robot_labels: {robot_labels[0]}")
+                    lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+                    return {'total_loss': 1.0 / grad_accum_steps, 'learning_rate': lr, 'skipped_batch': True}
+
                 # Optional: Language modeling loss on task description
                 if 'logits' in outputs and 'labels' in batch:
                     labels = batch['labels'].to(self.device)
                     lm_loss, _ = self.loss_fn(outputs, labels, images=None)
-                    total_loss = robot_loss + 0.1 * lm_loss  # Weight LM loss lower
+                    
+                    # Check lm_loss for NaN
+                    if torch.isnan(lm_loss) or torch.isinf(lm_loss):
+                        self.logger.warning(f"NaN/Inf in lm_loss, skipping LM component")
+                        total_loss = robot_loss
+                    else:
+                        total_loss = robot_loss + 0.1 * lm_loss  # Weight LM loss lower
                 else:
                     total_loss = robot_loss
 
                 # CRITICAL: Scale loss by gradient accumulation steps
                 total_loss = total_loss / grad_accum_steps
 
-                # Check for NaN/Inf
+                # Check for NaN/Inf in final total_loss
                 if torch.isnan(total_loss) or torch.isinf(total_loss):
-                    self.logger.error(f"Invalid robot loss: {total_loss.item()}")
+                    self.logger.error(f"Invalid robot total_loss after scaling: {total_loss.item()}")
                     lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
                     return {'total_loss': 1.0 / grad_accum_steps, 'learning_rate': lr, 'skipped_batch': True}
 
