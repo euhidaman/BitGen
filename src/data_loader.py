@@ -258,15 +258,23 @@ class RobotSelectionDataset(Dataset):
         return data
 
     def extract_robot_types(self) -> List[str]:
-        """Extract unique robot types from multi-robot output strings"""
+        """Extract unique robot types from multi-robot output strings or lists"""
         robot_types = set()
 
         for item in self.data:
-            # Parse "original_single_robot_output": "Drone, Robot with Legs"
+            # Parse "original_single_robot_output": can be string or list
             robot_output = item.get('original_single_robot_output', '')
             if robot_output:
-                # Split by comma and extract individual robot names
-                robots = [r.strip() for r in robot_output.split(',')]
+                # Handle both string and list formats
+                if isinstance(robot_output, list):
+                    # Already a list of robots
+                    robots = [r.strip() for r in robot_output]
+                elif isinstance(robot_output, str):
+                    # String format: "Drone, Robot with Legs"
+                    robots = [r.strip() for r in robot_output.split(',')]
+                else:
+                    continue  # Skip invalid formats
+                
                 robot_types.update(robots)
         
         if not robot_types:
@@ -286,9 +294,14 @@ class RobotSelectionDataset(Dataset):
         # Extract task description
         task_desc = item.get('task_description', item.get('description', item.get('task', '')))
 
-        # Parse multi-robot output: "Drone, Robot with Legs, Humanoid"
+        # Parse multi-robot output: can be string "Drone, Robot with Legs" or list ["Drone", "Robot with Legs"]
         robot_output = item.get('original_single_robot_output', '')
-        selected_robots = [r.strip() for r in robot_output.split(',')] if robot_output else []
+        if isinstance(robot_output, list):
+            selected_robots = [r.strip() for r in robot_output]
+        elif isinstance(robot_output, str) and robot_output:
+            selected_robots = [r.strip() for r in robot_output.split(',')]
+        else:
+            selected_robots = []
         
         # Create multi-hot label vector for multi-label classification
         robot_labels = torch.zeros(len(self.robot_types), dtype=torch.float32)
