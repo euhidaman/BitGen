@@ -333,11 +333,11 @@ class BitGenLoss(nn.Module):
         # PRIMARY: Contrastive loss (FIBER-style multimodal learning)
         if images is not None and 'contrastive_features' in model_outputs:
             contrastive_feats = model_outputs['contrastive_features']
-            if 'text_features' in contrastive_feats and 'vision_features' in contrastive_feats:
+            if 'text_features' in contrastive_feats and 'image_features' in contrastive_feats:
                 contrastive_loss = self.contrastive_loss(
                     contrastive_feats['text_features'],
-                    contrastive_feats['vision_features'],
-                    temperature=0.07
+                    contrastive_feats['image_features'],
+                    temperature=contrastive_feats.get('temperature', 0.07)
                 )
                 losses['contrastive'] = contrastive_loss
                 
