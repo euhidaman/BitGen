@@ -220,9 +220,18 @@ class BitGenLoss(nn.Module):
         shift_labels_flat = shift_labels.reshape(-1)
 
         # Compute cross entropy loss (automatically handles ignore_index=-100)
-        loss = self.ce_loss(shift_logits_flat, shift_labels_flat)
-        
-        return loss
+        try:
+            loss = self.ce_loss(shift_logits_flat, shift_labels_flat)
+            
+            # DEBUG: Print actual loss value
+            if self.debug_step_counter % 100 == 0:
+                print(f"[LM LOSS] Step {self.debug_step_counter}: loss={loss.item():.6f}, valid_tokens={valid_mask.sum().item()}")
+            
+            return loss
+        except Exception as e:
+            print(f"[LM LOSS ERROR] {e}")
+            print(f"  logits_flat: {shift_logits_flat.shape}, labels_flat: {shift_labels_flat.shape}")
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
 
     def vision_text_alignment_loss(self, text_features: torch.Tensor,
                                  vision_features: torch.Tensor) -> torch.Tensor:
@@ -322,6 +331,11 @@ class BitGenLoss(nn.Module):
         # Increment debug counter
         self.debug_step_counter += 1
         should_debug = (self.debug_step_counter % 5000 == 0)
+
+        # CRITICAL DEBUG: Check labels
+        if self.debug_step_counter % 100 == 0:
+            valid_labels = (labels != -100).sum().item()
+            print(f"[LOSS FORWARD] Step {self.debug_step_counter}: labels shape={labels.shape}, valid={valid_labels}, has_logits={'logits' in model_outputs}")
 
         losses = {}
 
