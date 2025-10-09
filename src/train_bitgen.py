@@ -78,6 +78,11 @@ class BitGenTrainer:
         self.epoch = 0
         self.best_loss = float('inf')
         
+        # STABILITY: Track loss moving average to detect divergence
+        self.loss_ema = None  # Exponential moving average of loss
+        self.loss_ema_alpha = 0.01  # Smoothing factor
+        self.divergence_threshold = 2.0  # If current loss > 2x EMA, warn
+        
         # Robot selection confusion matrix tracking (5x5 for exact dataset robots)
         self.robot_confusion_matrix = np.zeros((config.num_robots, config.num_robots))
         self.robot_selection_history = []  # Reserved for future use (currently unused)
@@ -983,7 +988,15 @@ class BitGenTrainer:
             torch.cuda.empty_cache()
             # Set environment variable for better memory management
             os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+            
+            # STABILITY: Set CUDA matmul precision for stability
+            torch.backends.cuda.matmul.allow_tf32 = True  # Faster but still accurate
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True  # Auto-tune kernels for performance
+            torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+            
             self.logger.info("✅ Enabled PyTorch CUDA memory optimization")
+            self.logger.info("✅ Enabled TF32 precision for faster training")
 
         # Setup training components
         optimizer, scheduler = self.setup_optimizer(learning_rate)
@@ -1116,10 +1129,26 @@ class BitGenTrainer:
                         step_metrics['total_loss'] = 1.0
                         self.logger.warning(f"⚠️ Step {step}: All {grad_accum_steps} batches were skipped!")
                     
+                    # STABILITY: Check for loss divergence
+                    current_loss_val = step_metrics.get('total_loss', 0.0)
+                    if current_loss_val > 0.0:
+                        if self.loss_ema is None:
+                            self.loss_ema = current_loss_val
+                        else:
+                            self.loss_ema = self.loss_ema_alpha * current_loss_val + (1 - self.loss_ema_alpha) * self.loss_ema
+                            
+                            # Check for divergence
+                            if current_loss_val > self.loss_ema * self.divergence_threshold:
+                                self.logger.warning(f"⚠️ LOSS DIVERGENCE DETECTED at step {step}!")
+                                self.logger.warning(f"   Current loss: {current_loss_val:.4f}")
+                                self.logger.warning(f"   EMA loss: {self.loss_ema:.4f}")
+                                self.logger.warning(f"   Ratio: {current_loss_val / self.loss_ema:.2f}x")
+                    
                     # DEBUG: Log the loss on optimizer steps
                     if step % 20 == 0:
+                        ema_str = f", EMA={self.loss_ema:.4f}" if self.loss_ema else ""
                         self.logger.info(f"✓ OPTIMIZER STEP {step}: "
-                                       f"Loss = {step_metrics.get('total_loss', 0.0):.6f}")
+                                       f"Loss = {current_loss_val:.6f}{ema_str}")
                     
                     accumulated_loss = 0.0
                     accumulated_count = 0
