@@ -258,6 +258,30 @@ class BitGenTrainer:
         if robot_data_path and Path(robot_data_path).exists():
             robot_dataset = RobotSelectionDataset(robot_data_path)
             
+            # CRITICAL: Update model config with actual robot types from dataset
+            dataset_robot_types = robot_dataset.robot_types
+            if len(dataset_robot_types) != self.config.num_robots:
+                self.logger.warning(f"⚠️ Robot count mismatch detected!")
+                self.logger.warning(f"   Config expects: {self.config.num_robots} robots")
+                self.logger.warning(f"   Dataset has: {len(dataset_robot_types)} robots")
+                self.logger.warning(f"   Updating model to match dataset...")
+                
+                # Update both config and model
+                self.config.robot_types = dataset_robot_types
+                self.config.num_robots = len(dataset_robot_types)
+                self.model.config.robot_types = dataset_robot_types
+                self.model.config.num_robots = len(dataset_robot_types)
+                
+                # Recreate robot selector with correct dimensions
+                from .bitgen_model import RobotSelector
+                self.model.robot_selector = RobotSelector(self.model.config).to(self.device)
+                
+                # Update confusion matrix size
+                self.robot_confusion_matrix = np.zeros((len(dataset_robot_types), len(dataset_robot_types)))
+                
+                self.logger.info(f"✅ Model updated: {len(dataset_robot_types)} robots")
+                self.logger.info(f"   Robot types: {dataset_robot_types}")
+            
             # Custom collate function for robot dataset to handle variable-length lists
             def robot_collate_fn(batch):
                 """Custom collate function for robot selection dataset"""
@@ -996,8 +1020,10 @@ class BitGenTrainer:
                     for key, value in step_metrics.items():
                         epoch_metrics[key].append(value)
 
-                    # Update performance tracker
-                    self.performance_tracker.update(step_metrics)
+                    # Update performance tracker (filter out non-numeric values)
+                    numeric_metrics = {k: v for k, v in step_metrics.items() 
+                                      if isinstance(v, (int, float, torch.Tensor)) and k != 'batch_type'}
+                    self.performance_tracker.update(numeric_metrics)
 
                     # CRITICAL FIX: Step scheduler after each optimizer step (not per epoch)
                     scheduler.step()
