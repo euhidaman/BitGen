@@ -283,7 +283,12 @@ class RobotSelectionDataset(Dataset):
                 f"Check 'original_single_robot_output' field in {self.dataset_file}"
             )
 
-        return sorted(list(robot_types))
+        sorted_robots = sorted(list(robot_types))
+        print(f"📊 Extracted {len(sorted_robots)} unique robot types from dataset:")
+        for i, robot in enumerate(sorted_robots, 1):
+            print(f"   {i}. {robot}")
+        
+        return sorted_robots
 
     def __len__(self):
         return len(self.data)
@@ -291,8 +296,8 @@ class RobotSelectionDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
 
-        # Extract task description
-        task_desc = item.get('task_description', item.get('description', item.get('task', '')))
+        # Extract task description - try multiple field names
+        task_desc = item.get('input', item.get('task_description', item.get('description', item.get('task', ''))))
 
         # Parse multi-robot output: can be string "Drone, Robot with Legs" or list ["Drone", "Robot with Legs"]
         robot_output = item.get('original_single_robot_output', '')
@@ -306,10 +311,23 @@ class RobotSelectionDataset(Dataset):
         # Create multi-hot label vector for multi-label classification
         robot_labels = torch.zeros(len(self.robot_types), dtype=torch.float32)
         valid_robots = []
+        invalid_robots = []
         for robot_name in selected_robots:
             if robot_name in self.robot_to_id:
                 robot_labels[self.robot_to_id[robot_name]] = 1.0
                 valid_robots.append(robot_name)
+            else:
+                invalid_robots.append(robot_name)
+        
+        # Debug: Print mismatches on first occurrence
+        if invalid_robots and not hasattr(self, '_mismatch_logged'):
+            self._mismatch_logged = True
+            print(f"\n⚠️ Robot name mismatch detected in dataset:")
+            print(f"   Ground truth robots in JSON: {selected_robots}")
+            print(f"   Valid matches: {valid_robots}")
+            print(f"   Invalid/missing: {invalid_robots}")
+            print(f"   Known robot types: {list(self.robot_to_id.keys())}")
+            print(f"   Hint: Check for case sensitivity or extra spaces\n")
         
         # Tokenize task description
         input_ids = self.tokenizer.encode(task_desc, max_length=128)
