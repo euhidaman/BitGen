@@ -114,7 +114,7 @@ class BitGenTrainer:
         if push_to_hub:
             from .huggingface_integration import HuggingFaceIntegration
             self.hf_integration = HuggingFaceIntegration(
-                repo_name=hf_repo_name or "BitGen-Reasoning",
+                repo_name=hf_repo_name or "BitGen-Robot-Reasoning",
                 organization=hf_organization,
                 private=hf_private
             )
@@ -445,6 +445,31 @@ class BitGenTrainer:
             elif isinstance(value, dict):
                 for k, v in value.items():
                     metrics[f"{key}_{k}"] = v
+        
+        # Add contrastive learning metrics if available
+        if 'contrastive_features' in outputs:
+            contrastive_feats = outputs['contrastive_features']
+            if 'text_features' in contrastive_feats and 'image_features' in contrastive_feats:
+                # Compute similarity matrix for visualization
+                text_feat = contrastive_feats['text_features']
+                image_feat = contrastive_feats['image_features']
+                similarity = torch.matmul(text_feat, image_feat.t())
+                
+                # Compute retrieval accuracy (text->image and image->text)
+                batch_size = text_feat.shape[0]
+                labels = torch.arange(batch_size, device=text_feat.device)
+                
+                # Text-to-image retrieval accuracy (top-1)
+                t2i_preds = similarity.argmax(dim=1)
+                t2i_acc = (t2i_preds == labels).float().mean().item()
+                
+                # Image-to-text retrieval accuracy (top-1)
+                i2t_preds = similarity.t().argmax(dim=1)
+                i2t_acc = (i2t_preds == labels).float().mean().item()
+                
+                metrics['contrastive/t2i_accuracy'] = t2i_acc
+                metrics['contrastive/i2t_accuracy'] = i2t_acc
+                metrics['contrastive/avg_accuracy'] = (t2i_acc + i2t_acc) / 2
         
         # Comprehensive wandb logging
         if self.wandb_monitor and optimizer is not None:  # Only log when optimizer steps
@@ -1161,6 +1186,20 @@ class BitGenTrainer:
 
             if wandb.run:
                 wandb.log(epoch_avg, step=self.global_step)
+            
+            # Push to HuggingFace after each epoch
+            if self.hf_integration:
+                try:
+                    self.logger.info(f"🤗 Pushing checkpoint to HuggingFace for epoch {epoch+1}...")
+                    self.hf_integration.push_model_checkpoint(
+                        model=self.model,
+                        config=self.config,
+                        epoch=epoch + 1,
+                        metrics=epoch_avg
+                    )
+                    self.logger.info(f"✅ Model pushed to HuggingFace: epoch {epoch+1}")
+                except Exception as e:
+                    self.logger.error(f"❌ HuggingFace push failed for epoch {epoch+1}: {e}")
             
             # Plot robot selection confusion matrix at end of each epoch
             if robot_loader:

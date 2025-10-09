@@ -252,14 +252,14 @@ def train_with_monitoring(args):
             wandb_run_name=args.wandb_run_name,
             wandb_tags=args.wandb_tags,
             push_to_hub=True,  # Always push to HuggingFace Hub automatically
-            hf_repo_name="BitGen-BabyLM-2025",  # Default repository name
+            hf_repo_name="BitGen-Robot-Reasoning",  # Default repository name
             hf_organization=None,  # Uses authenticated user's account
             hf_private=False  # Public repository by default
         )
 
         print("🚀 Starting BitGen training...")
         print(f"📊 Model: {args.model_size} ({config.embed_dim}d, {config.num_layers} layers)")
-        print(f"🤗 Will automatically push to HuggingFace: BitGen-BabyLM-2025")
+        print(f"🤗 Will automatically push to HuggingFace: BitGen-Robot-Reasoning")
 
         # Start training with GPU-optimized settings
         training_start = time.time()
