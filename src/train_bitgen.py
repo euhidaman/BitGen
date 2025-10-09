@@ -592,7 +592,7 @@ class BitGenTrainer:
                 'robot/top_1_confidence': robot_selection['top_k_probs'][:, 0].mean().item(),
                 'robot/top_3_confidence': robot_selection['top_k_probs'].mean().item()
             }
-            self.wandb_monitor.wandb_run.log(robot_metrics, step=self.global_step)
+            wandb.log(robot_metrics, step=self.global_step)
 
         return metrics
     
@@ -670,7 +670,7 @@ class BitGenTrainer:
             # Log to WandB as HTML
             if self.wandb_monitor:
                 import wandb
-                self.wandb_monitor.wandb_run.log({
+                wandb.log({
                     'reasoning_trace': wandb.Html(trace.replace('\n', '<br>').replace(' ', '&nbsp;'))
                 }, step=self.global_step)
                 
@@ -719,7 +719,7 @@ class BitGenTrainer:
             # Log to WandB
             if self.wandb_monitor:
                 import wandb
-                self.wandb_monitor.wandb_run.log({
+                wandb.log({
                     f'robot_confusion_matrix_epoch_{epoch+1}': wandb.Image(str(save_path))
                 }, step=self.global_step)
             
@@ -833,11 +833,11 @@ class BitGenTrainer:
 
             # OPTIMIZE FOR A40/A100: Maximize utilization for high-end GPUs
             if total_vram_gb > 40:  # A40 has 46GB, A100 has 40-80GB
-                # INCREASED: Boost batch size to 128 for maximum GPU utilization
-                optimized_batch_size = max(batch_size, 128)  # Increased from 96 to 128
+                # INCREASED: Boost batch size to 192 for maximum GPU utilization (targeting ~38GB usage)
+                optimized_batch_size = max(batch_size, 192)  # Increased from 128 to 192
 
-                # Target 32GB memory usage (70% of 46GB)
-                optimized_memory_mb = min(32000, int(total_vram_gb * 700))  # Use ~70% of VRAM
+                # Target 38GB memory usage (~80% of 46GB)
+                optimized_memory_mb = min(38000, int(total_vram_gb * 800))  # Use ~80% of VRAM
 
                 self.logger.info(f"🚀 A40/A100 OPTIMIZATION ENABLED:")
                 self.logger.info(f"   Original batch_size: {batch_size} → Optimized: {optimized_batch_size}")
@@ -871,10 +871,10 @@ class BitGenTrainer:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
             if vram_gb > 40:  # A40/A100 class GPUs
-                # For A40+: Increased batch size to 128 with 2-step gradient accumulation
-                # Effective batch size = 128, Physical batch size = 64 per step
+                # For A40+: Increased batch size to 192 with 2-step gradient accumulation
+                # Effective batch size = 192, Physical batch size = 96 per step
                 grad_accum_steps = 2  # Keep at 2 for stability
-                actual_batch_size = batch_size // grad_accum_steps  # 128 / 2 = 64 per step
+                actual_batch_size = batch_size // grad_accum_steps  # 192 / 2 = 96 per step
 
                 self.logger.info(f"💡 Using gradient accumulation for A40:")
                 self.logger.info(f"   Physical batch size: {actual_batch_size}")
@@ -1133,7 +1133,7 @@ class BitGenTrainer:
                     self.logger.info(f"   Robot Selection Accuracy: {epoch_robot_accuracy:.2%}")
                     
                     if self.wandb_monitor:
-                        self.wandb_monitor.wandb_run.log({
+                        wandb.log({
                             'robot/epoch_accuracy': epoch_robot_accuracy
                         }, step=self.global_step)
         
