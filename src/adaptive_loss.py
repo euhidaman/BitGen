@@ -199,51 +199,28 @@ class BitGenLoss(nn.Module):
         # Debug step counter for reduced logging
         self.debug_step_counter = 0
 
-    def language_modeling_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Standard language modeling loss - SIMPLIFIED AND FIXED"""
-        # Flatten logits and labels for cross entropy
-        # CrossEntropyLoss expects: (N, C) for logits and (N,) for labels where C is vocab_size
-        batch_size, seq_len, vocab_size = logits.shape
+    def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+        """FIBER/CLIP-style image-text contrastive loss"""
+        if text_features is None or vision_features is None:
+            return torch.tensor(0.0, device=text_features.device if text_features is not None else vision_features.device, requires_grad=True)
         
-        # Check for NaN/Inf in logits BEFORE computing loss
-        if torch.isnan(logits).any() or torch.isinf(logits).any():
-            print(f"[LM LOSS ERROR] NaN/Inf in logits before loss computation!")
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+        # Normalize features
+        text_features = F.normalize(text_features, dim=-1)
+        vision_features = F.normalize(vision_features, dim=-1)
         
-        # Clamp extreme logit values to prevent overflow
-        logits = torch.clamp(logits, min=-100, max=100)
+        # Compute similarity matrices
+        logits_per_text = torch.matmul(text_features, vision_features.t()) / temperature
+        logits_per_vision = logits_per_text.t()
         
-        # Reshape: [batch, seq, vocab] -> [batch*seq, vocab]
-        logits_flat = logits.reshape(-1, vocab_size)
-        # Reshape: [batch, seq] -> [batch*seq]
-        labels_flat = labels.reshape(-1)
+        # Create labels (diagonal is positive pairs)
+        batch_size = text_features.shape[0]
+        labels = torch.arange(batch_size, device=text_features.device)
         
-        # Check for invalid labels (must be in range [0, vocab_size) or -100)
-        invalid_labels = ((labels_flat < -100) | ((labels_flat >= vocab_size) & (labels_flat != -100)))
-        if invalid_labels.any():
-            print(f"[LM LOSS ERROR] Invalid labels detected! Min: {labels_flat.min()}, Max: {labels_flat.max()}, vocab_size: {vocab_size}")
-            # Clamp invalid labels
-            labels_flat = torch.clamp(labels_flat, min=-100, max=vocab_size-1)
+        # Symmetric cross-entropy loss
+        loss_text = F.cross_entropy(logits_per_text, labels)
+        loss_vision = F.cross_entropy(logits_per_vision, labels)
         
-        # Count valid tokens (not -100)
-        valid_count = (labels_flat != -100).sum().item()
-        
-        if valid_count == 0:
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
-        
-        # Compute loss - CrossEntropyLoss will ignore -100 automatically
-        loss = F.cross_entropy(logits_flat, labels_flat, ignore_index=-100, reduction='mean')
-        
-        # Check if loss is NaN
-        if torch.isnan(loss):
-            print(f"[LM LOSS ERROR] Loss is NaN after computation!")
-            print(f"  Logits stats: min={logits_flat.min():.2f}, max={logits_flat.max():.2f}, mean={logits_flat.mean():.2f}")
-            print(f"  Labels stats: min={labels_flat.min()}, max={labels_flat.max()}, valid_count={valid_count}")
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
-        
-        # DEBUG: Print periodically
-        if self.debug_step_counter % 100 == 0:
-            print(f"[LM LOSS] Step {self.debug_step_counter}: loss={loss.item():.6f}, valid_tokens={valid_count}")
+        loss = (loss_text + loss_vision) / 2.0
         
         return loss
 
@@ -353,17 +330,19 @@ class BitGenLoss(nn.Module):
 
         losses = {}
 
-        # PRIMARY: Language modeling loss (this should be the main loss)
-        if 'logits' in model_outputs:
-            lm_loss = self.language_modeling_loss(model_outputs['logits'], labels)
-
-            # FIXED: Remove artificial inflation - let the loss be what it is!
-            # The original code was adding 0.01 if loss < 1e-3, which prevented learning
-            losses['language_modeling'] = lm_loss
-
-            # Debug logging only every 5000 steps
-            if should_debug:
-                print(f"DEBUG: LM loss = {lm_loss.item():.6f}")
+        # PRIMARY: Contrastive loss (FIBER-style multimodal learning)
+        if images is not None and 'contrastive_features' in model_outputs:
+            contrastive_feats = model_outputs['contrastive_features']
+            if 'text_features' in contrastive_feats and 'vision_features' in contrastive_feats:
+                contrastive_loss = self.contrastive_loss(
+                    contrastive_feats['text_features'],
+                    contrastive_feats['vision_features'],
+                    temperature=0.07
+                )
+                losses['contrastive'] = contrastive_loss
+                
+                if should_debug:
+                    print(f"DEBUG: Contrastive loss = {contrastive_loss.item():.6f}")
 
         # FIXED: Proper vision-text contrastive loss (like CLIP/FIBER)
         if images is not None and 'text_features' in model_outputs and 'vision_features' in model_outputs:
@@ -394,33 +373,29 @@ class BitGenLoss(nn.Module):
                 if should_debug:
                     print(f"WARNING: Robot selection loss computation failed: {e}")
 
-        # FIXED: Proper loss weighting like BitMar (stronger auxiliary losses)
-        if 'language_modeling' in losses:
-            total_loss = losses['language_modeling']  # Start with base LM loss
+        # FIBER-style: Use contrastive loss as primary objective
+        if 'contrastive' in losses:
+            total_loss = losses['contrastive'] * 1.0  # Primary loss
 
-            # Add weighted auxiliary losses with STRONGER weights
+            # Add robot selection loss if present
             for loss_name, loss_value in losses.items():
-                if loss_name != 'language_modeling':
-                    # Check for NaN/Inf before adding
+                if loss_name != 'contrastive':
                     if not torch.isnan(loss_value) and not torch.isinf(loss_value):
-                        # FIXED: Increased weights from 0.1-0.2 to 0.5-1.0 for better multi-modal learning
-                        if 'vision' in loss_name or 'alignment' in loss_name:
-                            weight = 1.0  # Equal weight for vision-text alignment
-                        elif 'robot' in loss_name:
-                            weight = 0.5  # Moderate weight for robot selection
+                        if 'robot' in loss_name:
+                            weight = 0.5  # Robot selection task
                         else:
-                            weight = 0.5  # Default weight for other losses
-
+                            weight = 0.5  # Other auxiliary losses
+                        
                         total_loss = total_loss + loss_value * weight
-
+                        
                         if should_debug:
                             print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f} (weight={weight})")
-                    else:
-                        if should_debug:
-                            print(f"WARNING: Skipping {loss_name} due to NaN/Inf")
         else:
-            # Fallback if no language modeling loss
-            total_loss = torch.tensor(0.0, device=labels.device, requires_grad=True)
+            # Fallback: use any available loss
+            if len(losses) > 0:
+                total_loss = sum(losses.values()) / len(losses)
+            else:
+                total_loss = torch.tensor(0.0, device=labels.device, requires_grad=True)
 
         # FIXED: Only check for NaN/Inf, don't artificially inflate loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):
