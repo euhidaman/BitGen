@@ -1180,9 +1180,21 @@ class BitGenTrainer:
             self.logger.info(f"   Samples per second: {len(train_loader.dataset)/epoch_duration:.2f}")
             self.logger.info(f"   Avg seconds per optimizer step: {epoch_duration/optimizer_step_count:.2f}")
 
-            # Log epoch metrics
-            epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
-            self.logger.info(f"   Avg Loss: {epoch_avg['total_loss']:.4f}")
+            # Log epoch metrics - FILTER OUT NON-NUMERIC VALUES
+            epoch_avg = {}
+            for key, values in epoch_metrics.items():
+                # Skip non-numeric keys like 'batch_type'
+                if len(values) > 0 and isinstance(values[0], (int, float, np.number)):
+                    epoch_avg[key] = np.mean(values)
+                elif len(values) > 0 and not isinstance(values[0], str):
+                    # Try to convert to float if possible
+                    try:
+                        epoch_avg[key] = np.mean([float(v) for v in values])
+                    except (ValueError, TypeError):
+                        # Skip if can't convert to numeric
+                        pass
+            
+            self.logger.info(f"   Avg Loss: {epoch_avg.get('total_loss', 0.0):.4f}")
             self.logger.info(f"   Current LR: {scheduler.get_last_lr()[0]:.6f}")
 
             # Log GPU utilization summary
