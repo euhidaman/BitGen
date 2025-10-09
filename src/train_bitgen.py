@@ -354,6 +354,13 @@ class BitGenTrainer:
                     images=images,
                     target_robot=target_robot
                 )
+                
+                # DEBUG: Log zero losses from loss_fn
+                if total_loss.item() == 0.0 and self.global_step % 10 == 0:
+                    self.logger.warning(f"⚠️ COCO loss_fn returned ZERO at step {self.global_step}")
+                    self.logger.warning(f"   loss_dict: {loss_dict}")
+                    self.logger.warning(f"   labels shape: {labels.shape}, valid labels: {(labels != -100).sum().item()}")
+                    self.logger.warning(f"   images: {images is not None}, outputs keys: {list(outputs.keys())}")
 
                 # FIXED: Only check for actual NaN/Inf, not zero values
                 if torch.isnan(total_loss) or torch.isinf(total_loss):
