@@ -259,7 +259,7 @@ class RobotSelectionDataset(Dataset):
 
     def extract_robot_types(self) -> List[str]:
         """Extract unique robot types from multi-robot output strings or lists"""
-        robot_types = set()
+        robot_types_dict = {}  # Use dict to track canonical names (case-insensitive)
 
         for item in self.data:
             # Parse "original_single_robot_output": can be string or list
@@ -275,16 +275,21 @@ class RobotSelectionDataset(Dataset):
                 else:
                     continue  # Skip invalid formats
                 
-                robot_types.update(robots)
+                # Normalize to canonical case (use first occurrence as canonical)
+                for robot in robots:
+                    robot_lower = robot.lower()
+                    if robot_lower not in robot_types_dict:
+                        robot_types_dict[robot_lower] = robot
         
-        if not robot_types:
+        if not robot_types_dict:
             raise ValueError(
                 f"❌ No robot types found in dataset!\n"
                 f"Check 'original_single_robot_output' field in {self.dataset_file}"
             )
 
-        sorted_robots = sorted(list(robot_types))
-        print(f"📊 Extracted {len(sorted_robots)} unique robot types from dataset:")
+        # Get canonical robot names (sorted)
+        sorted_robots = sorted(list(robot_types_dict.values()))
+        print(f"📊 Extracted {len(sorted_robots)} unique robot types from dataset (case-normalized):")
         for i, robot in enumerate(sorted_robots, 1):
             print(f"   {i}. {robot}")
         
@@ -308,16 +313,27 @@ class RobotSelectionDataset(Dataset):
         else:
             selected_robots = []
         
-        # Create multi-hot label vector for multi-label classification
+        # Create multi-hot label vector for multi-label classification (case-insensitive matching)
         robot_labels = torch.zeros(len(self.robot_types), dtype=torch.float32)
         valid_robots = []
         invalid_robots = []
         for robot_name in selected_robots:
+            # Try exact match first, then case-insensitive
             if robot_name in self.robot_to_id:
                 robot_labels[self.robot_to_id[robot_name]] = 1.0
                 valid_robots.append(robot_name)
             else:
-                invalid_robots.append(robot_name)
+                # Try case-insensitive match
+                matched = False
+                for canonical_robot, robot_id in self.robot_to_id.items():
+                    if canonical_robot.lower() == robot_name.lower():
+                        robot_labels[robot_id] = 1.0
+                        valid_robots.append(canonical_robot)  # Use canonical name
+                        matched = True
+                        break
+                
+                if not matched:
+                    invalid_robots.append(robot_name)
         
         # Debug: Print mismatches on first occurrence
         if invalid_robots and not hasattr(self, '_mismatch_logged'):

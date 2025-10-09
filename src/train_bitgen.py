@@ -976,6 +976,7 @@ class BitGenTrainer:
             progress_bar = tqdm(total=total_iterations, desc=desc)
 
             accumulated_loss = 0.0
+            accumulated_count = 0  # Track non-skipped batches
             batch_count = 0
             optimizer_step_count = 0  # FIXED: Track actual optimizer steps
 
@@ -1009,13 +1010,26 @@ class BitGenTrainer:
                         step_metrics = self.train_step(batch, optimizer if (step + 1) % grad_accum_steps == 0 else None)
                     step_metrics['batch_type'] = 'coco'
 
-                accumulated_loss += step_metrics['total_loss']
+                # Skip accumulation if batch was skipped
+                if not step_metrics.get('skipped_batch', False):
+                    accumulated_loss += step_metrics['total_loss']
+                    accumulated_count += 1
+                    
+                    # DEBUG: Log non-zero losses every 100 steps
+                    if step % 100 == 0 and step_metrics['total_loss'] != 0.0:
+                        self.logger.info(f"DEBUG Step {step}: {step_metrics['batch_type']} loss = {step_metrics['total_loss']:.6f}")
 
                 # Only step optimizer after accumulating gradients
                 if (step + 1) % grad_accum_steps == 0:
-                    # Scale loss by accumulation steps
-                    step_metrics['total_loss'] = accumulated_loss / grad_accum_steps
+                    # Scale loss by accumulation steps (only if we accumulated something)
+                    if accumulated_count > 0:
+                        step_metrics['total_loss'] = accumulated_loss / accumulated_count
+                    else:
+                        step_metrics['total_loss'] = 0.0  # All batches were skipped
+                        self.logger.warning(f"⚠️ Step {step}: All {grad_accum_steps} batches were skipped!")
+                    
                     accumulated_loss = 0.0
+                    accumulated_count = 0
 
                     # Update metrics
                     for key, value in step_metrics.items():
