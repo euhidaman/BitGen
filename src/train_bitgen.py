@@ -1012,18 +1012,27 @@ class BitGenTrainer:
 
                 # Skip accumulation if batch was skipped
                 if not step_metrics.get('skipped_batch', False):
-                    accumulated_loss += step_metrics['total_loss']
+                    current_loss = step_metrics.get('total_loss', 0.0)
+                    accumulated_loss += current_loss
                     accumulated_count += 1
                     
-                    # DEBUG: Log non-zero losses every 100 steps
-                    if step % 100 == 0 and step_metrics['total_loss'] != 0.0:
-                        self.logger.info(f"DEBUG Step {step}: {step_metrics['batch_type']} loss = {step_metrics['total_loss']:.6f}")
+                    # DEBUG: Log ALL losses every 50 steps to diagnose zero loss issue
+                    if step % 50 == 0:
+                        batch_type = step_metrics.get('batch_type', 'unknown')
+                        self.logger.info(f"DEBUG Step {step}/{(step + 1) % grad_accum_steps}: "
+                                       f"{batch_type} loss={current_loss:.6f}, "
+                                       f"accum={accumulated_loss:.6f}, count={accumulated_count}")
 
                 # Only step optimizer after accumulating gradients
                 if (step + 1) % grad_accum_steps == 0:
                     # Scale loss by accumulation steps (only if we accumulated something)
                     if accumulated_count > 0:
                         step_metrics['total_loss'] = accumulated_loss / accumulated_count
+                        
+                        # DEBUG: Log when loss is suspiciously low
+                        if step_metrics['total_loss'] < 0.001 and step % 100 == 0:
+                            self.logger.warning(f"⚠️ Step {step}: Very low loss = {step_metrics['total_loss']:.6f}")
+                            self.logger.warning(f"   Accumulated from {accumulated_count} batches: {accumulated_loss:.6f}")
                     else:
                         step_metrics['total_loss'] = 0.0  # All batches were skipped
                         self.logger.warning(f"⚠️ Step {step}: All {grad_accum_steps} batches were skipped!")
@@ -1063,13 +1072,17 @@ class BitGenTrainer:
 
                         self.logger.info(f"Step {self.global_step}: Eval Loss = {avg_eval_loss:.4f}")
 
-                        # FIXED: Check for massive overfitting
-                        if avg_eval_loss > avg_train_loss * 10:
+                        # FIXED: Check for massive overfitting (avoid division by zero)
+                        if avg_train_loss > 0 and avg_eval_loss > avg_train_loss * 10:
                             self.logger.warning(f"⚠️⚠️⚠️ SEVERE OVERFITTING DETECTED!")
                             self.logger.warning(f"   Train Loss: {avg_train_loss:.4f}")
                             self.logger.warning(f"   Eval Loss: {avg_eval_loss:.4f}")
                             self.logger.warning(f"   Gap: {avg_eval_loss/avg_train_loss:.1f}x")
                             self.logger.warning(f"   Consider: reducing model size, adding dropout, or reducing learning rate")
+                        elif avg_train_loss == 0:
+                            self.logger.warning(f"⚠️ WARNING: Training loss is zero!")
+                            self.logger.warning(f"   This indicates batches are being skipped or loss is not being calculated.")
+                            self.logger.warning(f"   Eval Loss: {avg_eval_loss:.4f}")
 
                         # Save best model
                         if avg_eval_loss < self.best_loss:
