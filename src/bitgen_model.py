@@ -656,6 +656,7 @@ class RobotSelector(nn.Module):
             
             return {
                 'all_probs': robot_probs,  # [B, num_robots] - All robot probabilities
+                'all_logits': robot_scores,  # [B, num_robots] - Raw logits (for loss calculation)
                 'top_k_probs': top_k_probs,  # [B, top_k] - Top-K probabilities
                 'top_k_indices': top_k_indices,  # [B, top_k] - Top-K robot indices
                 'top_k_robots': top_k_robots  # List[List[str]] - Top-K robot names

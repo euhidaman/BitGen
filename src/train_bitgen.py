@@ -502,16 +502,17 @@ class BitGenTrainer:
 
                 # Extract robot selection outputs
                 robot_selection = outputs.get('robot_selection')
-                if robot_selection is None or 'all_probs' not in robot_selection:
+                if robot_selection is None or 'all_logits' not in robot_selection:
                     self.logger.error("Robot selection output not found!")
                     return {'total_loss': 0.0, 'robot_accuracy': 0.0, 'skipped_batch': True}
 
-                robot_probs = robot_selection['all_probs']  # [B, num_robots]
+                robot_logits = robot_selection['all_logits']  # [B, num_robots] - Raw scores
+                robot_probs = robot_selection['all_probs']  # [B, num_robots] - Probabilities for accuracy
                 top_k_indices = robot_selection['top_k_indices']  # [B, top_k]
 
-                # Multi-label binary cross-entropy loss
-                robot_loss = F.binary_cross_entropy(
-                    robot_probs, robot_labels, reduction='mean'
+                # Multi-label binary cross-entropy loss with logits (autocast-safe)
+                robot_loss = F.binary_cross_entropy_with_logits(
+                    robot_logits, robot_labels, reduction='mean'
                 )
 
                 # Optional: Language modeling loss on task description
