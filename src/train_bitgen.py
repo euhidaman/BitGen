@@ -306,7 +306,7 @@ class BitGenTrainer:
         
         return train_loader, val_loader, robot_loader
 
-    def train_step(self, batch: Dict, optimizer) -> Dict:
+    def train_step(self, batch: Dict, optimizer, grad_accum_steps: int = 1) -> Dict:
         """Single training step with enhanced monitoring"""
         self.model.train()
         step_start_time = time.time()
@@ -355,6 +355,10 @@ class BitGenTrainer:
                     target_robot=target_robot
                 )
                 
+                # CRITICAL: Scale loss by gradient accumulation steps
+                # This ensures correct gradient magnitudes when accumulating
+                total_loss = total_loss / grad_accum_steps
+                
                 # DEBUG: Log zero losses from loss_fn
                 if total_loss.item() == 0.0 and self.global_step % 10 == 0:
                     self.logger.warning(f"⚠️ COCO loss_fn returned ZERO at step {self.global_step}")
@@ -366,7 +370,7 @@ class BitGenTrainer:
                 if torch.isnan(total_loss) or torch.isinf(total_loss):
                     self.logger.error(f"Invalid loss detected! Loss value: {total_loss.item()}")
                     # Create a small valid loss to maintain training
-                    total_loss = torch.tensor(1.0, device=total_loss.device, requires_grad=True)
+                    total_loss = torch.tensor(1.0 / grad_accum_steps, device=total_loss.device, requires_grad=True)
                     loss_dict['total_loss'] = total_loss
                 else:
                     # DEBUG: Print the actual loss being used for training - only every 5000 steps
@@ -388,27 +392,18 @@ class BitGenTrainer:
             lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
             return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
 
-        # FIXED: Only call zero_grad if optimizer is not None
+        # GRADIENT ACCUMULATION FIX: Always do backward pass first
+        # Accumulate gradients regardless of whether we'll step optimizer
+        total_loss.backward()
+
+        # Only step optimizer if provided (after gradient accumulation)
         if optimizer is not None:
-            optimizer.zero_grad()
-
-        # Scale loss for gradient accumulation if optimizer is None
-        if optimizer is None:
-            # During gradient accumulation, just do backward pass without optimizer step
-            total_loss.backward()
-            grad_norm = 0.0
-        else:
-            # Normal training step with optimizer
-            total_loss.backward()
-
             # Enhanced gradient clipping with NaN checking
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
 
             if torch.isnan(grad_norm) or torch.isinf(grad_norm):
                 self.logger.error(f"NaN/Inf gradients detected! Grad norm: {grad_norm}")
-                # FIXED: Only clear gradients if optimizer is not None
-                if optimizer is not None:
-                    optimizer.zero_grad()  # Clear bad gradients
+                optimizer.zero_grad()  # Clear bad gradients
                 return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
 
             if grad_norm > 10.0:  # Very large gradients
@@ -418,7 +413,12 @@ class BitGenTrainer:
             if self.wandb_monitor and self.global_step % 100 == 0:
                 self.wandb_monitor.log_gradient_flow(self.model, self.global_step)
 
+            # Step optimizer and zero gradients for next accumulation cycle
             optimizer.step()
+            optimizer.zero_grad()
+        else:
+            # During gradient accumulation (no optimizer step yet)
+            grad_norm = 0.0
 
         # Calculate throughput
         step_time = time.time() - step_start_time
@@ -429,8 +429,9 @@ class BitGenTrainer:
 
         # Update metrics
         lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
+        # NOTE: total_loss is scaled for gradient accumulation, so multiply back for logging
         metrics = {
-            'total_loss': total_loss.item(),
+            'total_loss': total_loss.item() * grad_accum_steps,  # Unscale for proper reporting
             'learning_rate': lr,
             'gradient_norm': grad_norm if isinstance(grad_norm, float) else grad_norm.item(),
             'samples_per_sec': samples_per_sec,
@@ -507,7 +508,7 @@ class BitGenTrainer:
 
         return metrics
     
-    def train_robot_selection_step(self, batch: Dict, optimizer) -> Dict:
+    def train_robot_selection_step(self, batch: Dict, optimizer, grad_accum_steps: int = 1) -> Dict:
         """
         Robot selection training step with chain-of-thought reasoning (Tiny-R1 style)
         Multi-label classification with top-K robot selection
@@ -555,35 +556,38 @@ class BitGenTrainer:
                 else:
                     total_loss = robot_loss
 
+                # CRITICAL: Scale loss by gradient accumulation steps
+                total_loss = total_loss / grad_accum_steps
+
                 # Check for NaN/Inf
                 if torch.isnan(total_loss) or torch.isinf(total_loss):
                     self.logger.error(f"Invalid robot loss: {total_loss.item()}")
                     lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
-                    return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
+                    return {'total_loss': 1.0 / grad_accum_steps, 'learning_rate': lr, 'skipped_batch': True}
 
         except Exception as e:
             self.logger.error(f"Error in robot selection training: {e}")
             lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
             return {'total_loss': 1.0, 'learning_rate': lr, 'skipped_batch': True}
 
-        # Backward pass
-        if optimizer is not None:
-            optimizer.zero_grad()
+        # GRADIENT ACCUMULATION FIX: Always do backward pass first
+        total_loss.backward()
 
-        if optimizer is None:
-            total_loss.backward()
-            grad_norm = 0.0
-        else:
-            total_loss.backward()
+        # Only step optimizer if provided (after gradient accumulation)
+        if optimizer is not None:
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
 
             if torch.isnan(grad_norm) or torch.isinf(grad_norm):
                 self.logger.error(f"NaN/Inf gradients in robot training! Grad norm: {grad_norm}")
-                if optimizer is not None:
-                    optimizer.zero_grad()
+                optimizer.zero_grad()
                 return {'total_loss': 0.0, 'learning_rate': optimizer.param_groups[0]['lr'], 'skipped_batch': True}
 
+            # Step optimizer and zero gradients for next accumulation cycle
             optimizer.step()
+            optimizer.zero_grad()
+        else:
+            # During gradient accumulation (no optimizer step yet)
+            grad_norm = 0.0
 
         # Compute top-K accuracy
         robot_accuracy = self.compute_top_k_robot_accuracy(top_k_indices, robot_labels)
@@ -600,8 +604,9 @@ class BitGenTrainer:
         batch_size = input_ids.size(0)
         lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 1e-5
 
+        # NOTE: total_loss is scaled for gradient accumulation, so multiply back for logging
         metrics = {
-            'total_loss': total_loss.item(),
+            'total_loss': total_loss.item() * grad_accum_steps,  # Unscale for proper reporting
             'robot_loss': robot_loss.item(),
             'robot_accuracy': robot_accuracy,
             'reasoning_steps': reasoning_steps,
@@ -1029,7 +1034,8 @@ class BitGenTrainer:
                     with autocast('cuda'):
                         step_metrics = self.train_robot_selection_step(
                             robot_batch, 
-                            optimizer if (step + 1) % grad_accum_steps == 0 else None
+                            optimizer if (step + 1) % grad_accum_steps == 0 else None,
+                            grad_accum_steps=grad_accum_steps
                         )
                     step_metrics['batch_type'] = 'robot'
                     
@@ -1039,7 +1045,11 @@ class BitGenTrainer:
                     
                     # GPU-OPTIMIZED: Gradient accumulation for large effective batch sizes
                     with autocast('cuda'):
-                        step_metrics = self.train_step(batch, optimizer if (step + 1) % grad_accum_steps == 0 else None)
+                        step_metrics = self.train_step(
+                            batch, 
+                            optimizer if (step + 1) % grad_accum_steps == 0 else None,
+                            grad_accum_steps=grad_accum_steps
+                        )
                     step_metrics['batch_type'] = 'coco'
 
                 # Skip accumulation if batch was skipped
