@@ -200,38 +200,30 @@ class BitGenLoss(nn.Module):
         self.debug_step_counter = 0
 
     def language_modeling_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Standard language modeling loss with numerical stability - FIXED"""
-        # Standard causal language modeling: predict next token
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-
-        # Check for invalid logits
-        if torch.isnan(shift_logits).any() or torch.isinf(shift_logits).any():
+        """Standard language modeling loss - SIMPLIFIED AND FIXED"""
+        # Flatten logits and labels for cross entropy
+        # CrossEntropyLoss expects: (N, C) for logits and (N,) for labels where C is vocab_size
+        batch_size, seq_len, vocab_size = logits.shape
+        
+        # Reshape: [batch, seq, vocab] -> [batch*seq, vocab]
+        logits_flat = logits.reshape(-1, vocab_size)
+        # Reshape: [batch, seq] -> [batch*seq]
+        labels_flat = labels.reshape(-1)
+        
+        # Count valid tokens (not -100)
+        valid_count = (labels_flat != -100).sum().item()
+        
+        if valid_count == 0:
             return torch.tensor(0.0, device=logits.device, requires_grad=True)
-
-        # Ensure valid labels (ignore -100 padding tokens)
-        valid_mask = (shift_labels != -100)
-        if not valid_mask.any():
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
-
-        # Reshape for cross entropy: [batch*seq, vocab_size] and [batch*seq]
-        batch_size, seq_len, vocab_dim = shift_logits.shape
-        shift_logits_flat = shift_logits.reshape(-1, vocab_dim)
-        shift_labels_flat = shift_labels.reshape(-1)
-
-        # Compute cross entropy loss (automatically handles ignore_index=-100)
-        try:
-            loss = self.ce_loss(shift_logits_flat, shift_labels_flat)
-            
-            # DEBUG: Print actual loss value
-            if self.debug_step_counter % 100 == 0:
-                print(f"[LM LOSS] Step {self.debug_step_counter}: loss={loss.item():.6f}, valid_tokens={valid_mask.sum().item()}")
-            
-            return loss
-        except Exception as e:
-            print(f"[LM LOSS ERROR] {e}")
-            print(f"  logits_flat: {shift_logits_flat.shape}, labels_flat: {shift_labels_flat.shape}")
-            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+        
+        # Compute loss - CrossEntropyLoss will ignore -100 automatically
+        loss = F.cross_entropy(logits_flat, labels_flat, ignore_index=-100, reduction='mean')
+        
+        # DEBUG: Print periodically
+        if self.debug_step_counter % 100 == 0:
+            print(f"[LM LOSS] Step {self.debug_step_counter}: loss={loss.item():.6f}, valid_tokens={valid_count}")
+        
+        return loss
 
     def vision_text_alignment_loss(self, text_features: torch.Tensor,
                                  vision_features: torch.Tensor) -> torch.Tensor:

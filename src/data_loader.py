@@ -195,14 +195,16 @@ class COCODataset(Dataset):
         # Create attention mask (1 for real tokens, 0 for padding)
         attention_mask = [1 if token_id != self.tokenizer.special_tokens['<pad>'] else 0 for token_id in input_ids]
 
-        # Create labels - DON'T shift here, loss function will handle shifting
-        # CRITICAL: Padding positions must be -100 (ignore_index) for CrossEntropyLoss
-        labels = input_ids.copy()  # Use same sequence, loss function will shift
-        
-        # Replace padding tokens with -100 (ignore index for CrossEntropyLoss)
+        # Create labels for next-token prediction: labels[i] = input_ids[i+1]
+        # CRITICAL: Shift here and set padding to -100
         pad_token_id = self.tokenizer.special_tokens['<pad>']
+        
+        # Shift: predict next token (labels = input_ids shifted left by 1)
+        labels = input_ids[1:] + [pad_token_id]
+        
+        # Replace padding with -100 (ignore_index for CrossEntropyLoss)
         labels = [-100 if tid == pad_token_id else tid for tid in labels]
-
+        
         # Validate non-padding labels are within bounds
         labels = [-100 if tid == -100 else min(max(tid, 0), max_valid_id) for tid in labels]
 
