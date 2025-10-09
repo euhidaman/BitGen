@@ -201,6 +201,7 @@ class BitGenLoss(nn.Module):
 
     def language_modeling_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Standard language modeling loss with numerical stability - FIXED"""
+        # Standard causal language modeling: predict next token
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
 
@@ -208,17 +209,20 @@ class BitGenLoss(nn.Module):
         if torch.isnan(shift_logits).any() or torch.isinf(shift_logits).any():
             return torch.tensor(0.0, device=logits.device, requires_grad=True)
 
-        # FIXED: Remove aggressive clamping that was preventing learning
-        # Only clamp extreme outliers
-        shift_logits = torch.clamp(shift_logits, min=-100, max=100)
-
         # Ensure valid labels (ignore -100 padding tokens)
         valid_mask = (shift_labels != -100)
         if not valid_mask.any():
             return torch.tensor(0.0, device=logits.device, requires_grad=True)
 
-        # FIXED: Use standard cross-entropy without artificial loss floors
-        return self.ce_loss(shift_logits.view(-1, self.vocab_size), shift_labels.view(-1))
+        # Reshape for cross entropy: [batch*seq, vocab_size] and [batch*seq]
+        batch_size, seq_len, vocab_dim = shift_logits.shape
+        shift_logits_flat = shift_logits.reshape(-1, vocab_dim)
+        shift_labels_flat = shift_labels.reshape(-1)
+
+        # Compute cross entropy loss (automatically handles ignore_index=-100)
+        loss = self.ce_loss(shift_logits_flat, shift_labels_flat)
+        
+        return loss
 
     def vision_text_alignment_loss(self, text_features: torch.Tensor,
                                  vision_features: torch.Tensor) -> torch.Tensor:
