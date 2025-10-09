@@ -74,6 +74,87 @@ class HuggingFaceIntegration:
             logger.error(f"Failed to create repository: {e}")
             return False
 
+    def push_model_checkpoint(self, model, config: Dict, epoch: int, metrics: Dict):
+        """
+        Push model checkpoint to HuggingFace Hub with metadata
+        
+        Args:
+            model: The PyTorch model to save
+            config: Model configuration dict
+            epoch: Current epoch number
+            metrics: Training metrics dict
+        """
+        if not self.has_hf:
+            logger.warning("HuggingFace Hub not available")
+            return False
+            
+        try:
+            import tempfile
+            import torch
+            from huggingface_hub import upload_file
+            import json
+            
+            # Create temporary directory for checkpoint
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                
+                # Save model state dict
+                model_path = tmpdir_path / f"model_epoch_{epoch}.pt"
+                torch.save(model.state_dict(), model_path)
+                
+                # Save config
+                config_path = tmpdir_path / "config.json"
+                with open(config_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+                
+                # Save metrics
+                metrics_path = tmpdir_path / f"metrics_epoch_{epoch}.json"
+                # Convert tensor values to floats for JSON serialization
+                json_metrics = {}
+                for k, v in metrics.items():
+                    if isinstance(v, torch.Tensor):
+                        json_metrics[k] = v.item()
+                    elif isinstance(v, (int, float)):
+                        json_metrics[k] = v
+                    else:
+                        json_metrics[k] = str(v)
+                        
+                with open(metrics_path, 'w') as f:
+                    json.dump(json_metrics, f, indent=2)
+                
+                # Upload files
+                commit_msg = f"Checkpoint at epoch {epoch} - Loss: {metrics.get('total_loss', 0.0):.4f}"
+                
+                upload_file(
+                    path_or_fileobj=str(model_path),
+                    path_in_repo=f"checkpoints/model_epoch_{epoch}.pt",
+                    repo_id=self.repo_id,
+                    commit_message=commit_msg
+                )
+                
+                upload_file(
+                    path_or_fileobj=str(config_path),
+                    path_in_repo="config.json",
+                    repo_id=self.repo_id,
+                    commit_message=commit_msg
+                )
+                
+                upload_file(
+                    path_or_fileobj=str(metrics_path),
+                    path_in_repo=f"metrics/metrics_epoch_{epoch}.json",
+                    repo_id=self.repo_id,
+                    commit_message=commit_msg
+                )
+                
+                logger.info(f"✓ Pushed checkpoint for epoch {epoch} to {self.repo_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to push checkpoint: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def push_model(self, checkpoint_path: str, commit_message: str = "Update model"):
         """
         Push model checkpoint to HuggingFace Hub

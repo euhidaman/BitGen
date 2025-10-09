@@ -1094,23 +1094,19 @@ class BitGenTrainer:
 
                 # Only step optimizer after accumulating gradients
                 if (step + 1) % grad_accum_steps == 0:
-                    # Scale loss by accumulation steps (only if we accumulated something)
-                    if accumulated_count > 0:
-                        step_metrics['total_loss'] = accumulated_loss / accumulated_count
-                        
-                        # DEBUG: Always log the averaged loss on optimizer steps
-                        if step % 20 == 0:
-                            self.logger.info(f"✓ OPTIMIZER STEP {step}: "
-                                           f"Averaged loss = {step_metrics['total_loss']:.6f} "
-                                           f"(from {accumulated_count} batches, total={accumulated_loss:.6f})")
-                        
-                        # WARN: Log when loss is suspiciously low
-                        if step_metrics['total_loss'] < 0.001:
-                            self.logger.warning(f"⚠️ Step {step}: Very low averaged loss = {step_metrics['total_loss']:.6f}")
-                            self.logger.warning(f"   Accumulated from {accumulated_count} batches: {accumulated_loss:.6f}")
-                    else:
-                        step_metrics['total_loss'] = 0.0  # All batches were skipped
+                    # NOTE: step_metrics already has the correct loss (from last batch)
+                    # We DON'T average again because train_step already returned unscaled loss for logging
+                    # Just use the last batch's metrics (which represents the optimizer step)
+                    
+                    if accumulated_count == 0:
+                        # All batches were skipped - use safe default
+                        step_metrics['total_loss'] = 1.0
                         self.logger.warning(f"⚠️ Step {step}: All {grad_accum_steps} batches were skipped!")
+                    
+                    # DEBUG: Log the loss on optimizer steps
+                    if step % 20 == 0:
+                        self.logger.info(f"✓ OPTIMIZER STEP {step}: "
+                                       f"Loss = {step_metrics.get('total_loss', 0.0):.6f}")
                     
                     accumulated_loss = 0.0
                     accumulated_count = 0
