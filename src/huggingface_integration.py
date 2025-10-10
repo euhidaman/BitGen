@@ -87,6 +87,27 @@ class HuggingFaceIntegration:
         if not self.has_hf:
             logger.warning("HuggingFace Hub not available")
             return False
+        
+        # CRITICAL FIX: Ensure repository exists before pushing
+        try:
+            from huggingface_hub import create_repo, repo_exists
+            
+            # Check if repo exists
+            if not repo_exists(self.repo_id, repo_type="model"):
+                logger.info(f"🆕 Repository does not exist. Creating: {self.repo_id}")
+                create_repo(
+                    repo_id=self.repo_id,
+                    private=self.private,
+                    exist_ok=True,
+                    repo_type="model"
+                )
+                logger.info(f"✅ Created repository: https://huggingface.co/{self.repo_id}")
+            else:
+                logger.info(f"✓ Repository exists: {self.repo_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to verify/create repository: {e}")
+            return False
             
         try:
             import tempfile
