@@ -987,7 +987,7 @@ class BitGenTrainer:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             # Set environment variable for better memory management
-            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:512'
             
             # STABILITY: Set CUDA matmul precision for stability
             torch.backends.cuda.matmul.allow_tf32 = True  # Faster but still accurate
@@ -995,8 +995,12 @@ class BitGenTrainer:
             torch.backends.cudnn.benchmark = True  # Auto-tune kernels for performance
             torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
             
-            self.logger.info("✅ Enabled PyTorch CUDA memory optimization")
+            # CRITICAL: Reduce memory fragmentation
+            torch.cuda.memory.set_per_process_memory_fraction(0.95)  # Use max 95% of GPU memory
+            
+            self.logger.info("✅ Enabled PyTorch CUDA memory optimization (expandable segments + max_split_size)")
             self.logger.info("✅ Enabled TF32 precision for faster training")
+            self.logger.info("✅ Set memory fraction to 95% to prevent OOM")
 
         # Setup training components
         optimizer, scheduler = self.setup_optimizer(learning_rate)

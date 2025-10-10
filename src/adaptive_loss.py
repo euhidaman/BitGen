@@ -357,16 +357,28 @@ class BitGenLoss(nn.Module):
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
-            # Flatten for cross entropy
-            loss_lm = self.ce_loss(
-                shift_logits.view(-1, self.vocab_size),
-                shift_labels.view(-1)
-            )
+            # MEMORY OPTIMIZATION: Compute loss in chunks to avoid OOM
+            # With batch=192, seq=256, vocab=16384, full computation needs 6GB
+            # Chunk by batch dimension to reduce memory
+            batch_size = shift_logits.size(0)
+            chunk_size = 32  # Process 32 samples at a time
+            
+            loss_chunks = []
+            for i in range(0, batch_size, chunk_size):
+                end_idx = min(i + chunk_size, batch_size)
+                chunk_logits = shift_logits[i:end_idx].view(-1, self.vocab_size)
+                chunk_labels = shift_labels[i:end_idx].view(-1)
+                
+                chunk_loss = self.ce_loss(chunk_logits, chunk_labels)
+                loss_chunks.append(chunk_loss)
+            
+            # Average chunk losses (weighted by chunk size)
+            loss_lm = torch.stack(loss_chunks).mean()
             
             if not torch.isnan(loss_lm) and not torch.isinf(loss_lm):
                 losses['language_modeling'] = loss_lm
                 if should_debug:
-                    print(f"DEBUG: Language modeling loss = {loss_lm.item():.6f}")
+                    print(f"DEBUG: Language modeling loss = {loss_lm.item():.6f} (computed in {len(loss_chunks)} chunks)")
 
         # SECONDARY: Contrastive loss (FIBER-style multimodal learning)
         if images is not None and 'contrastive_features' in model_outputs:

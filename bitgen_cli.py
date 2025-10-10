@@ -240,11 +240,12 @@ def train_with_monitoring(args):
 
     try:
         # Use the available BitGen trainer
+        # MEMORY OPTIMIZED: Reduced vocab_size from 16384 to 8192 to save 3GB memory
         config = BitGenConfig(
             embed_dim=256 if args.model_size == 'tiny' else (128 if args.model_size == 'nano' else 512),
             num_layers=6 if args.model_size == 'tiny' else (4 if args.model_size == 'nano' else 8),
-            vocab_size=16384 if args.model_size == 'tiny' else (8192 if args.model_size == 'nano' else 32768),
-            max_seq_len=1024 if args.model_size == 'tiny' else (512 if args.model_size == 'nano' else 2048)
+            vocab_size=8192 if args.model_size == 'tiny' else (4096 if args.model_size == 'nano' else 16384),
+            max_seq_len=512 if args.model_size == 'tiny' else (256 if args.model_size == 'nano' else 1024)
         )
 
         # Initialize trainer
