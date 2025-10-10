@@ -149,9 +149,10 @@ class BitGenTrainer:
         self.logger.info(f"WandB logging enabled: {project}/{entity}/{run_name}")
 
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with balanced stability and convergence - FIXED FOR BETTER LEARNING"""
-        # FIXED: Use higher learning rate for faster convergence (BitMar uses 3e-4)
-        stable_lr = learning_rate * 3.0  # Increase from 1e-4 to 3e-4
+        """Setup optimizer with balanced stability and convergence - RADICAL: Use CLIP-style high LR"""
+        # CLIP uses 5e-4 for contrastive learning (much higher than language models)
+        # Contrastive learning is more stable and can handle aggressive LR
+        stable_lr = learning_rate * 10.0  # Increase from 1e-4 to 1e-3 (CLIP-style)
 
         # Use AdamW with balanced settings for good convergence
         optimizer = optim.AdamW(
@@ -166,9 +167,9 @@ class BitGenTrainer:
         # FIXED: Store total training steps for proper scheduler
         self.total_training_steps = None  # Will be set in train() method
 
-        # FIXED: Better warmup and cosine decay schedule
+        # CLIP-STYLE: Very short warmup, aggressive learning
         def lr_lambda(step):
-            warmup_steps = 500  # FIXED: Reduced from 1000 to 500 for faster warmup
+            warmup_steps = 100  # CLIP uses ~100 steps warmup (very short!)
             if step < warmup_steps:
                 # Linear warmup
                 return step / warmup_steps

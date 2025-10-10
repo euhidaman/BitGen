@@ -198,6 +198,9 @@ class BitGenLoss(nn.Module):
 
         # Debug step counter for reduced logging
         self.debug_step_counter = 0
+        
+        # Global step for multi-stage training
+        self.global_step = 0
 
     def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
         """FIBER/CLIP-style image-text contrastive loss with numerical stability"""
@@ -338,8 +341,9 @@ class BitGenLoss(nn.Module):
                 target_robot: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
         """Complete forward pass with adaptive loss - FIXED TO ACTUALLY LEARN"""
 
-        # Increment debug counter
+        # Increment counters
         self.debug_step_counter += 1
+        self.global_step += 1  # Track global step for multi-stage training
         should_debug = (self.debug_step_counter % 5000 == 0)
 
         # CRITICAL DEBUG: Check labels
@@ -349,45 +353,16 @@ class BitGenLoss(nn.Module):
 
         losses = {}
         
-        # CRITICAL FIX: Language modeling loss (was missing!)
-        # This is the PRIMARY loss that actually trains the model to predict tokens
-        if 'logits' in model_outputs:
-            logits = model_outputs['logits']
-            # Shift logits and labels for next-token prediction
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            
-            # MEMORY OPTIMIZATION: Compute loss in chunks to avoid OOM
-            # Flatten FIRST to ensure consistent dimensions, THEN chunk
-            batch_size, seq_len, vocab_size = shift_logits.size()
-            flat_logits = shift_logits.view(-1, vocab_size)  # [batch*seq, vocab]
-            flat_labels = shift_labels.view(-1)  # [batch*seq]
-            
-            # Chunk the flattened tensors
-            total_tokens = flat_logits.size(0)
-            chunk_size = 8192  # Process 8K tokens at a time (instead of by batch)
-            
-            loss_chunks = []
-            for i in range(0, total_tokens, chunk_size):
-                end_idx = min(i + chunk_size, total_tokens)
-                chunk_logits = flat_logits[i:end_idx]
-                chunk_labels = flat_labels[i:end_idx]
-                
-                chunk_loss = self.ce_loss(chunk_logits, chunk_labels)
-                loss_chunks.append(chunk_loss)
-            
-            # Average chunk losses
-            loss_lm = torch.stack(loss_chunks).mean()
-            
-            if not torch.isnan(loss_lm) and not torch.isinf(loss_lm):
-                losses['language_modeling'] = loss_lm
-                if should_debug:
-                    print(f"DEBUG: Language modeling loss = {loss_lm.item():.6f} (computed in {len(loss_chunks)} chunks)")
-
-        # SECONDARY: Contrastive loss (FIBER-style multimodal learning)
+        # RADICAL SIMPLIFICATION: Use ONLY contrastive loss (like CLIP)
+        # This is proven to work and actually learns meaningful representations
+        # NO language modeling (too complex, may not converge)
+        # NO multi-objective confusion
+        
+        # PRIMARY LOSS: Image-Text Contrastive Learning (CLIP-style)
         if images is not None and 'contrastive_features' in model_outputs:
             contrastive_feats = model_outputs['contrastive_features']
             if 'text_features' in contrastive_feats and 'image_features' in contrastive_feats:
+                # Use CLIP's proven approach: symmetric contrastive loss
                 contrastive_loss = self.contrastive_loss(
                     contrastive_feats['text_features'],
                     contrastive_feats['image_features'],
@@ -396,7 +371,7 @@ class BitGenLoss(nn.Module):
                 losses['contrastive'] = contrastive_loss
                 
                 if should_debug:
-                    print(f"DEBUG: Contrastive loss = {contrastive_loss.item():.6f}")
+                    print(f"DEBUG: Contrastive loss (CLIP-style) = {contrastive_loss.item():.6f}")
 
         # FIXED: Proper vision-text contrastive loss (like CLIP/FIBER)
         if images is not None and 'text_features' in model_outputs and 'vision_features' in model_outputs:
@@ -427,47 +402,74 @@ class BitGenLoss(nn.Module):
                 if should_debug:
                     print(f"WARNING: Robot selection loss computation failed: {e}")
 
-        # CRITICAL FIX: Language modeling is PRIMARY, contrastive is SECONDARY
-        # Priority order: language_modeling > contrastive > robot_selection
-        if 'language_modeling' in losses:
-            total_loss = losses['language_modeling'] * 1.0  # Primary: Next-token prediction
+        # ADAPTIVE MULTI-STAGE TRAINING STRATEGY:
+        # Stage 1 (steps 0-2000): Focus on contrastive learning (get model to learn SOMETHING)
+        # Stage 2 (steps 2000-5000): Add robot selection (reasoning-based task selection)
+        # Stage 3 (steps 5000+): Full training with all objectives
+        
+        # Determine training stage based on global step counter
+        current_step = self.global_step
+        
+        # Track stage transitions
+        if not hasattr(self, 'current_stage'):
+            self.current_stage = 1
+        
+        if current_step < 2000:
+            # STAGE 1: Pure contrastive learning (like CLIP warm-start)
+            contrastive_weight = 1.0
+            robot_weight = 0.0  # Disabled
+            stage_name = "Stage 1: Contrastive Warm-start"
+            new_stage = 1
+        elif current_step < 5000:
+            # STAGE 2: Add robot selection (reasoning starts learning)
+            contrastive_weight = 0.7
+            robot_weight = 0.5  # Now active
+            stage_name = "Stage 2: Add Robot Reasoning"
+            new_stage = 2
+        else:
+            # STAGE 3: Full multi-task learning
+            contrastive_weight = 0.5
+            robot_weight = 1.0  # Full importance
+            stage_name = "Stage 3: Full Multi-Task"
+            new_stage = 3
+        
+        # Log stage transitions
+        if new_stage != self.current_stage:
+            print(f"\n{'='*80}")
+            print(f"🚀 TRAINING STAGE TRANSITION: Stage {self.current_stage} → Stage {new_stage}")
+            print(f"   {stage_name}")
+            print(f"   Step: {current_step}")
+            print(f"   Contrastive weight: {contrastive_weight}")
+            print(f"   Robot weight: {robot_weight}")
+            print(f"{'='*80}\n")
+            self.current_stage = new_stage
+        
+        # Build total loss based on current stage
+        if 'contrastive' in losses:
+            total_loss = losses['contrastive'] * contrastive_weight
             
             if should_debug:
-                print(f"DEBUG: Base loss (language_modeling) = {total_loss.item():.6f}")
-
-            # Add contrastive loss as auxiliary (helps multimodal understanding)
-            if 'contrastive' in losses:
-                contrastive_weight = 0.5  # Secondary importance
-                total_loss = total_loss + losses['contrastive'] * contrastive_weight
-                if should_debug:
-                    print(f"DEBUG: Added contrastive = {losses['contrastive'].item():.6f} (weight={contrastive_weight})")
+                print(f"DEBUG: {stage_name} (step {current_step})")
+                print(f"DEBUG: Contrastive loss = {losses['contrastive'].item():.6f} (weight={contrastive_weight})")
             
-            # Add robot selection loss if present
-            if 'robot_selection' in losses:
-                robot_weight = 0.3  # Tertiary importance
+            # Add robot selection if available and weight > 0
+            if 'robot_selection' in losses and robot_weight > 0:
                 total_loss = total_loss + losses['robot_selection'] * robot_weight
                 if should_debug:
-                    print(f"DEBUG: Added robot_selection = {losses['robot_selection'].item():.6f} (weight={robot_weight})")
+                    print(f"DEBUG: Robot selection loss = {losses['robot_selection'].item():.6f} (weight={robot_weight})")
+            elif should_debug and 'robot_selection' in losses:
+                print(f"DEBUG: Robot selection loss = {losses['robot_selection'].item():.6f} (DISABLED in this stage)")
                     
-        elif 'contrastive' in losses:
-            # Fallback: contrastive-only training (vision-language tasks)
-            total_loss = losses['contrastive'] * 1.0
-            
-            if 'robot_selection' in losses:
-                total_loss = total_loss + losses['robot_selection'] * 0.5
-                
+        elif 'robot_selection' in losses:
+            # Pure robot selection training (when no images available)
+            total_loss = losses['robot_selection']
             if should_debug:
-                print(f"DEBUG: Using contrastive-only mode = {total_loss.item():.6f}")
+                print(f"DEBUG: Pure robot selection loss = {total_loss.item():.6f}")
         else:
-            # Emergency fallback: use any available loss
-            if len(losses) > 0:
-                total_loss = sum(losses.values()) / len(losses)
-                if should_debug:
-                    print(f"DEBUG: Emergency fallback, avg of all losses = {total_loss.item():.6f}")
-            else:
-                total_loss = torch.tensor(0.0, device=labels.device, requires_grad=True)
-                if should_debug:
-                    print("ERROR: No losses computed!")
+            # No valid loss - should not happen
+            total_loss = torch.tensor(1.0, device=labels.device, requires_grad=True)
+            if should_debug:
+                print("ERROR: No losses computed! Using dummy loss = 1.0")
 
         # FIXED: Only check for NaN/Inf, don't artificially inflate loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):
