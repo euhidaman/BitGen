@@ -348,8 +348,27 @@ class BitGenLoss(nn.Module):
             print(f"[LOSS FORWARD] Step {self.debug_step_counter}: labels shape={labels.shape}, valid={valid_labels}, has_logits={'logits' in model_outputs}")
 
         losses = {}
+        
+        # CRITICAL FIX: Language modeling loss (was missing!)
+        # This is the PRIMARY loss that actually trains the model to predict tokens
+        if 'logits' in model_outputs:
+            logits = model_outputs['logits']
+            # Shift logits and labels for next-token prediction
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            # Flatten for cross entropy
+            loss_lm = self.ce_loss(
+                shift_logits.view(-1, self.vocab_size),
+                shift_labels.view(-1)
+            )
+            
+            if not torch.isnan(loss_lm) and not torch.isinf(loss_lm):
+                losses['language_modeling'] = loss_lm
+                if should_debug:
+                    print(f"DEBUG: Language modeling loss = {loss_lm.item():.6f}")
 
-        # PRIMARY: Contrastive loss (FIBER-style multimodal learning)
+        # SECONDARY: Contrastive loss (FIBER-style multimodal learning)
         if images is not None and 'contrastive_features' in model_outputs:
             contrastive_feats = model_outputs['contrastive_features']
             if 'text_features' in contrastive_feats and 'image_features' in contrastive_feats:
@@ -392,29 +411,47 @@ class BitGenLoss(nn.Module):
                 if should_debug:
                     print(f"WARNING: Robot selection loss computation failed: {e}")
 
-        # FIBER-style: Use contrastive loss as primary objective
-        if 'contrastive' in losses:
-            total_loss = losses['contrastive'] * 1.0  # Primary loss
+        # CRITICAL FIX: Language modeling is PRIMARY, contrastive is SECONDARY
+        # Priority order: language_modeling > contrastive > robot_selection
+        if 'language_modeling' in losses:
+            total_loss = losses['language_modeling'] * 1.0  # Primary: Next-token prediction
+            
+            if should_debug:
+                print(f"DEBUG: Base loss (language_modeling) = {total_loss.item():.6f}")
 
+            # Add contrastive loss as auxiliary (helps multimodal understanding)
+            if 'contrastive' in losses:
+                contrastive_weight = 0.5  # Secondary importance
+                total_loss = total_loss + losses['contrastive'] * contrastive_weight
+                if should_debug:
+                    print(f"DEBUG: Added contrastive = {losses['contrastive'].item():.6f} (weight={contrastive_weight})")
+            
             # Add robot selection loss if present
-            for loss_name, loss_value in losses.items():
-                if loss_name != 'contrastive':
-                    if not torch.isnan(loss_value) and not torch.isinf(loss_value):
-                        if 'robot' in loss_name:
-                            weight = 0.5  # Robot selection task
-                        else:
-                            weight = 0.5  # Other auxiliary losses
-                        
-                        total_loss = total_loss + loss_value * weight
-                        
-                        if should_debug:
-                            print(f"DEBUG: Added {loss_name} = {loss_value.item():.6f} (weight={weight})")
+            if 'robot_selection' in losses:
+                robot_weight = 0.3  # Tertiary importance
+                total_loss = total_loss + losses['robot_selection'] * robot_weight
+                if should_debug:
+                    print(f"DEBUG: Added robot_selection = {losses['robot_selection'].item():.6f} (weight={robot_weight})")
+                    
+        elif 'contrastive' in losses:
+            # Fallback: contrastive-only training (vision-language tasks)
+            total_loss = losses['contrastive'] * 1.0
+            
+            if 'robot_selection' in losses:
+                total_loss = total_loss + losses['robot_selection'] * 0.5
+                
+            if should_debug:
+                print(f"DEBUG: Using contrastive-only mode = {total_loss.item():.6f}")
         else:
-            # Fallback: use any available loss
+            # Emergency fallback: use any available loss
             if len(losses) > 0:
                 total_loss = sum(losses.values()) / len(losses)
+                if should_debug:
+                    print(f"DEBUG: Emergency fallback, avg of all losses = {total_loss.item():.6f}")
             else:
                 total_loss = torch.tensor(0.0, device=labels.device, requires_grad=True)
+                if should_debug:
+                    print("ERROR: No losses computed!")
 
         # FIXED: Only check for NaN/Inf, don't artificially inflate loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):

@@ -74,13 +74,13 @@ class HuggingFaceIntegration:
             logger.error(f"Failed to create repository: {e}")
             return False
 
-    def push_model_checkpoint(self, model, config: Dict, epoch: int, metrics: Dict):
+    def push_model_checkpoint(self, model, config, epoch: int, metrics: Dict):
         """
         Push model checkpoint to HuggingFace Hub with metadata
         
         Args:
             model: The PyTorch model to save
-            config: Model configuration dict
+            config: Model configuration (BitGenConfig object or dict)
             epoch: Current epoch number
             metrics: Training metrics dict
         """
@@ -102,10 +102,16 @@ class HuggingFaceIntegration:
                 model_path = tmpdir_path / f"model_epoch_{epoch}.pt"
                 torch.save(model.state_dict(), model_path)
                 
+                # Convert config to dict if it's a BitGenConfig object
+                if hasattr(config, '__dict__'):
+                    config_dict = {k: v for k, v in config.__dict__.items() if not k.startswith('_')}
+                else:
+                    config_dict = config
+                
                 # Save config
                 config_path = tmpdir_path / "config.json"
                 with open(config_path, 'w') as f:
-                    json.dump(config, f, indent=2)
+                    json.dump(config_dict, f, indent=2)
                 
                 # Save metrics
                 metrics_path = tmpdir_path / f"metrics_epoch_{epoch}.json"

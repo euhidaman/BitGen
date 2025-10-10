@@ -85,6 +85,12 @@ def main():
     train_parser.add_argument('--wandb_entity', type=str, default='babylm-ntust', help='WandB team/entity')
     train_parser.add_argument('--wandb_run_name', type=str, help='WandB run name (auto-generated if not provided)')
     train_parser.add_argument('--wandb_tags', nargs='+', default=['bitgen', 'multimodal', 'babylm'], help='WandB tags')
+    
+    # HuggingFace Hub integration
+    train_parser.add_argument('--push_to_hub', action='store_true', help='Push model to HuggingFace Hub')
+    train_parser.add_argument('--hf_repo_name', type=str, help='HuggingFace repository name')
+    train_parser.add_argument('--hf_organization', type=str, help='HuggingFace organization name')
+    train_parser.add_argument('--hf_private', action='store_true', help='Create private HuggingFace repository')
 
     # Inference command (with comprehensive metrics)
     inference_parser = subparsers.add_parser('inference', help='Run inference with comprehensive performance metrics')
