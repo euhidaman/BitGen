@@ -358,21 +358,25 @@ class BitGenLoss(nn.Module):
             shift_labels = labels[..., 1:].contiguous()
             
             # MEMORY OPTIMIZATION: Compute loss in chunks to avoid OOM
-            # With batch=192, seq=256, vocab=16384, full computation needs 6GB
-            # Chunk by batch dimension to reduce memory
-            batch_size = shift_logits.size(0)
-            chunk_size = 32  # Process 32 samples at a time
+            # Flatten FIRST to ensure consistent dimensions, THEN chunk
+            batch_size, seq_len, vocab_size = shift_logits.size()
+            flat_logits = shift_logits.view(-1, vocab_size)  # [batch*seq, vocab]
+            flat_labels = shift_labels.view(-1)  # [batch*seq]
+            
+            # Chunk the flattened tensors
+            total_tokens = flat_logits.size(0)
+            chunk_size = 8192  # Process 8K tokens at a time (instead of by batch)
             
             loss_chunks = []
-            for i in range(0, batch_size, chunk_size):
-                end_idx = min(i + chunk_size, batch_size)
-                chunk_logits = shift_logits[i:end_idx].view(-1, self.vocab_size)
-                chunk_labels = shift_labels[i:end_idx].view(-1)
+            for i in range(0, total_tokens, chunk_size):
+                end_idx = min(i + chunk_size, total_tokens)
+                chunk_logits = flat_logits[i:end_idx]
+                chunk_labels = flat_labels[i:end_idx]
                 
                 chunk_loss = self.ce_loss(chunk_logits, chunk_labels)
                 loss_chunks.append(chunk_loss)
             
-            # Average chunk losses (weighted by chunk size)
+            # Average chunk losses
             loss_lm = torch.stack(loss_chunks).mean()
             
             if not torch.isnan(loss_lm) and not torch.isinf(loss_lm):
