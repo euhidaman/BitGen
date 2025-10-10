@@ -202,7 +202,7 @@ class BitGenLoss(nn.Module):
         # Global step for multi-stage training
         self.global_step = 0
 
-    def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.01) -> torch.Tensor:
         """FIBER/CLIP-style image-text contrastive loss with numerical stability"""
         if text_features is None or vision_features is None:
             return torch.tensor(0.0, device=text_features.device if text_features is not None else vision_features.device, requires_grad=True)
@@ -338,12 +338,18 @@ class BitGenLoss(nn.Module):
                 model_outputs: Dict,
                 labels: torch.Tensor,
                 images: Optional[torch.Tensor] = None,
-                target_robot: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
-        """Complete forward pass with adaptive loss - FIXED TO ACTUALLY LEARN"""
+                target_robot: Optional[torch.Tensor] = None,
+                global_step: int = 0) -> Tuple[torch.Tensor, Dict]:
+        """Complete forward pass with adaptive loss - FIXED TO ACTUALLY LEARN
+        
+        Args:
+            global_step: Current training step (managed by training loop)
+        """
 
         # Increment counters
         self.debug_step_counter += 1
-        self.global_step += 1  # Track global step for multi-stage training
+        # Use externally managed global_step (from training loop)
+        self.global_step = global_step
         should_debug = (self.debug_step_counter % 5000 == 0)
 
         # CRITICAL DEBUG: Check labels
@@ -363,10 +369,19 @@ class BitGenLoss(nn.Module):
             contrastive_feats = model_outputs['contrastive_features']
             if 'text_features' in contrastive_feats and 'image_features' in contrastive_feats:
                 # Use CLIP's proven approach: symmetric contrastive loss
+                # DIAGNOSTIC: Check feature norms (every 100 steps)
+                if self.debug_step_counter % 100 == 0:
+                    text_norm = contrastive_feats['text_features'].norm(dim=-1).mean().item()
+                    image_norm = contrastive_feats['image_features'].norm(dim=-1).mean().item()
+                    print(f"🔍 Feature Norms (Step {self.debug_step_counter}): "
+                          f"Text={text_norm:.4f}, Image={image_norm:.4f}")
+                    if text_norm < 0.1 or image_norm < 0.1:
+                        print(f"⚠️  WARNING: Very small feature norms detected! Features may be collapsed.")
+                
                 contrastive_loss = self.contrastive_loss(
                     contrastive_feats['text_features'],
                     contrastive_feats['image_features'],
-                    temperature=contrastive_feats.get('temperature', 0.07)
+                    temperature=contrastive_feats.get('temperature', 0.01)
                 )
                 losses['contrastive'] = contrastive_loss
                 

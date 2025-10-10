@@ -358,7 +358,8 @@ class BitGenTrainer:
                     outputs,
                     labels,
                     images=images,
-                    target_robot=target_robot
+                    target_robot=target_robot,
+                    global_step=self.global_step
                 )
                 
                 # CRITICAL: Scale loss by gradient accumulation steps
@@ -427,6 +428,30 @@ class BitGenTrainer:
 
             if grad_norm > 10.0:  # Very large gradients
                 self.logger.warning(f"Large gradient norm detected: {grad_norm:.4f}")
+
+            # DIAGNOSTIC: Check gradient flow to encoders (every 50 steps)
+            if self.global_step % 50 == 0:
+                text_grad_norm = 0.0
+                vision_grad_norm = 0.0
+                
+                for name, param in self.model.named_parameters():
+                    if param.grad is not None:
+                        param_grad_norm = param.grad.norm().item()
+                        if 'text_encoder' in name or 'transformer' in name:
+                            text_grad_norm += param_grad_norm ** 2
+                        elif 'vision_encoder' in name or 'projection' in name:
+                            vision_grad_norm += param_grad_norm ** 2
+                
+                text_grad_norm = text_grad_norm ** 0.5
+                vision_grad_norm = vision_grad_norm ** 0.5
+                
+                self.logger.info(f"🔍 Gradient Flow (Step {self.global_step}): "
+                               f"Text encoder={text_grad_norm:.6f}, "
+                               f"Vision encoder={vision_grad_norm:.6f}, "
+                               f"Total={grad_norm:.6f}")
+                
+                if text_grad_norm < 1e-6 and vision_grad_norm < 1e-6:
+                    self.logger.error("❌ NO GRADIENTS flowing to encoders! Model is NOT learning!")
 
             # Log gradient flow to wandb (every 100 steps)
             if self.wandb_monitor and self.global_step % 100 == 0:
@@ -587,7 +612,7 @@ class BitGenTrainer:
                 # Optional: Language modeling loss on task description
                 if 'logits' in outputs and 'labels' in batch:
                     labels = batch['labels'].to(self.device)
-                    lm_loss, _ = self.loss_fn(outputs, labels, images=None)
+                    lm_loss, _ = self.loss_fn(outputs, labels, images=None, global_step=self.global_step)
                     
                     # Check lm_loss for NaN
                     if torch.isnan(lm_loss) or torch.isinf(lm_loss):
@@ -831,8 +856,8 @@ class BitGenTrainer:
                 # Forward pass
                 outputs = self.model(input_ids=input_ids, images=images)
                 
-                # Compute loss
-                loss, loss_dict = self.loss_fn(outputs, labels, images=images)
+                # Compute loss (use 0 for eval since we don't do stage transitions during eval)
+                loss, loss_dict = self.loss_fn(outputs, labels, images=images, global_step=0)
                 
                 batch_size = input_ids.size(0)
                 total_loss += loss.item() * batch_size
@@ -1186,8 +1211,6 @@ class BitGenTrainer:
                         'lr': f"{step_metrics['learning_rate']:.6f}",
                         'gpu_util': f"{self._get_gpu_utilization():.0f}%"
                     })
-
-                    self.global_step += 1
 
                     # Evaluation
                     if self.global_step % eval_steps == 0:

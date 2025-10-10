@@ -321,17 +321,19 @@ class CrossModalFusion(nn.Module):
 
             # Load DINOv2-base model from HuggingFace
             self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
-            self.dinov2_model.eval()  # Keep in eval mode for feature extraction only
+            # CRITICAL FIX: Keep in train mode to allow gradient flow!
+            self.dinov2_model.train()
 
-            # Freeze DINOv2 parameters - feature extraction only
+            # CRITICAL FIX: UNFREEZE DINOv2 parameters to allow learning!
+            # The model MUST be trainable for contrastive learning to work
             for param in self.dinov2_model.parameters():
-                param.requires_grad = False
+                param.requires_grad = True
 
             # DINOv2-base outputs 768 dimensions
             self.dinov2_dim = 768
             self.dinov2_to_vision = BitNetLinear(self.dinov2_dim, config.vision_embed_dim)
 
-            print("✅ facebook/dinov2-base loaded successfully - frozen for feature extraction only!")
+            print("✅ facebook/dinov2-base loaded successfully - TRAINABLE (requires_grad=True)!")
 
         except ImportError as e:
             raise ImportError(
