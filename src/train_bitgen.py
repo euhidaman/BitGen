@@ -1002,20 +1002,24 @@ class BitGenTrainer:
             self.logger.info("✅ Enabled TF32 precision for faster training")
             self.logger.info("✅ Set memory fraction to 95% to prevent OOM")
 
-        # Setup training components
-        optimizer, scheduler = self.setup_optimizer(learning_rate)
+        # CRITICAL FIX: Setup data loaders FIRST to get steps_per_epoch
+        # Then set total_training_steps BEFORE creating scheduler
         train_loader, val_loader, robot_loader = self.setup_data_loaders(
             coco_data_path, robot_data_path, actual_batch_size
         )
         
-        # CRITICAL: Set total training steps for proper LR scheduling
+        # Calculate total training steps for LR scheduler
         steps_per_epoch = len(train_loader)
         self.total_training_steps = steps_per_epoch * num_epochs
+        
         self.logger.info(f"📈 LEARNING RATE SCHEDULE:")
         self.logger.info(f"   Steps per epoch: {steps_per_epoch:,}")
         self.logger.info(f"   Total training steps: {self.total_training_steps:,}")
-        self.logger.info(f"   Warmup steps: 1,000")
-        self.logger.info(f"   LR will decay from {learning_rate} to {learning_rate * 0.1}")
+        self.logger.info(f"   Warmup steps: 500")
+        self.logger.info(f"   LR will decay from {learning_rate * 3.0} to {learning_rate * 3.0 * 0.1}")
+        
+        # NOW create optimizer and scheduler (after total_training_steps is set)
+        optimizer, scheduler = self.setup_optimizer(learning_rate)
 
         # DIAGNOSTIC: Log data loader details
         self.logger.info(f"📊 DATA LOADER DETAILS:")
@@ -1166,8 +1170,12 @@ class BitGenTrainer:
                                       if isinstance(v, (int, float, torch.Tensor)) and k != 'batch_type'}
                     self.performance_tracker.update(numeric_metrics)
 
-                    # CRITICAL FIX: Step scheduler after each optimizer step (not per epoch)
+                    # CRITICAL FIX: Step scheduler ONLY on optimizer steps (not on every batch!)
+                    # This was causing LR to advance too fast (2x speed with grad_accum=2)
                     scheduler.step()
+                    
+                    # Increment global step counter for proper LR scheduling
+                    self.global_step += 1
 
                     # FIXED: Update progress bar only on optimizer steps
                     optimizer_step_count += 1
