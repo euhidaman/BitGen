@@ -995,17 +995,17 @@ class BitGenTrainer:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
             if vram_gb > 40:  # A40/A100 class GPUs
-                # ULTRA-AGGRESSIVE: Double batch size to 512 to fully utilize A40's 46GB VRAM
-                # Currently only using 23GB (50%), we can double the batch size!
-                batch_size = 512  # Effective batch size
+                # OPTIMIZED: Moderate increase to 320 effective batch size (leaves safety margin)
+                # Physical batch = 160 per step to avoid OOM
+                batch_size = 320  # Effective batch size
                 grad_accum_steps = 2  # Keep at 2 for stability
-                actual_batch_size = batch_size // grad_accum_steps  # 512 / 2 = 256 per step
+                actual_batch_size = batch_size // grad_accum_steps  # 320 / 2 = 160 per step
 
-                self.logger.info(f"💡 ULTRA-AGGRESSIVE A40 optimization (50% VRAM → 90% target):")
-                self.logger.info(f"   Physical batch size: {actual_batch_size} (was 96, +167%!)")
+                self.logger.info(f"💡 A40 optimization (balanced for 80% VRAM):")
+                self.logger.info(f"   Physical batch size: {actual_batch_size} (was 96, +67%)")
                 self.logger.info(f"   Gradient accumulation steps: {grad_accum_steps}")
-                self.logger.info(f"   Effective batch size: {batch_size} (was 192, +167%!)")
-                self.logger.info(f"   Expected VRAM usage: ~40GB (was ~23GB, target 90% of 46GB)")
+                self.logger.info(f"   Effective batch size: {batch_size} (was 192, +67%)")
+                self.logger.info(f"   Expected VRAM usage: ~35GB (was ~23GB, safe 80% of 46GB)")
 
             elif vram_gb > 15:  # A4500/A5000 class GPUs
                 # For A4500+: Use minimal gradient accumulation
