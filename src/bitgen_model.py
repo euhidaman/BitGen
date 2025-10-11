@@ -409,17 +409,16 @@ class CrossModalFusion(nn.Module):
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
         images_normalized = (images - mean) / std
 
-        # Extract DINOv2 features (frozen - no gradients for feature extraction only)
-        with torch.no_grad():
-            # DINOv2 forward pass - feature extraction only
-            outputs = self.dinov2_model(pixel_values=images_normalized)
+        # CRITICAL FIX: Extract DINOv2 features WITH GRADIENTS for contrastive learning!
+        # DINOv2 forward pass - TRAINABLE for end-to-end learning
+        outputs = self.dinov2_model(pixel_values=images_normalized)
 
-            # Get patch embeddings (exclude CLS token)
-            # outputs.last_hidden_state shape: [batch_size, num_patches + 1, 768]
-            patch_features = outputs.last_hidden_state[:, 1:, :]  # Remove CLS token
+        # Get patch embeddings (exclude CLS token)
+        # outputs.last_hidden_state shape: [batch_size, num_patches + 1, 768]
+        patch_features = outputs.last_hidden_state[:, 1:, :]  # Remove CLS token
 
         # Project DINOv2 features to our vision embedding dimension
-        # This is the only trainable part - projection from frozen DINOv2 features
+        # Both DINOv2 AND projection are trainable for contrastive learning
         vision_features = self.dinov2_to_vision(patch_features)  # [batch_size, num_patches, vision_embed_dim]
 
         return vision_features
