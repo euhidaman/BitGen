@@ -27,16 +27,29 @@ class HuggingFaceIntegration:
             private: Whether to create private repository
         """
         self.repo_name = repo_name
-        self.organization = organization
         self.private = private
-        self.repo_id = f"{organization}/{repo_name}" if organization else repo_name
 
         # Check if huggingface_hub is available
         try:
-            from huggingface_hub import HfApi, create_repo, login
+            from huggingface_hub import HfApi, create_repo, login, whoami
             self.hf_api = HfApi()
             self.has_hf = True
-            logger.info("✓ HuggingFace Hub integration available")
+            
+            # Auto-detect username if organization not provided
+            if organization is None:
+                try:
+                    user_info = whoami()
+                    self.organization = user_info['name']
+                    logger.info(f"✓ Auto-detected HuggingFace user: {self.organization}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not auto-detect user, using repo_name only: {e}")
+                    self.organization = None
+            else:
+                self.organization = organization
+            
+            # Build full repo_id with username
+            self.repo_id = f"{self.organization}/{repo_name}" if self.organization else repo_name
+            logger.info(f"✓ HuggingFace Hub integration available - Repo: {self.repo_id}")
         except ImportError:
             self.has_hf = False
             logger.warning("⚠️ huggingface_hub not installed. Install with: pip install huggingface_hub")
