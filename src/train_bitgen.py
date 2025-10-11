@@ -167,30 +167,47 @@ class BitGenTrainer:
         # FIXED: Store total training steps for proper scheduler
         self.total_training_steps = None  # Will be set in train() method
 
-        # CLIP-STYLE: Very short warmup, aggressive learning
+        # CLIP-STYLE: Very short warmup, AGGRESSIVE cosine decay with restarts
         def lr_lambda(step):
             warmup_steps = 100  # CLIP uses ~100 steps warmup (very short!)
             if step < warmup_steps:
                 # Linear warmup
                 return step / warmup_steps
             else:
-                # Cosine decay after warmup - use actual total steps
+                # Cosine annealing with warm restarts to escape plateaus
                 if self.total_training_steps is None or self.total_training_steps <= warmup_steps:
                     # Fallback: use a large number if not set
                     total_steps = 100000
                 else:
                     total_steps = self.total_training_steps
 
+                # AGGRESSIVE DECAY: Decay more in early epochs to force learning
                 progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-                # FIXED: Decay from 1.0 to 0.1 (10% minimum, never reaches zero)
-                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
-                return 0.1 + 0.9 * cosine_decay  # Range: [0.1, 1.0]
+                
+                # Use cosine annealing with periodic restarts every 20% of training
+                # This helps escape local minima / plateaus
+                restart_period = 0.2  # Restart every 20% of training
+                cycle_progress = (progress % restart_period) / restart_period
+                
+                # Cosine decay within each cycle
+                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * cycle_progress))
+                
+                # Overall decay envelope (slower)
+                overall_decay = 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
+                
+                # Combine: cycle restarts + overall decay
+                # Min LR = 0.1 (10% of peak), Max LR varies with overall decay
+                min_factor = 0.1
+                max_factor = 0.3 + 0.7 * overall_decay  # Decays from 1.0 to 0.3
+                
+                return min_factor + (max_factor - min_factor) * cosine_decay
 
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        self.logger.info(f"✅ FIXED: Optimizer setup with learning rate: {stable_lr} (3x increased)")
-        self.logger.info(f"   Warmup steps: 500 (reduced for faster learning)")
-        self.logger.info(f"   Min LR: {stable_lr * 0.1}")
+        self.logger.info(f"✅ AGGRESSIVE LR: Base LR = {stable_lr} (10x), with cosine restarts every 20% of training")
+        self.logger.info(f"   Warmup steps: 100 (CLIP-style)")
+        self.logger.info(f"   LR range: {stable_lr * 0.1:.6f} - {stable_lr:.6f}")
+        self.logger.info(f"   Periodic restarts help escape plateaus!")
 
         return optimizer, scheduler
     

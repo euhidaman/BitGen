@@ -91,8 +91,10 @@ class HuggingFaceIntegration:
         # CRITICAL FIX: Ensure repository exists before pushing
         try:
             from huggingface_hub import create_repo, repo_exists
+            import time
             
             # Check if repo exists
+            repo_created_now = False
             if not repo_exists(self.repo_id, repo_type="model"):
                 logger.info(f"🆕 Repository does not exist. Creating: {self.repo_id}")
                 create_repo(
@@ -102,11 +104,33 @@ class HuggingFaceIntegration:
                     repo_type="model"
                 )
                 logger.info(f"✅ Created repository: https://huggingface.co/{self.repo_id}")
+                repo_created_now = True
+                
+                # CRITICAL: Wait for repo to propagate on HuggingFace servers
+                # HuggingFace API has eventual consistency - repo creation takes time to propagate
+                logger.info("⏳ Waiting 10 seconds for repository to propagate...")
+                time.sleep(10)
+                
+                # Verify repo is now accessible
+                max_retries = 3
+                for retry in range(max_retries):
+                    if repo_exists(self.repo_id, repo_type="model"):
+                        logger.info(f"✓ Repository verified accessible after {retry + 1} checks")
+                        break
+                    else:
+                        if retry < max_retries - 1:
+                            logger.warning(f"⚠️ Repository not yet accessible, waiting 5 more seconds... (retry {retry + 1}/{max_retries})")
+                            time.sleep(5)
+                        else:
+                            logger.error("❌ Repository still not accessible after retries")
+                            return False
             else:
                 logger.info(f"✓ Repository exists: {self.repo_id}")
                 
         except Exception as e:
             logger.error(f"Failed to verify/create repository: {e}")
+            import traceback
+            traceback.print_exc()
             return False
             
         try:
@@ -149,29 +173,40 @@ class HuggingFaceIntegration:
                 with open(metrics_path, 'w') as f:
                     json.dump(json_metrics, f, indent=2)
                 
-                # Upload files
+                # Upload files with retry logic
                 commit_msg = f"Checkpoint at epoch {epoch} - Loss: {metrics.get('total_loss', 0.0):.4f}"
                 
-                upload_file(
-                    path_or_fileobj=str(model_path),
-                    path_in_repo=f"checkpoints/model_epoch_{epoch}.pt",
-                    repo_id=self.repo_id,
-                    commit_message=commit_msg
-                )
+                files_to_upload = [
+                    (str(model_path), f"checkpoints/model_epoch_{epoch}.pt"),
+                    (str(config_path), "config.json"),
+                    (str(metrics_path), f"metrics/metrics_epoch_{epoch}.json")
+                ]
                 
-                upload_file(
-                    path_or_fileobj=str(config_path),
-                    path_in_repo="config.json",
-                    repo_id=self.repo_id,
-                    commit_message=commit_msg
-                )
-                
-                upload_file(
-                    path_or_fileobj=str(metrics_path),
-                    path_in_repo=f"metrics/metrics_epoch_{epoch}.json",
-                    repo_id=self.repo_id,
-                    commit_message=commit_msg
-                )
+                # Upload each file with retry logic
+                max_upload_retries = 3
+                for file_path, repo_path in files_to_upload:
+                    upload_success = False
+                    for retry in range(max_upload_retries):
+                        try:
+                            upload_file(
+                                path_or_fileobj=file_path,
+                                path_in_repo=repo_path,
+                                repo_id=self.repo_id,
+                                commit_message=commit_msg
+                            )
+                            upload_success = True
+                            break
+                        except Exception as upload_error:
+                            if retry < max_upload_retries - 1:
+                                logger.warning(f"⚠️ Upload failed for {repo_path} (retry {retry + 1}/{max_upload_retries}): {upload_error}")
+                                time.sleep(5)  # Wait before retry
+                            else:
+                                logger.error(f"❌ Failed to upload {repo_path} after {max_upload_retries} retries")
+                                raise upload_error
+                    
+                    if not upload_success:
+                        logger.error(f"❌ Could not upload {repo_path}")
+                        return False
                 
                 logger.info(f"✓ Pushed checkpoint for epoch {epoch} to {self.repo_id}")
                 return True
