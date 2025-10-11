@@ -454,9 +454,10 @@ class BitGenTrainer:
                 for name, param in self.model.named_parameters():
                     if param.grad is not None:
                         param_grad_norm = param.grad.norm().item()
-                        if 'text_encoder' in name or 'transformer' in name:
+                        # FIXED: Match actual parameter names in BitGen model
+                        if 'embedding' in name or 'attention_layers' in name:
                             text_grad_norm += param_grad_norm ** 2
-                        elif 'vision_encoder' in name or 'projection' in name:
+                        elif 'dinov2' in name or 'cross_modal' in name:
                             vision_grad_norm += param_grad_norm ** 2
                 
                 text_grad_norm = text_grad_norm ** 0.5
@@ -954,15 +955,17 @@ class BitGenTrainer:
 
             # OPTIMIZE FOR A40/A100: Maximize utilization for high-end GPUs
             if total_vram_gb > 40:  # A40 has 46GB, A100 has 40-80GB
-                # INCREASED: Boost batch size to 192 for maximum GPU utilization (targeting ~38GB usage)
-                optimized_batch_size = max(batch_size, 192)  # Increased from 128 to 192
+                # AGGRESSIVE: Increase batch size to use more GPU (currently only 13.5GB/46GB used!)
+                # With unfrozen DINOv2 (86M params), we can handle larger batches
+                optimized_batch_size = max(batch_size, 256)  # Increased from 192 to 256
 
-                # Target 38GB memory usage (~80% of 46GB)
-                optimized_memory_mb = min(38000, int(total_vram_gb * 800))  # Use ~80% of VRAM
+                # Target 42GB memory usage (~91% of 46GB, leaving 4GB for safety)
+                optimized_memory_mb = min(42000, int(total_vram_gb * 910))  # Use ~91% of VRAM
 
-                self.logger.info(f"🚀 A40/A100 OPTIMIZATION ENABLED:")
+                self.logger.info(f"🚀 A40/A100 AGGRESSIVE OPTIMIZATION:")
                 self.logger.info(f"   Original batch_size: {batch_size} → Optimized: {optimized_batch_size}")
                 self.logger.info(f"   Original memory_mb: {max_memory_mb} → Optimized: {optimized_memory_mb}")
+                self.logger.info(f"   Previous usage: 13.5GB/46GB (29%) → Target: 42GB (91%)")
 
                 batch_size = optimized_batch_size
                 max_memory_mb = optimized_memory_mb
@@ -992,15 +995,17 @@ class BitGenTrainer:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
             if vram_gb > 40:  # A40/A100 class GPUs
-                # For A40+: Increased batch size to 192 with 2-step gradient accumulation
-                # Effective batch size = 192, Physical batch size = 96 per step
+                # For A40+: Increased batch size to 256 with 2-step gradient accumulation
+                # Effective batch size = 256, Physical batch size = 128 per step
+                # This will utilize ~42GB VRAM instead of just 13.5GB!
                 grad_accum_steps = 2  # Keep at 2 for stability
-                actual_batch_size = batch_size // grad_accum_steps  # 192 / 2 = 96 per step
+                actual_batch_size = batch_size // grad_accum_steps  # 256 / 2 = 128 per step
 
-                self.logger.info(f"💡 Using gradient accumulation for A40:")
-                self.logger.info(f"   Physical batch size: {actual_batch_size}")
+                self.logger.info(f"💡 AGGRESSIVE gradient accumulation for A40:")
+                self.logger.info(f"   Physical batch size: {actual_batch_size} (was 96, +33%)")
                 self.logger.info(f"   Gradient accumulation steps: {grad_accum_steps}")
-                self.logger.info(f"   Effective batch size: {batch_size}")
+                self.logger.info(f"   Effective batch size: {batch_size} (was 192, +33%)")
+                self.logger.info(f"   Expected VRAM usage: ~42GB (was ~13.5GB, +310%!)")
 
             elif vram_gb > 15:  # A4500/A5000 class GPUs
                 # For A4500+: Use minimal gradient accumulation

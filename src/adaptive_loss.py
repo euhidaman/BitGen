@@ -204,14 +204,16 @@ class BitGenLoss(nn.Module):
 
     def contrastive_loss(self, text_features: torch.Tensor, vision_features: torch.Tensor, temperature: float = 0.01) -> torch.Tensor:
         """FIBER/CLIP-style image-text contrastive loss with numerical stability"""
+        # CRITICAL FIX: Use features * 0 to maintain computational graph instead of torch.tensor()
         if text_features is None or vision_features is None:
-            return torch.tensor(0.0, device=text_features.device if text_features is not None else vision_features.device, requires_grad=True)
+            device = text_features.device if text_features is not None else vision_features.device
+            return torch.zeros(1, device=device, requires_grad=True).squeeze()
         
-        # STABILITY: Check for NaN/Inf in input features
+        # STABILITY: Check for NaN/Inf in input features - return feature-connected zero
         if torch.isnan(text_features).any() or torch.isinf(text_features).any():
-            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
+            return (text_features * 0.0).sum()  # Maintains graph connection
         if torch.isnan(vision_features).any() or torch.isinf(vision_features).any():
-            return torch.tensor(0.0, device=vision_features.device, requires_grad=True)
+            return (vision_features * 0.0).sum()  # Maintains graph connection
         
         # Normalize features with epsilon for stability
         text_features = F.normalize(text_features, p=2, dim=-1, eps=1e-8)
@@ -236,11 +238,11 @@ class BitGenLoss(nn.Module):
         loss_text = F.cross_entropy(logits_per_text, labels)
         loss_vision = F.cross_entropy(logits_per_vision, labels)
         
-        # STABILITY: Check for NaN in losses
+        # STABILITY: Check for NaN in losses - maintain graph connection
         if torch.isnan(loss_text) or torch.isinf(loss_text):
-            loss_text = torch.tensor(0.0, device=text_features.device, requires_grad=True)
+            loss_text = (text_features * 0.0).sum()  # Graph-connected zero
         if torch.isnan(loss_vision) or torch.isinf(loss_vision):
-            loss_vision = torch.tensor(0.0, device=vision_features.device, requires_grad=True)
+            loss_vision = (vision_features * 0.0).sum()  # Graph-connected zero
         
         loss = (loss_text + loss_vision) / 2.0
         
@@ -250,11 +252,11 @@ class BitGenLoss(nn.Module):
                                  vision_features: torch.Tensor) -> torch.Tensor:
         """CLIP-style vision-text alignment loss with stability checks"""
         if vision_features is None:
-            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
+            return (text_features * 0.0).sum()  # Graph-connected zero
 
-        # Check for invalid features
+        # Check for invalid features - maintain graph connection
         if torch.isnan(text_features).any() or torch.isnan(vision_features).any():
-            return torch.tensor(0.0, device=text_features.device, requires_grad=True)
+            return (text_features * 0.0).sum() + (vision_features * 0.0).sum()
 
         # Normalize features with epsilon to prevent division by zero
         text_features = F.normalize(text_features.mean(dim=1), dim=-1, eps=1e-8)
