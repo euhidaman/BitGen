@@ -282,8 +282,8 @@ class BitGenLoss(nn.Module):
 
     def reconstruction_loss(self, predicted_embeddings: torch.Tensor,
                            target_embeddings: torch.Tensor) -> torch.Tensor:
-        """Reconstruction loss for episodic memory"""
-        return self.mse_loss(predicted_embeddings, target_embeddings.detach())
+        """Reconstruction loss for episodic memory - allow gradients to flow"""
+        return self.mse_loss(predicted_embeddings, target_embeddings)
 
     def reasoning_consistency_loss(self, reasoning_logits: torch.Tensor,
                                  base_logits: torch.Tensor) -> torch.Tensor:
