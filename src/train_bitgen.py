@@ -1155,11 +1155,12 @@ class BitGenTrainer:
                     accumulated_loss += current_loss
                     accumulated_count += 1
                     
-                    # FLOPS tracking: Estimate FLOPs per forward pass
+                    # FLOPS tracking: Estimate FLOPs per forward pass (use coco_batch which is always defined)
                     if self.flops_per_forward is None:
                         # Rough estimate: 2 * params * batch_size * seq_len (forward + backward)
                         num_params = sum(p.numel() for p in self.model.parameters())
-                        batch_size = len(batch[0]) if isinstance(batch, (list, tuple)) else batch['input_ids'].size(0)
+                        # Use coco_batch since it's always available in the loop
+                        batch_size = len(coco_batch[0]) if isinstance(coco_batch, (list, tuple)) else coco_batch['input_ids'].size(0)
                         seq_len = self.config.max_seq_len
                         self.flops_per_forward = 2 * num_params * batch_size * seq_len
                         self.logger.info(f"📊 Estimated FLOPs per forward pass: {self.flops_per_forward:,.0f}")
