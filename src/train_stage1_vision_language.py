@@ -75,7 +75,7 @@ class Stage1Config:
     use_amp: bool = True
     
     # Paths
-    data_file: str = "data/coco/coco_dataset.json"
+    data_file: str = "data/coco/validated_coco.json"
     checkpoint_dir: str = "checkpoints/stage1"
     log_dir: str = "logs/stage1"
 
