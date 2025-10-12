@@ -92,6 +92,10 @@ class BitGenTrainer:
         # Memory optimization
         self.memory_utils = EmbeddedTrainingUtils()
         
+        # FLOPS tracking
+        self.total_flops = 0
+        self.flops_per_forward = None  # Will be calculated on first forward pass
+        
         # Logging
         self.setup_logging()
         
@@ -149,65 +153,53 @@ class BitGenTrainer:
         self.logger.info(f"WandB logging enabled: {project}/{entity}/{run_name}")
 
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with balanced stability and convergence - RADICAL: Use CLIP-style high LR"""
-        # CLIP uses 5e-4 for contrastive learning (much higher than language models)
-        # Contrastive learning is more stable and can handle aggressive LR
-        stable_lr = learning_rate * 10.0  # Increase from 1e-4 to 1e-3 (CLIP-style)
+        """Setup optimizer with smooth cosine annealing for gradual learning"""
+        # Use moderate LR multiplier for stability
+        stable_lr = learning_rate * 5.0  # 5e-4 (balanced between aggressive and conservative)
 
-        # Use AdamW with balanced settings for good convergence
+        # Use AdamW with standard settings
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=stable_lr,
-            betas=(0.9, 0.999),  # FIXED: Standard Adam betas for better convergence
+            betas=(0.9, 0.999),
             weight_decay=0.01,
             eps=1e-8,
             amsgrad=False
         )
         
-        # FIXED: Store total training steps for proper scheduler
+        # Store total training steps for proper scheduler
         self.total_training_steps = None  # Will be set in train() method
 
-        # CLIP-STYLE: Very short warmup, AGGRESSIVE cosine decay with restarts
+        # SMOOTH COSINE SCHEDULE: Gradual warmup and smooth decay (no abrupt changes)
         def lr_lambda(step):
-            warmup_steps = 100  # CLIP uses ~100 steps warmup (very short!)
+            warmup_steps = 500  # Longer warmup for smoother start (was 100)
             if step < warmup_steps:
-                # Linear warmup
-                return step / warmup_steps
+                # Smooth warmup with cosine curve (not linear)
+                warmup_progress = step / warmup_steps
+                return 0.5 * (1.0 - np.cos(np.pi * warmup_progress))  # Smooth 0→1
             else:
-                # Cosine annealing with warm restarts to escape plateaus
+                # Smooth cosine decay WITHOUT restarts (pure slope)
                 if self.total_training_steps is None or self.total_training_steps <= warmup_steps:
-                    # Fallback: use a large number if not set
                     total_steps = 100000
                 else:
                     total_steps = self.total_training_steps
 
-                # AGGRESSIVE DECAY: Decay more in early epochs to force learning
+                # Progress from warmup end to training end
                 progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                progress = min(progress, 1.0)  # Clamp to [0, 1]
                 
-                # Use cosine annealing with periodic restarts every 20% of training
-                # This helps escape local minima / plateaus
-                restart_period = 0.2  # Restart every 20% of training
-                cycle_progress = (progress % restart_period) / restart_period
+                # Pure cosine decay: 1.0 → 0.1 (smooth slope, no restarts)
+                min_factor = 0.1  # Minimum 10% of peak LR
+                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))  # 1→0 smoothly
                 
-                # Cosine decay within each cycle
-                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * cycle_progress))
-                
-                # Overall decay envelope (slower)
-                overall_decay = 0.5 * (1.0 + np.cos(np.pi * min(progress, 1.0)))
-                
-                # Combine: cycle restarts + overall decay
-                # Min LR = 0.1 (10% of peak), Max LR varies with overall decay
-                min_factor = 0.1
-                max_factor = 0.3 + 0.7 * overall_decay  # Decays from 1.0 to 0.3
-                
-                return min_factor + (max_factor - min_factor) * cosine_decay
+                return min_factor + (1.0 - min_factor) * cosine_decay  # 1.0→0.1
 
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        self.logger.info(f"✅ AGGRESSIVE LR: Base LR = {stable_lr} (10x), with cosine restarts every 20% of training")
-        self.logger.info(f"   Warmup steps: 100 (CLIP-style)")
-        self.logger.info(f"   LR range: {stable_lr * 0.1:.6f} - {stable_lr:.6f}")
-        self.logger.info(f"   Periodic restarts help escape plateaus!")
+        self.logger.info(f"✅ SMOOTH LR SCHEDULE: Base LR = {stable_lr:.6f} (5x base)")
+        self.logger.info(f"   Warmup: 500 steps (smooth cosine curve)")
+        self.logger.info(f"   Decay: Pure cosine 1.0→0.1 (smooth slope, no restarts)")
+        self.logger.info(f"   LR range: {stable_lr * 0.1:.6f} → {stable_lr:.6f}")
 
         return optimizer, scheduler
     
@@ -1162,6 +1154,18 @@ class BitGenTrainer:
                     current_loss = step_metrics.get('total_loss', 0.0)
                     accumulated_loss += current_loss
                     accumulated_count += 1
+                    
+                    # FLOPS tracking: Estimate FLOPs per forward pass
+                    if self.flops_per_forward is None:
+                        # Rough estimate: 2 * params * batch_size * seq_len (forward + backward)
+                        num_params = sum(p.numel() for p in self.model.parameters())
+                        batch_size = len(batch[0]) if isinstance(batch, (list, tuple)) else batch['input_ids'].size(0)
+                        seq_len = self.config.max_seq_len
+                        self.flops_per_forward = 2 * num_params * batch_size * seq_len
+                        self.logger.info(f"📊 Estimated FLOPs per forward pass: {self.flops_per_forward:,.0f}")
+                    
+                    # Accumulate FLOPs (forward + backward)
+                    self.total_flops += self.flops_per_forward * 2  # x2 for backward pass
                     
                     # DEBUG: Log losses more frequently to diagnose zero loss issue
                     if step % 20 == 0 or current_loss == 0.0:

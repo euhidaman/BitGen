@@ -233,8 +233,7 @@ def train_with_monitoring(args):
         except ImportError:
             print("⚠️ CodeCarbon not available, skipping energy tracking")
 
-    # Initialize FLOPS tracking
-    total_flops = 0
+    # FLOPS tracking will be done by trainer
     model_flops_info = {}
     training_time = 0
 
@@ -333,8 +332,9 @@ def train_with_monitoring(args):
             carbon_tracker.stop()
             print("🌍 CodeCarbon tracking stopped")
 
-        # Generate training report
+        # Generate training report with trainer's FLOPS
         try:
+            total_flops = trainer.total_flops if hasattr(trainer, 'total_flops') else 0
             generate_training_report(args, training_time, total_flops, model_flops_info, carbon_tracker)
         except Exception as e:
             print(f"⚠️ Could not generate training report: {e}")
