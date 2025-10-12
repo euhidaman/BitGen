@@ -35,7 +35,7 @@ from data_loader import RobotSelectionDataset
 class Stage2Config:
     """Configuration for Stage 2 training"""
     # Inherit from Stage 1
-    stage1_checkpoint: str = "d:/BabyLM/BitGen/checkpoints/stage1/stage1_best.pt"
+    stage1_checkpoint: str = "checkpoints/stage1/stage1_best.pt"
     
     # Reasoning config
     reasoning_dim: int = 64
@@ -70,9 +70,9 @@ class Stage2Config:
     freeze_vision_language: bool = True  # Freeze Stage 1 base
     
     # Paths
-    data_root: str = "d:/BabyLM/robot_selection_data"
-    checkpoint_dir: str = "d:/BabyLM/BitGen/checkpoints/stage2"
-    log_dir: str = "d:/BabyLM/BitGen/logs/stage2"
+    data_file: str = "robot_selection_data/multi_robot_selection_dataset.json"
+    checkpoint_dir: str = "checkpoints/stage2"
+    log_dir: str = "logs/stage2"
 
 
 class BitGenReasoningModel(nn.Module):
@@ -524,9 +524,10 @@ def main():
     
     # Load Robot Selection dataset
     print("Loading Robot Selection dataset...")
-    dataset = RobotSelectionDataset(
-        data_root=config.data_root,
-        split='train',
+    from data_loader import RobotDataset
+    
+    dataset = RobotDataset(
+        data_file=config.data_file,
         max_seq_len=config.max_seq_len
     )
     

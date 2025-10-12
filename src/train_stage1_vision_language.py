@@ -73,9 +73,9 @@ class Stage1Config:
     use_amp: bool = True
     
     # Paths
-    data_root: str = "d:/BabyLM/evaluation_data"
-    checkpoint_dir: str = "d:/BabyLM/BitGen/checkpoints/stage1"
-    log_dir: str = "d:/BabyLM/BitGen/logs/stage1"
+    data_file: str = "data/coco/coco_dataset.json"
+    checkpoint_dir: str = "checkpoints/stage1"
+    log_dir: str = "logs/stage1"
 
 
 class BitGenVisionLanguageModel(nn.Module):
@@ -505,9 +505,9 @@ def main():
     # Load COCO dataset
     print("Loading COCO dataset...")
     dataset = COCODataset(
-        data_root=config.data_root,
-        split='train',
-        max_seq_len=config.max_seq_len
+        data_file=config.data_file,
+        max_seq_len=config.max_seq_len,
+        vocab_size=config.vocab_size
     )
     
     dataloader = DataLoader(
