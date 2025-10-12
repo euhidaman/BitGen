@@ -153,11 +153,11 @@ class BitGenTrainer:
         self.logger.info(f"WandB logging enabled: {project}/{entity}/{run_name}")
 
     def setup_optimizer(self, learning_rate: float = 1e-4):
-        """Setup optimizer with smooth cosine annealing for gradual learning"""
-        # Use moderate LR multiplier for stability
-        stable_lr = learning_rate * 5.0  # 5e-4 (balanced between aggressive and conservative)
+        """Setup optimizer with ReduceLROnPlateau - dynamically adapts to loss"""
+        # Use moderate base LR
+        stable_lr = learning_rate * 5.0  # 5e-4
 
-        # Use AdamW with standard settings
+        # Use AdamW optimizer
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=stable_lr,
@@ -167,39 +167,25 @@ class BitGenTrainer:
             amsgrad=False
         )
         
-        # Store total training steps for proper scheduler
-        self.total_training_steps = None  # Will be set in train() method
-
-        # SMOOTH COSINE SCHEDULE: Gradual warmup and smooth decay (no abrupt changes)
-        def lr_lambda(step):
-            warmup_steps = 500  # Longer warmup for smoother start (was 100)
-            if step < warmup_steps:
-                # Smooth warmup with cosine curve (not linear)
-                warmup_progress = step / warmup_steps
-                return 0.5 * (1.0 - np.cos(np.pi * warmup_progress))  # Smooth 0→1
-            else:
-                # Smooth cosine decay WITHOUT restarts (pure slope)
-                if self.total_training_steps is None or self.total_training_steps <= warmup_steps:
-                    total_steps = 100000
-                else:
-                    total_steps = self.total_training_steps
-
-                # Progress from warmup end to training end
-                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-                progress = min(progress, 1.0)  # Clamp to [0, 1]
-                
-                # Pure cosine decay: 1.0 → 0.1 (smooth slope, no restarts)
-                min_factor = 0.1  # Minimum 10% of peak LR
-                cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))  # 1→0 smoothly
-                
-                return min_factor + (1.0 - min_factor) * cosine_decay  # 1.0→0.1
-
-        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-        self.logger.info(f"✅ SMOOTH LR SCHEDULE: Base LR = {stable_lr:.6f} (5x base)")
-        self.logger.info(f"   Warmup: 500 steps (smooth cosine curve)")
-        self.logger.info(f"   Decay: Pure cosine 1.0→0.1 (smooth slope, no restarts)")
-        self.logger.info(f"   LR range: {stable_lr * 0.1:.6f} → {stable_lr:.6f}")
+        # ADAPTIVE LR: Automatically reduce when loss plateaus
+        # This responds to actual training dynamics, not fixed schedule
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',              # Minimize loss
+            factor=0.5,              # Reduce LR by 50% when plateau detected
+            patience=2,              # Wait 2 epochs before reducing
+            threshold=0.01,          # Minimum change to qualify as improvement
+            threshold_mode='rel',    # Relative threshold (1% improvement required)
+            cooldown=1,              # Wait 1 epoch after LR reduction before detecting plateau again
+            min_lr=1e-6,             # Don't go below 1e-6
+            verbose=True             # Log LR changes
+        )
+        
+        self.logger.info(f"✅ ADAPTIVE LR (ReduceLROnPlateau): Base LR = {stable_lr:.6f}")
+        self.logger.info(f"   Strategy: Automatically reduce LR by 50% when loss plateaus")
+        self.logger.info(f"   Patience: 2 epochs (waits for plateau confirmation)")
+        self.logger.info(f"   Min LR: 1e-6 (safety floor)")
+        self.logger.info(f"   This LR adapts to YOUR model's learning dynamics!")
 
         return optimizer, scheduler
     
@@ -1223,12 +1209,10 @@ class BitGenTrainer:
                                       if isinstance(v, (int, float, torch.Tensor)) and k != 'batch_type'}
                     self.performance_tracker.update(numeric_metrics)
 
-                    # CRITICAL FIX: Step scheduler ONLY on optimizer steps (not on every batch!)
-                    # This was causing LR to advance too fast (2x speed with grad_accum=2)
-                    scheduler.step()
-                    
-                    # Increment global step counter for proper LR scheduling
+                    # Increment global step counter
                     self.global_step += 1
+                    
+                    # NOTE: ReduceLROnPlateau scheduler is stepped at END of epoch (not per-step)
 
                     # FIXED: Update progress bar only on optimizer steps
                     optimizer_step_count += 1
@@ -1318,8 +1302,13 @@ class BitGenTrainer:
                         # Skip if can't convert to numeric
                         pass
             
-            self.logger.info(f"   Avg Loss: {epoch_avg.get('total_loss', 0.0):.4f}")
-            self.logger.info(f"   Current LR: {scheduler.get_last_lr()[0]:.6f}")
+            avg_epoch_loss = epoch_avg.get('total_loss', 0.0)
+            self.logger.info(f"   Avg Loss: {avg_epoch_loss:.4f}")
+            
+            # Step the ReduceLROnPlateau scheduler with epoch loss
+            scheduler.step(avg_epoch_loss)
+            
+            self.logger.info(f"   Current LR: {optimizer.param_groups[0]['lr']:.6f}")
 
             # Log GPU utilization summary
             if torch.cuda.is_available():
