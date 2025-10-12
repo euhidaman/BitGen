@@ -54,8 +54,13 @@ class Stage2Config:
     grad_accum_steps: int = 4  # Effective batch: 256
     learning_rate: float = 1e-4  # Lower LR for fine-tuning
     weight_decay: float = 0.01
-    num_epochs: int = 20
+    num_epochs: int = 50  # Max epochs, early stopping will kick in
     warmup_steps: int = 200
+    
+    # Early stopping config
+    early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
+    min_delta: float = 0.001  # Minimum improvement to consider
+    validation_split: float = 0.1  # 10% for validation (smaller dataset)
     
     # Loss weights
     reasoning_weight: float = 1.0
@@ -311,12 +316,17 @@ class Stage2Trainer:
             stage="stage2"
         )
         
-        # Initialize HuggingFace Hub
+        # Initialize HuggingFace Hub - Stage 2: Reasoning (grounded robot selection)
         self.hf_integration = HuggingFaceIntegration(
             repo_name="BitGen-Reasoning",
             stage="stage2"
         )
         self.hf_integration.create_repo()
+        
+        # Early stopping tracking
+        self.best_val_loss = float('inf')
+        self.patience_counter = 0
+        self.best_epoch = 0
         
         # Optimizer (only trainable parameters)
         self.optimizer = optim.AdamW(
@@ -496,7 +506,77 @@ class Stage2Trainer:
         
         return avg_metrics
     
-    def save_checkpoint(self, epoch: int, metrics: Dict):
+    def validate(self, dataloader: DataLoader) -> Dict:
+        """Validation loop to check reasoning convergence"""
+        self.model.eval()
+        
+        total_loss = 0.0
+        total_robot_loss = 0.0
+        total_correctness_reward = 0.0
+        total_reasoning_reward = 0.0
+        total_accuracy = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(tqdm(dataloader, desc="Validation")):
+                input_ids = batch['input_ids'].to(self.device)
+                images = batch['images'].to(self.device) if 'images' in batch else None
+                robot_labels = batch['robot_labels'].to(self.device)
+                
+                # Forward pass
+                outputs = self.model(
+                    input_ids=input_ids,
+                    images=images
+                )
+                
+                # Compute losses
+                robot_loss = compute_robot_selection_loss(
+                    robot_logits=outputs['robot_logits'],
+                    robot_labels=robot_labels
+                )
+                
+                # Compute rewards
+                correctness_reward = compute_correctness_reward(
+                    robot_probs=torch.sigmoid(outputs['robot_logits']),
+                    robot_labels=robot_labels,
+                    top_k=self.config.top_k_robots
+                )
+                
+                reasoning_reward = compute_reasoning_trace_reward(
+                    reasoning_output=outputs['reasoning_output']
+                )
+                
+                loss = (
+                    self.config.robot_selection_weight * robot_loss -
+                    self.config.correctness_reward_weight * correctness_reward.mean() -
+                    self.config.reasoning_trace_reward_weight * reasoning_reward.mean()
+                )
+                
+                # Calculate accuracy
+                robot_probs = torch.sigmoid(outputs['robot_logits'])
+                predicted = (robot_probs > 0.5).float()
+                accuracy = ((predicted == robot_labels).float().mean())
+                
+                total_loss += loss.item()
+                total_robot_loss += robot_loss.item()
+                total_correctness_reward += correctness_reward.mean().item()
+                total_reasoning_reward += reasoning_reward.mean().item()
+                total_accuracy += accuracy.item()
+                num_batches += 1
+        
+        # Average metrics
+        avg_metrics = {
+            'val_loss': total_loss / num_batches,
+            'val_robot_loss': total_robot_loss / num_batches,
+            'val_correctness_reward': total_correctness_reward / num_batches,
+            'val_reasoning_reward': total_reasoning_reward / num_batches,
+            'val_accuracy': total_accuracy / num_batches
+        }
+        
+        self.model.train()
+        return avg_metrics
+    
+    def save_checkpoint(self, epoch: int, metrics: Dict, is_best: bool = False):
         """Save checkpoint"""
         checkpoint_path = os.path.join(
             self.config.checkpoint_dir,
@@ -514,59 +594,120 @@ class Stage2Trainer:
         }, checkpoint_path)
         
         print(f"Saved checkpoint: {checkpoint_path}")
+        
+        # Save best model separately
+        if is_best:
+            best_path = os.path.join(
+                self.config.checkpoint_dir,
+                "stage2_best.pt"
+            )
+            torch.save({
+                'epoch': epoch,
+                'global_step': self.global_step,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict(),
+                'metrics': metrics,
+                'config': self.config
+            }, best_path)
+            print(f"✅ New best model saved: {best_path}")
     
-    def train(self, dataloader: DataLoader):
-        """Full training loop"""
-        print("Starting Stage 2 training: Reasoning Module")
+    def train(self, train_loader: DataLoader, val_loader: DataLoader):
+        """Full training loop with validation and early stopping"""
+        print("Starting Stage 2 training: Reasoning Module (Grounded Robot Selection)")
         print(f"Device: {self.device}")
         print(f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
-        print(f"Epochs: {self.config.num_epochs}")
-        
-        best_accuracy = 0.0
+        print(f"Max epochs: {self.config.num_epochs}")
+        print(f"Early stopping patience: {self.config.early_stopping_patience} epochs")
         
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
             
             # Train epoch
-            metrics = self.train_epoch(dataloader)
+            train_metrics = self.train_epoch(train_loader)
+            
+            # Validation epoch
+            val_metrics = self.validate(val_loader)
             
             # Print metrics
-            print(f"\nEpoch {epoch+1} Summary:")
-            print(f"  Loss: {metrics['loss']:.4f}")
-            print(f"  Robot Loss: {metrics['robot_loss']:.4f}")
-            print(f"  Correctness Reward: {metrics['correctness_reward']:.3f}")
-            print(f"  Reasoning Reward: {metrics['reasoning_reward']:.3f}")
-            print(f"  Accuracy: {metrics['accuracy']:.3f}")
+            print(f"\n{'='*60}")
+            print(f"Epoch {epoch+1}/{self.config.num_epochs} Summary:")
+            print(f"{'='*60}")
+            print(f"Training Metrics:")
+            print(f"  Loss: {train_metrics['loss']:.4f}")
+            print(f"  Robot Loss: {train_metrics['robot_loss']:.4f}")
+            print(f"  Correctness Reward: {train_metrics['correctness_reward']:.3f}")
+            print(f"  Reasoning Reward: {train_metrics['reasoning_reward']:.3f}")
+            print(f"  Accuracy: {train_metrics['accuracy']:.3f}")
+            print(f"\nValidation Metrics:")
+            print(f"  Val Loss: {val_metrics['val_loss']:.4f}")
+            print(f"  Val Robot Loss: {val_metrics['val_robot_loss']:.4f}")
+            print(f"  Val Correctness Reward: {val_metrics['val_correctness_reward']:.3f}")
+            print(f"  Val Reasoning Reward: {val_metrics['val_reasoning_reward']:.3f}")
+            print(f"  Val Accuracy: {val_metrics['val_accuracy']:.3f}")
             
-            # Save checkpoint
-            self.save_checkpoint(epoch, metrics)
+            # Log all metrics to WandB
+            combined_metrics = {**train_metrics, **val_metrics}
+            combined_metrics['epoch'] = epoch + 1
+            combined_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
             
-            # Push to HuggingFace Hub every epoch
-            print(f"Pushing Stage 2 checkpoint to HuggingFace Hub...")
-            self.hf_integration.push_model_checkpoint(
-                model=self.model,
-                config=self.config,
+            self.wandb.log_stage2_metrics(
                 epoch=epoch,
-                metrics=metrics
+                loss=train_metrics['loss'],
+                robot_loss=train_metrics['robot_loss'],
+                correctness_reward=train_metrics['correctness_reward'],
+                reasoning_reward=train_metrics['reasoning_reward'],
+                accuracy=train_metrics['accuracy'],
+                lr=combined_metrics['learning_rate']
             )
             
-            # Save best checkpoint
-            if metrics['accuracy'] > best_accuracy:
-                best_accuracy = metrics['accuracy']
-                best_path = os.path.join(self.config.checkpoint_dir, "stage2_best.pt")
-                torch.save({
-                    'epoch': epoch,
-                    'global_step': self.global_step,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'scheduler_state_dict': self.scheduler.state_dict(),
-                    'metrics': metrics,
-                    'config': self.config
-                }, best_path)
-                print(f"Saved best checkpoint: {best_path}")
+            # Log validation metrics separately
+            self.wandb.log({
+                'val/loss': val_metrics['val_loss'],
+                'val/robot_loss': val_metrics['val_robot_loss'],
+                'val/correctness_reward': val_metrics['val_correctness_reward'],
+                'val/reasoning_reward': val_metrics['val_reasoning_reward'],
+                'val/accuracy': val_metrics['val_accuracy']
+            }, step=self.global_step)
+            
+            # Early stopping check based on validation loss
+            val_loss = val_metrics['val_loss']
+            is_best = False
+            
+            if val_loss < self.best_val_loss - self.config.min_delta:
+                self.best_val_loss = val_loss
+                self.patience_counter = 0
+                self.best_epoch = epoch
+                is_best = True
+                print(f"\n✅ New best validation loss: {val_loss:.4f} (accuracy: {val_metrics['val_accuracy']:.3f})")
+            else:
+                self.patience_counter += 1
+                print(f"\n⏸️  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
+            
+            # Save checkpoint
+            self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
+            
+            # Push to HuggingFace Hub every epoch or if best
+            if is_best or (epoch + 1) % 1 == 0:
+                print(f"📤 Pushing Stage 2 checkpoint to HuggingFace Hub (BitGen-Reasoning)...")
+                self.hf_integration.push_model_checkpoint(
+                    model=self.model,
+                    config=self.config,
+                    epoch=epoch,
+                    metrics=combined_metrics
+                )
+            
+            # Early stopping
+            if self.patience_counter >= self.config.early_stopping_patience:
+                print(f"\n🛑 Early stopping triggered after {epoch+1} epochs")
+                print(f"   Best epoch: {self.best_epoch+1} with val_loss: {self.best_val_loss:.4f}")
+                break
         
-        print("\nStage 2 training complete!")
-        print(f"Best accuracy: {best_accuracy:.3f}")
+        print("\n" + "="*60)
+        print("Stage 2 training complete!")
+        print(f"Best epoch: {self.best_epoch+1}")
+        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        print("="*60)
 
 
 def main():
@@ -577,26 +718,48 @@ def main():
     print("Loading Robot Selection dataset...")
     from data_loader import RobotDataset
     
-    dataset = RobotDataset(
+    full_dataset = RobotDataset(
         data_file=config.data_file,
         max_seq_len=config.max_seq_len
     )
     
-    dataloader = DataLoader(
-        dataset,
+    # Split into train and validation
+    dataset_size = len(full_dataset)
+    val_size = int(dataset_size * config.validation_split)
+    train_size = dataset_size - val_size
+    
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        full_dataset,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    
+    print(f"Total dataset size: {dataset_size:,}")
+    print(f"Training set: {train_size:,} samples")
+    print(f"Validation set: {val_size:,} samples")
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True
     )
     
-    print(f"Dataset size: {len(dataset)}")
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
     
     # Initialize trainer
     trainer = Stage2Trainer(config)
     
-    # Train
-    trainer.train(dataloader)
+    # Train with validation and early stopping
+    trainer.train(train_loader, val_loader)
 
 
 if __name__ == "__main__":

@@ -60,8 +60,13 @@ class Stage1Config:
     grad_accum_steps: int = 2  # Effective batch: 320
     learning_rate: float = 5e-4
     weight_decay: float = 0.01
-    num_epochs: int = 10
+    num_epochs: int = 50  # Max epochs, but early stopping will kick in
     warmup_steps: int = 500
+    
+    # Early stopping config
+    early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
+    min_delta: float = 0.001  # Minimum improvement to consider
+    validation_split: float = 0.05  # 5% for validation
     
     # Contrastive learning config
     contrastive_weight: float = 1.0
@@ -306,12 +311,17 @@ class Stage1Trainer:
             stage="stage1"
         )
         
-        # Initialize HuggingFace Hub
+        # Initialize HuggingFace Hub - Stage 1: PreReasoning (Vision-Language)
         self.hf_integration = HuggingFaceIntegration(
-            repo_name="BitGen-Reasoning",
+            repo_name="BitGen-PreReasoning",
             stage="stage1"
         )
         self.hf_integration.create_repo()
+        
+        # Early stopping tracking
+        self.best_val_loss = float('inf')
+        self.patience_counter = 0
+        self.best_epoch = 0
         
         # Optimizer
         self.optimizer = optim.AdamW(
@@ -478,7 +488,74 @@ class Stage1Trainer:
         
         return avg_metrics
     
-    def save_checkpoint(self, epoch: int, metrics: Dict):
+    def validate(self, dataloader: DataLoader) -> Dict:
+        """Validation loop to check model convergence"""
+        self.model.eval()
+        
+        total_loss = 0.0
+        total_contrastive_loss = 0.0
+        total_memory_kl_loss = 0.0
+        total_acc_t2i = 0.0
+        total_acc_i2t = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(tqdm(dataloader, desc="Validation")):
+                input_ids = batch['input_ids'].to(self.device)
+                images = batch['images'].to(self.device)
+                
+                # Forward pass
+                outputs = self.model(
+                    input_ids=input_ids,
+                    images=images,
+                    return_contrastive_features=True
+                )
+                
+                # Compute losses
+                contrastive_dict = outputs['contrastive_features']
+                if contrastive_dict:
+                    loss_dict = compute_contrastive_loss(
+                        text_features=contrastive_dict['text_features'],
+                        image_features=contrastive_dict['image_features'],
+                        text_queue=contrastive_dict['text_queue'],
+                        image_queue=contrastive_dict['image_queue'],
+                        temperature=contrastive_dict['temperature']
+                    )
+                    contrastive_loss = loss_dict['contrastive_loss']
+                    acc_t2i = loss_dict['acc_t2i']
+                    acc_i2t = loss_dict['acc_i2t']
+                else:
+                    contrastive_loss = torch.tensor(0.0, device=self.device)
+                    acc_t2i = 0.0
+                    acc_i2t = 0.0
+                
+                memory_kl_loss = self.model.episodic_memory.get_memory_kl_loss()
+                
+                loss = (
+                    self.config.contrastive_weight * contrastive_loss +
+                    self.config.memory_kl_weight * memory_kl_loss
+                )
+                
+                total_loss += loss.item()
+                total_contrastive_loss += contrastive_loss.item()
+                total_memory_kl_loss += memory_kl_loss.item()
+                total_acc_t2i += acc_t2i
+                total_acc_i2t += acc_i2t
+                num_batches += 1
+        
+        # Average metrics
+        avg_metrics = {
+            'val_loss': total_loss / num_batches,
+            'val_contrastive_loss': total_contrastive_loss / num_batches,
+            'val_memory_kl_loss': total_memory_kl_loss / num_batches,
+            'val_acc_t2i': total_acc_t2i / num_batches,
+            'val_acc_i2t': total_acc_i2t / num_batches
+        }
+        
+        self.model.train()
+        return avg_metrics
+    
+    def save_checkpoint(self, epoch: int, metrics: Dict, is_best: bool = False):
         """Save checkpoint"""
         checkpoint_path = os.path.join(
             self.config.checkpoint_dir,
@@ -496,58 +573,120 @@ class Stage1Trainer:
         }, checkpoint_path)
         
         print(f"Saved checkpoint: {checkpoint_path}")
+        
+        # Save best model separately
+        if is_best:
+            best_path = os.path.join(
+                self.config.checkpoint_dir,
+                "stage1_best.pt"
+            )
+            torch.save({
+                'epoch': epoch,
+                'global_step': self.global_step,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict(),
+                'metrics': metrics,
+                'config': self.config
+            }, best_path)
+            print(f"✅ New best model saved: {best_path}")
     
-    def train(self, dataloader: DataLoader):
-        """Full training loop"""
+    def train(self, train_loader: DataLoader, val_loader: DataLoader):
+        """Full training loop with validation and early stopping"""
         print("Starting Stage 1 training: Vision-Language Pre-training")
         print(f"Device: {self.device}")
         print(f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
-        print(f"Epochs: {self.config.num_epochs}")
+        print(f"Max epochs: {self.config.num_epochs}")
+        print(f"Early stopping patience: {self.config.early_stopping_patience} epochs")
         
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
             
             # Train epoch
-            metrics = self.train_epoch(dataloader)
+            train_metrics = self.train_epoch(train_loader)
+            
+            # Validation epoch
+            val_metrics = self.validate(val_loader)
             
             # Print metrics
-            print(f"\nEpoch {epoch+1} Summary:")
-            print(f"  Loss: {metrics['loss']:.4f}")
-            print(f"  Contrastive Loss: {metrics['contrastive_loss']:.4f}")
-            print(f"  Memory KL Loss: {metrics['memory_kl_loss']:.4f}")
-            print(f"  Acc T2I: {metrics['acc_t2i']:.3f}")
-            print(f"  Acc I2T: {metrics['acc_i2t']:.3f}")
+            print(f"\n{'='*60}")
+            print(f"Epoch {epoch+1}/{self.config.num_epochs} Summary:")
+            print(f"{'='*60}")
+            print(f"Training Metrics:")
+            print(f"  Loss: {train_metrics['loss']:.4f}")
+            print(f"  Contrastive Loss: {train_metrics['contrastive_loss']:.4f}")
+            print(f"  Memory KL Loss: {train_metrics['memory_kl_loss']:.4f}")
+            print(f"  Acc T2I: {train_metrics['acc_t2i']:.3f}")
+            print(f"  Acc I2T: {train_metrics['acc_i2t']:.3f}")
+            print(f"\nValidation Metrics:")
+            print(f"  Val Loss: {val_metrics['val_loss']:.4f}")
+            print(f"  Val Contrastive Loss: {val_metrics['val_contrastive_loss']:.4f}")
+            print(f"  Val Memory KL Loss: {val_metrics['val_memory_kl_loss']:.4f}")
+            print(f"  Val Acc T2I: {val_metrics['val_acc_t2i']:.3f}")
+            print(f"  Val Acc I2T: {val_metrics['val_acc_i2t']:.3f}")
+            
+            # Log all metrics to WandB
+            combined_metrics = {**train_metrics, **val_metrics}
+            combined_metrics['epoch'] = epoch + 1
+            combined_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
+            self.wandb.log_stage1_metrics(
+                loss=train_metrics['loss'],
+                contrastive_loss=train_metrics['contrastive_loss'],
+                memory_kl=train_metrics['memory_kl_loss'],
+                acc_t2i=train_metrics['acc_t2i'],
+                acc_i2t=train_metrics['acc_i2t'],
+                learning_rate=combined_metrics['learning_rate'],
+                epoch=epoch,
+                step=self.global_step
+            )
+            
+            # Log validation metrics separately
+            self.wandb.log({
+                'val/loss': val_metrics['val_loss'],
+                'val/contrastive_loss': val_metrics['val_contrastive_loss'],
+                'val/memory_kl_loss': val_metrics['val_memory_kl_loss'],
+                'val/acc_t2i': val_metrics['val_acc_t2i'],
+                'val/acc_i2t': val_metrics['val_acc_i2t']
+            }, step=self.global_step)
+            
+            # Early stopping check
+            val_loss = val_metrics['val_loss']
+            is_best = False
+            
+            if val_loss < self.best_val_loss - self.config.min_delta:
+                self.best_val_loss = val_loss
+                self.patience_counter = 0
+                self.best_epoch = epoch
+                is_best = True
+                print(f"\n✅ New best validation loss: {val_loss:.4f}")
+            else:
+                self.patience_counter += 1
+                print(f"\n⏸️  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
             
             # Save checkpoint
-            self.save_checkpoint(epoch, metrics)
+            self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
             
-            # Push to HuggingFace Hub every 2 epochs
-            if (epoch + 1) % 2 == 0:
-                print(f"Pushing Stage 1 checkpoint to HuggingFace Hub...")
+            # Push to HuggingFace Hub every 2 epochs or if best
+            if (epoch + 1) % 2 == 0 or is_best:
+                print(f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
                 self.hf_integration.push_model_checkpoint(
                     model=self.model,
                     config=self.config,
                     epoch=epoch,
-                    metrics=metrics
+                    metrics=combined_metrics
                 )
             
-            # Save best checkpoint if accuracy improved
-            if epoch == 0 or metrics['acc_t2i'] + metrics['acc_i2t'] > self.best_acc:
-                self.best_acc = metrics['acc_t2i'] + metrics['acc_i2t']
-                best_path = os.path.join(self.config.checkpoint_dir, "stage1_best.pt")
-                torch.save({
-                    'epoch': epoch,
-                    'global_step': self.global_step,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'scheduler_state_dict': self.scheduler.state_dict(),
-                    'metrics': metrics,
-                    'config': self.config
-                }, best_path)
-                print(f"Saved best checkpoint: {best_path}")
+            # Early stopping
+            if self.patience_counter >= self.config.early_stopping_patience:
+                print(f"\n🛑 Early stopping triggered after {epoch+1} epochs")
+                print(f"   Best epoch: {self.best_epoch+1} with val_loss: {self.best_val_loss:.4f}")
+                break
         
-        print("\nStage 1 training complete!")
-        print(f"Best accuracy: {self.best_acc:.3f}")
+        print("\n" + "="*60)
+        print("Stage 1 training complete!")
+        print(f"Best epoch: {self.best_epoch+1}")
+        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        print("="*60)
 
 
 def main():
@@ -556,28 +695,49 @@ def main():
     
     # Load COCO dataset
     print("Loading COCO dataset...")
-    dataset = COCODataset(
+    full_dataset = COCODataset(
         data_file=config.data_file,
         max_seq_len=config.max_seq_len,
         vocab_size=config.vocab_size
     )
     
-    dataloader = DataLoader(
-        dataset,
+    # Split into train and validation
+    dataset_size = len(full_dataset)
+    val_size = int(dataset_size * config.validation_split)
+    train_size = dataset_size - val_size
+    
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        full_dataset,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    
+    print(f"Total dataset size: {dataset_size:,}")
+    print(f"Training set: {train_size:,} samples")
+    print(f"Validation set: {val_size:,} samples")
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True
     )
     
-    print(f"Dataset size: {len(dataset)}")
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
     
     # Initialize trainer
     trainer = Stage1Trainer(config)
-    trainer.best_acc = 0.0
     
-    # Train
-    trainer.train(dataloader)
+    # Train with validation and early stopping
+    trainer.train(train_loader, val_loader)
 
 
 if __name__ == "__main__":
