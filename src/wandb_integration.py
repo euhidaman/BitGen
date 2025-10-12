@@ -1,6 +1,8 @@
 """
-Enhanced WandB Integration for BitGen
+Enhanced WandB Integration for BitGen 2-Stage Training
 Comprehensive metrics tracking and visualizations for 'babylm-ntust' team
+Stage 1: Vision-Language Pre-training (FIBER + Larima)
+Stage 2: Reasoning Module Training (Tiny-R1 + Robot Selection)
 """
 
 import wandb
@@ -27,7 +29,8 @@ class WandBIntegration:
                  entity: str = "babylm-ntust",
                  run_name: Optional[str] = None,
                  config: Dict = None,
-                 tags: List[str] = None):
+                 tags: List[str] = None,
+                 stage: str = "stage1"):
         """
         Initialize WandB integration
 
@@ -37,19 +40,27 @@ class WandBIntegration:
             run_name: Optional run name
             config: Model configuration dict
             tags: List of tags for the run
+            stage: Training stage ('stage1' or 'stage2')
         """
 
         self.entity = entity
         self.project_name = project_name
+        self.stage = stage
         self.logger = logging.getLogger(__name__)
+
+        # Stage-specific tags
+        stage_tags = {
+            "stage1": ["vision-language", "fiber", "larima-gpm", "contrastive"],
+            "stage2": ["reasoning", "tiny-r1", "robot-selection", "grpo"]
+        }
 
         # Initialize WandB run
         self.run = wandb.init(
             project=project_name,
             entity=entity,
-            name=run_name or f"bitgen-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+            name=run_name or f"bitgen-{stage}-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
             config=config or {},
-            tags=tags or ["bitgen", "multimodal", "embedded", "quantized"],
+            tags=(tags or []) + ["bitgen", "2-stage", stage] + stage_tags.get(stage, []),
             reinit=True
         )
 
@@ -59,7 +70,7 @@ class WandBIntegration:
         self.best_metrics = {}
         self.metric_history = {}
 
-        self.logger.info(f"Initialized WandB run: {self.run.name} in {entity}/{project_name}")
+        self.logger.info(f"Initialized WandB run: {self.run.name} in {entity}/{project_name} ({stage})")
 
     def log_training_metrics(self,
                            metrics: Dict,
@@ -578,13 +589,196 @@ class WandBIntegration:
         self.logger.info(f"Finishing WandB run: {self.run.name}")
         wandb.finish()
 
+    def log_stage1_metrics(self, 
+                          epoch: int,
+                          loss: float,
+                          contrastive_loss: float,
+                          memory_kl_loss: float,
+                          acc_t2i: float,
+                          acc_i2t: float,
+                          lr: float):
+        """
+        Log Stage 1 (Vision-Language) specific metrics
+        
+        Args:
+            epoch: Current epoch
+            loss: Total loss
+            contrastive_loss: Contrastive learning loss
+            memory_kl_loss: Larima GPM KL divergence loss
+            acc_t2i: Text-to-image accuracy
+            acc_i2t: Image-to-text accuracy
+            lr: Learning rate
+        """
+        
+        metrics = {
+            "stage1/epoch": epoch,
+            "stage1/loss/total": loss,
+            "stage1/loss/contrastive": contrastive_loss,
+            "stage1/loss/memory_kl": memory_kl_loss,
+            "stage1/accuracy/text_to_image": acc_t2i,
+            "stage1/accuracy/image_to_text": acc_i2t,
+            "stage1/accuracy/average": (acc_t2i + acc_i2t) / 2.0,
+            "stage1/learning_rate": lr
+        }
+        
+        wandb.log(metrics, step=self.step)
+        
+        # Update best metrics
+        if acc_t2i + acc_i2t > self.best_metrics.get('best_stage1_accuracy', 0):
+            self.best_metrics['best_stage1_accuracy'] = acc_t2i + acc_i2t
+            self.best_metrics['best_stage1_epoch'] = epoch
+    
+    def log_stage2_metrics(self,
+                          epoch: int,
+                          loss: float,
+                          robot_loss: float,
+                          correctness_reward: float,
+                          reasoning_reward: float,
+                          accuracy: float,
+                          lr: float):
+        """
+        Log Stage 2 (Reasoning) specific metrics
+        
+        Args:
+            epoch: Current epoch
+            loss: Total loss
+            robot_loss: Robot selection loss
+            correctness_reward: Correctness reward (GRPO)
+            reasoning_reward: Reasoning trace reward
+            accuracy: Robot selection accuracy
+            lr: Learning rate
+        """
+        
+        metrics = {
+            "stage2/epoch": epoch,
+            "stage2/loss/total": loss,
+            "stage2/loss/robot_selection": robot_loss,
+            "stage2/reward/correctness": correctness_reward,
+            "stage2/reward/reasoning_trace": reasoning_reward,
+            "stage2/reward/total": correctness_reward + reasoning_reward,
+            "stage2/accuracy/robot_selection": accuracy,
+            "stage2/learning_rate": lr
+        }
+        
+        wandb.log(metrics, step=self.step)
+        
+        # Update best metrics
+        if accuracy > self.best_metrics.get('best_stage2_accuracy', 0):
+            self.best_metrics['best_stage2_accuracy'] = accuracy
+            self.best_metrics['best_stage2_epoch'] = epoch
+    
+    def log_contrastive_visualization(self,
+                                     text_features: torch.Tensor,
+                                     image_features: torch.Tensor,
+                                     epoch: int):
+        """
+        Create and log contrastive learning visualization
+        
+        Args:
+            text_features: Text embeddings [B, D]
+            image_features: Image embeddings [B, D]
+            epoch: Current epoch
+        """
+        
+        # Create similarity matrix
+        similarity = torch.matmul(text_features, image_features.T)
+        similarity_np = similarity.detach().cpu().numpy()
+        
+        # Create heatmap
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(similarity_np, cmap='RdYlGn', center=0, ax=ax)
+        ax.set_title(f'Text-Image Similarity Matrix (Epoch {epoch})')
+        ax.set_xlabel('Image Index')
+        ax.set_ylabel('Text Index')
+        
+        wandb.log({f"stage1/contrastive_matrix_epoch{epoch}": wandb.Image(fig)}, step=self.step)
+        plt.close(fig)
+    
+    def log_robot_confusion_matrix(self,
+                                   predictions: np.ndarray,
+                                   targets: np.ndarray,
+                                   robot_names: List[str],
+                                   epoch: int):
+        """
+        Log robot selection confusion matrix
+        
+        Args:
+            predictions: Predicted labels [B, num_robots]
+            targets: Target labels [B, num_robots]
+            robot_names: List of robot names
+            epoch: Current epoch
+        """
+        
+        # Convert to binary predictions
+        pred_binary = (predictions > 0.5).astype(int)
+        
+        # Create confusion matrix for each robot
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        axes = axes.flatten()
+        
+        for i, robot_name in enumerate(robot_names):
+            if i < len(axes):
+                # Binary confusion matrix for this robot
+                from sklearn.metrics import confusion_matrix
+                cm = confusion_matrix(targets[:, i], pred_binary[:, i])
+                
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[i])
+                axes[i].set_title(f'{robot_name}')
+                axes[i].set_xlabel('Predicted')
+                axes[i].set_ylabel('Actual')
+        
+        # Remove extra subplot
+        if len(robot_names) < len(axes):
+            fig.delaxes(axes[-1])
+        
+        plt.tight_layout()
+        wandb.log({f"stage2/confusion_matrix_epoch{epoch}": wandb.Image(fig)}, step=self.step)
+        plt.close(fig)
+    
+    def log_memory_visualization(self,
+                                memory_mean: torch.Tensor,
+                                memory_read_count: torch.Tensor,
+                                epoch: int):
+        """
+        Visualize Larima GPM memory state
+        
+        Args:
+            memory_mean: Memory mean tensor [memory_size, code_size]
+            memory_read_count: Read count per memory slot [memory_size]
+            epoch: Current epoch
+        """
+        
+        memory_np = memory_mean.detach().cpu().numpy()
+        read_count_np = memory_read_count.detach().cpu().numpy()
+        
+        # Create memory heatmap
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # Memory content heatmap
+        sns.heatmap(memory_np.T, cmap='viridis', ax=ax1)
+        ax1.set_title(f'Larima GPM Memory Content (Epoch {epoch})')
+        ax1.set_xlabel('Memory Slot')
+        ax1.set_ylabel('Embedding Dimension')
+        
+        # Memory usage bar chart
+        ax2.bar(range(len(read_count_np)), read_count_np)
+        ax2.set_title(f'Memory Slot Read Frequency (Epoch {epoch})')
+        ax2.set_xlabel('Memory Slot')
+        ax2.set_ylabel('Read Count')
+        
+        plt.tight_layout()
+        wandb.log({f"stage1/memory_state_epoch{epoch}": wandb.Image(fig)}, step=self.step)
+        plt.close(fig)
+
+
 def setup_wandb_integration(project_name: str = "bitgen-training",
                            entity: str = "babylm-ntust",
                            run_name: Optional[str] = None,
                            config: Dict = None,
-                           tags: List[str] = None) -> WandBIntegration:
+                           tags: List[str] = None,
+                           stage: str = "stage1") -> WandBIntegration:
     """
-    Setup WandB integration for BitGen training
+    Setup WandB integration for BitGen 2-stage training
 
     Args:
         project_name: WandB project name
@@ -592,6 +786,7 @@ def setup_wandb_integration(project_name: str = "bitgen-training",
         run_name: Optional run name
         config: Model configuration dict
         tags: List of tags for the run
+        stage: Training stage ('stage1' or 'stage2')
 
     Returns:
         WandBIntegration instance
@@ -602,5 +797,6 @@ def setup_wandb_integration(project_name: str = "bitgen-training",
         entity=entity,
         run_name=run_name,
         config=config,
-        tags=tags
+        tags=tags,
+        stage=stage
     )

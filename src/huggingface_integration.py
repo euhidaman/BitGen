@@ -17,16 +17,20 @@ class HuggingFaceIntegration:
     def __init__(self,
                  repo_name: str = "BitGen-Reasoning",
                  organization: Optional[str] = None,
-                 private: bool = False):
+                 private: bool = False,
+                 stage: str = "stage1"):
         """
-        Initialize HuggingFace integration
+        Initialize HuggingFace integration for 2-stage training
 
         Args:
             repo_name: Repository name on HuggingFace Hub
             organization: Organization/user name (uses authenticated user if None)
             private: Whether to create private repository
+            stage: Training stage ('stage1' or 'stage2')
         """
-        self.repo_name = repo_name
+        # Add stage suffix to repo name
+        self.repo_name = f"{repo_name}-{stage}"
+        self.stage = stage
         self.private = private
 
         # Check if huggingface_hub is available
@@ -48,8 +52,8 @@ class HuggingFaceIntegration:
                 self.organization = organization
             
             # Build full repo_id with username
-            self.repo_id = f"{self.organization}/{repo_name}" if self.organization else repo_name
-            logger.info(f"✓ HuggingFace Hub integration available - Repo: {self.repo_id}")
+            self.repo_id = f"{self.organization}/{self.repo_name}" if self.organization else self.repo_name
+            logger.info(f"✓ HuggingFace Hub integration available ({stage}) - Repo: {self.repo_id}")
         except ImportError:
             self.has_hf = False
             logger.warning("⚠️ huggingface_hub not installed. Install with: pip install huggingface_hub")

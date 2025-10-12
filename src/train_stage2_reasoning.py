@@ -20,6 +20,7 @@ from torch.cuda.amp import autocast, GradScaler
 from pathlib import Path
 import json
 from tqdm import tqdm
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -29,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from train_stage1_vision_language import BitGenVisionLanguageModel, Stage1Config
 from bitgen_model import ReasoningModule, RobotSelector, BitGenConfig
 from data_loader import RobotSelectionDataset
+from wandb_integration import setup_wandb_integration
+from huggingface_integration import HuggingFaceIntegration
 
 
 @dataclass
@@ -289,6 +292,32 @@ class Stage2Trainer:
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
         
+        # Initialize WandB
+        config_dict = {
+            'stage': 'stage2',
+            'reasoning_dim': config.reasoning_dim,
+            'num_robots': config.num_robots,
+            'batch_size': config.batch_size,
+            'learning_rate': config.learning_rate,
+            'num_epochs': config.num_epochs,
+            'total_params': total_params,
+            'trainable_params': trainable_params
+        }
+        self.wandb = setup_wandb_integration(
+            project_name="bitgen-training",
+            entity="babylm-ntust",
+            run_name=f"stage2-reasoning-{time.strftime('%Y%m%d-%H%M%S')}",
+            config=config_dict,
+            stage="stage2"
+        )
+        
+        # Initialize HuggingFace Hub
+        self.hf_integration = HuggingFaceIntegration(
+            repo_name="BitGen-Reasoning",
+            stage="stage2"
+        )
+        self.hf_integration.create_repo()
+        
         # Optimizer (only trainable parameters)
         self.optimizer = optim.AdamW(
             [p for p in self.model.parameters() if p.requires_grad],
@@ -442,6 +471,19 @@ class Stage2Trainer:
                 'acc': f"{accuracy.item():.3f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
+            
+            # Log to wandb every 10 steps
+            if self.global_step % 10 == 0:
+                self.wandb.log_stage2_metrics(
+                    epoch=self.epoch,
+                    loss=loss.item(),
+                    robot_loss=robot_loss.item(),
+                    correctness_reward=correctness_reward.mean().item(),
+                    reasoning_reward=reasoning_reward.mean().item(),
+                    accuracy=accuracy.item(),
+                    lr=self.scheduler.get_last_lr()[0]
+                )
+                self.wandb.step = self.global_step
         
         # Average metrics
         avg_metrics = {
@@ -498,6 +540,15 @@ class Stage2Trainer:
             
             # Save checkpoint
             self.save_checkpoint(epoch, metrics)
+            
+            # Push to HuggingFace Hub every epoch
+            print(f"Pushing Stage 2 checkpoint to HuggingFace Hub...")
+            self.hf_integration.push_model_checkpoint(
+                model=self.model,
+                config=self.config,
+                epoch=epoch,
+                metrics=metrics
+            )
             
             # Save best checkpoint
             if metrics['accuracy'] > best_accuracy:

@@ -31,6 +31,8 @@ from bitgen_model import BitGenConfig, BitNetLinear
 from larima_memory import BitGenMemory
 from fiber_fusion import FIBERCrossModalFusion
 from data_loader import COCODataset
+from wandb_integration import setup_wandb_integration
+from huggingface_integration import HuggingFaceIntegration
 
 
 @dataclass
@@ -284,6 +286,33 @@ class Stage1Trainer:
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
         
+        # Initialize WandB
+        config_dict = {
+            'stage': 'stage1',
+            'embed_dim': config.embed_dim,
+            'num_layers': config.num_layers,
+            'batch_size': config.batch_size,
+            'learning_rate': config.learning_rate,
+            'num_epochs': config.num_epochs,
+            'memory_size': config.memory_size,
+            'total_params': total_params,
+            'trainable_params': trainable_params
+        }
+        self.wandb = setup_wandb_integration(
+            project_name="bitgen-training",
+            entity="babylm-ntust",
+            run_name=f"stage1-vision-language-{time.strftime('%Y%m%d-%H%M%S')}",
+            config=config_dict,
+            stage="stage1"
+        )
+        
+        # Initialize HuggingFace Hub
+        self.hf_integration = HuggingFaceIntegration(
+            repo_name="BitGen-Reasoning",
+            stage="stage1"
+        )
+        self.hf_integration.create_repo()
+        
         # Optimizer
         self.optimizer = optim.AdamW(
             self.model.parameters(),
@@ -424,6 +453,19 @@ class Stage1Trainer:
                 'acc_t2i': f"{loss_dict['acc_t2i'].item():.3f}" if contrastive_dict else "0.000",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
+            
+            # Log to wandb every 10 steps
+            if self.global_step % 10 == 0:
+                self.wandb.log_stage1_metrics(
+                    epoch=self.epoch,
+                    loss=loss.item(),
+                    contrastive_loss=contrastive_loss.item(),
+                    memory_kl_loss=memory_kl_loss.item(),
+                    acc_t2i=loss_dict['acc_t2i'].item() if contrastive_dict else 0.0,
+                    acc_i2t=loss_dict['acc_i2t'].item() if contrastive_dict else 0.0,
+                    lr=self.scheduler.get_last_lr()[0]
+                )
+                self.wandb.step = self.global_step
         
         # Average metrics
         avg_metrics = {
@@ -478,6 +520,16 @@ class Stage1Trainer:
             
             # Save checkpoint
             self.save_checkpoint(epoch, metrics)
+            
+            # Push to HuggingFace Hub every 2 epochs
+            if (epoch + 1) % 2 == 0:
+                print(f"Pushing Stage 1 checkpoint to HuggingFace Hub...")
+                self.hf_integration.push_model_checkpoint(
+                    model=self.model,
+                    config=self.config,
+                    epoch=epoch,
+                    metrics=metrics
+                )
             
             # Save best checkpoint if accuracy improved
             if epoch == 0 or metrics['acc_t2i'] + metrics['acc_i2t'] > self.best_acc:
