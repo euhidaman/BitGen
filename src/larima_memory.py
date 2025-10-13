@@ -1,6 +1,6 @@
 """
-Larima GPM (Generative Parametric Memory) for BitGen
-Adapted from Larima's episodic memory module for vision-language tasks
+Larimar GPM (Generative Parametric Memory) for BitGen
+Adapted from Larimar's episodic memory module for vision-language tasks
 """
 
 import torch
@@ -12,7 +12,7 @@ from typing import Dict, Optional, Tuple
 
 class GPM(nn.Module):
     """
-    Generative Parametric Memory (GPM) from Larima
+    Generative Parametric Memory (GPM) from Larimar
     Implements Bayesian episodic memory with trainable parameters
     """
     
@@ -254,7 +254,7 @@ class GPM(nn.Module):
 
 class BitGenMemory(nn.Module):
     """
-    BitGen-specific wrapper for Larima GPM
+    BitGen-specific wrapper for Larimar GPM
     Adds projection layers for integration with BitGen architecture
     """
     

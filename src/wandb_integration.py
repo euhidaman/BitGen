@@ -1,7 +1,7 @@
 """
 Enhanced WandB Integration for BitGen 2-Stage Training
 Comprehensive metrics tracking and visualizations for 'babylm-ntust' team
-Stage 1: Vision-Language Pre-training (FIBER + Larima)
+Stage 1: Vision-Language Pre-training (FIBER + Larimar)
 Stage 2: Reasoning Module Training (Tiny-R1 + Robot Selection)
 """
 
@@ -50,7 +50,7 @@ class WandBIntegration:
 
         # Stage-specific tags
         stage_tags = {
-            "stage1": ["vision-language", "fiber", "larima-gpm", "contrastive"],
+            "stage1": ["vision-language", "fiber", "larimar-gpm", "contrastive"],
             "stage2": ["reasoning", "tiny-r1", "robot-selection", "grpo"]
         }
 
@@ -604,7 +604,7 @@ class WandBIntegration:
             epoch: Current epoch
             loss: Total loss
             contrastive_loss: Contrastive learning loss
-            memory_kl_loss: Larima GPM KL divergence loss
+            memory_kl_loss: Larimar GPM KL divergence loss
             acc_t2i: Text-to-image accuracy
             acc_i2t: Image-to-text accuracy
             lr: Learning rate
@@ -627,6 +627,311 @@ class WandBIntegration:
         if acc_t2i + acc_i2t > self.best_metrics.get('best_stage1_accuracy', 0):
             self.best_metrics['best_stage1_accuracy'] = acc_t2i + acc_i2t
             self.best_metrics['best_stage1_epoch'] = epoch
+    
+    def log_similarity_matrix(self,
+                             text_features: torch.Tensor,
+                             image_features: torch.Tensor,
+                             epoch: int,
+                             step: int,
+                             sample_size: int = 32):
+        """
+        Log image-text similarity matrix heatmap
+        
+        Args:
+            text_features: [batch_size, embed_dim] normalized text features
+            image_features: [batch_size, embed_dim] normalized image features
+            epoch: Current epoch
+            step: Current step
+            sample_size: Number of samples to visualize (default: 32)
+        """
+        # Sample if batch is too large
+        batch_size = min(text_features.shape[0], sample_size)
+        text_sample = text_features[:batch_size].detach().cpu()
+        image_sample = image_features[:batch_size].detach().cpu()
+        
+        # Compute similarity matrix
+        similarity = torch.matmul(text_sample, image_sample.T).numpy()
+        
+        # Create heatmap
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(similarity, annot=False, fmt='.2f', cmap='RdYlGn',
+                   center=0, vmin=-1, vmax=1, ax=ax,
+                   cbar_kws={'label': 'Cosine Similarity'})
+        ax.set_title(f'Image-Text Similarity Matrix (Epoch {epoch}, Step {step})')
+        ax.set_xlabel('Image Index')
+        ax.set_ylabel('Caption Index')
+        
+        # Add diagonal line to show correct matches
+        ax.plot([0, batch_size], [0, batch_size], 'b--', linewidth=2, label='Correct Matches')
+        ax.legend()
+        
+        wandb.log({"stage1/similarity_matrix": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    
+    def log_embedding_space_umap(self,
+                                 text_embeddings: torch.Tensor,
+                                 image_embeddings: torch.Tensor,
+                                 epoch: int,
+                                 step: int,
+                                 sample_size: int = 500):
+        """
+        Log UMAP projection of text and image embedding space
+        
+        Args:
+            text_embeddings: [batch_size, embed_dim] text embeddings
+            image_embeddings: [batch_size, embed_dim] image embeddings
+            epoch: Current epoch
+            step: Current step
+            sample_size: Number of samples for UMAP (default: 500)
+        """
+        try:
+            from umap import UMAP
+        except ImportError:
+            self.logger.warning("UMAP not installed, skipping embedding space visualization")
+            return
+        
+        # Sample and prepare data
+        batch_size = min(text_embeddings.shape[0], sample_size)
+        text_sample = text_embeddings[:batch_size].detach().cpu().numpy()
+        image_sample = image_embeddings[:batch_size].detach().cpu().numpy()
+        
+        # Combine for UMAP
+        combined = np.vstack([text_sample, image_sample])
+        labels = np.array(['Text'] * batch_size + ['Image'] * batch_size)
+        
+        # UMAP projection
+        reducer = UMAP(n_neighbors=15, min_dist=0.1, metric='cosine', random_state=42)
+        embedding_2d = reducer.fit_transform(combined)
+        
+        # Create scatter plot
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Plot text embeddings (blue)
+        text_2d = embedding_2d[:batch_size]
+        ax.scatter(text_2d[:, 0], text_2d[:, 1], c='blue', alpha=0.6, s=50, label='Text', marker='o')
+        
+        # Plot image embeddings (red)
+        image_2d = embedding_2d[batch_size:]
+        ax.scatter(image_2d[:, 0], image_2d[:, 1], c='red', alpha=0.6, s=50, label='Image', marker='^')
+        
+        # Draw lines connecting matching pairs
+        for i in range(min(batch_size, 50)):  # Limit lines for clarity
+            ax.plot([text_2d[i, 0], image_2d[i, 0]], 
+                   [text_2d[i, 1], image_2d[i, 1]], 
+                   'gray', alpha=0.2, linewidth=0.5)
+        
+        ax.set_title(f'Text-Image Embedding Space (UMAP, Epoch {epoch})')
+        ax.set_xlabel('UMAP Dimension 1')
+        ax.set_ylabel('UMAP Dimension 2')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        wandb.log({"stage1/embedding_space_umap": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    
+    def log_memory_activation_heatmap(self,
+                                     memory_mean: torch.Tensor,
+                                     retrieval_counts: torch.Tensor,
+                                     epoch: int,
+                                     step: int):
+        """
+        Log Larimar GPM memory slot activation heatmap
+        
+        Args:
+            memory_mean: [memory_size, code_size] memory slot contents
+            retrieval_counts: [memory_size] how often each slot was retrieved
+            epoch: Current epoch
+            step: Current step
+        """
+        memory_np = memory_mean.detach().cpu().numpy()
+        counts_np = retrieval_counts.detach().cpu().numpy()
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Memory content heatmap (show first 50 dims for clarity)
+        memory_sample = memory_np[:, :50]
+        sns.heatmap(memory_sample, cmap='viridis', ax=ax1, cbar_kws={'label': 'Activation'})
+        ax1.set_title(f'Larimar GPM Memory Content (Epoch {epoch})')
+        ax1.set_xlabel('Embedding Dimension (first 50)')
+        ax1.set_ylabel('Memory Slot')
+        
+        # Memory usage histogram
+        ax2.bar(range(len(counts_np)), counts_np, color='steelblue', alpha=0.7)
+        ax2.set_title(f'Memory Slot Retrieval Frequency (Epoch {epoch})')
+        ax2.set_xlabel('Memory Slot Index')
+        ax2.set_ylabel('Retrieval Count')
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # Add statistics
+        mean_usage = counts_np.mean()
+        ax2.axhline(y=mean_usage, color='red', linestyle='--', label=f'Mean: {mean_usage:.1f}')
+        ax2.legend()
+        
+        plt.tight_layout()
+        wandb.log({"stage1/memory_activation": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    
+    def log_queue_quality_heatmap(self,
+                                  current_text_features: torch.Tensor,
+                                  current_image_features: torch.Tensor,
+                                  text_queue: torch.Tensor,
+                                  image_queue: torch.Tensor,
+                                  epoch: int,
+                                  step: int,
+                                  sample_size: int = 32):
+        """
+        Log queue quality heatmap showing similarity with queue negatives
+        
+        Args:
+            current_text_features: [batch_size, embed_dim] current batch text features
+            current_image_features: [batch_size, embed_dim] current batch image features
+            text_queue: [embed_dim, queue_size] text queue
+            image_queue: [embed_dim, queue_size] image queue
+            epoch: Current epoch
+            step: Current step
+            sample_size: Number of samples (default: 32)
+        """
+        batch_size = min(current_text_features.shape[0], sample_size)
+        queue_sample_size = min(text_queue.shape[1], 100)
+        
+        # Sample current features and queue
+        text_current = current_text_features[:batch_size].detach().cpu()
+        image_current = current_image_features[:batch_size].detach().cpu()
+        text_q = text_queue[:, :queue_sample_size].T.detach().cpu()
+        image_q = image_queue[:, :queue_sample_size].T.detach().cpu()
+        
+        # Compute similarities
+        text_to_image_queue_sim = torch.matmul(text_current, image_q.T).numpy()
+        image_to_text_queue_sim = torch.matmul(image_current, text_q.T).numpy()
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Text → Image Queue similarity
+        sns.heatmap(text_to_image_queue_sim, cmap='coolwarm', center=0.5,
+                   vmin=0, vmax=1, ax=ax1, cbar_kws={'label': 'Similarity'})
+        ax1.set_title(f'Text → Image Queue Similarity (Epoch {epoch})')
+        ax1.set_xlabel('Image Queue Index')
+        ax1.set_ylabel('Current Text Index')
+        
+        # Image → Text Queue similarity
+        sns.heatmap(image_to_text_queue_sim, cmap='coolwarm', center=0.5,
+                   vmin=0, vmax=1, ax=ax2, cbar_kws={'label': 'Similarity'})
+        ax2.set_title(f'Image → Text Queue Similarity (Epoch {epoch})')
+        ax2.set_xlabel('Text Queue Index')
+        ax2.set_ylabel('Current Image Index')
+        
+        plt.tight_layout()
+        wandb.log({"stage1/queue_quality": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    
+    def log_loss_components_stacked(self,
+                                   loss_t2i: float,
+                                   loss_i2t: float,
+                                   memory_kl: float,
+                                   epoch: int,
+                                   step: int):
+        """
+        Log loss components as stacked area chart (accumulated over epoch)
+        
+        Args:
+            loss_t2i: Text-to-image loss
+            loss_i2t: Image-to-text loss
+            memory_kl: Memory KL divergence
+            epoch: Current epoch
+            step: Current step
+        """
+        # Log individual components
+        wandb.log({
+            "stage1/loss/t2i": loss_t2i,
+            "stage1/loss/i2t": loss_i2t,
+            "stage1/loss/memory_kl": memory_kl,
+            "stage1/loss/contrastive_total": (loss_t2i + loss_i2t) / 2.0
+        }, step=step)
+    
+    def log_retrieval_precision_at_k(self,
+                                    text_features: torch.Tensor,
+                                    image_features: torch.Tensor,
+                                    epoch: int,
+                                    step: int,
+                                    k_values: list = [1, 5, 10]):
+        """
+        Log retrieval precision@K metrics
+        
+        Args:
+            text_features: [batch_size, embed_dim] normalized text features
+            image_features: [batch_size, embed_dim] normalized image features
+            epoch: Current epoch
+            step: Current step
+            k_values: List of K values to compute (default: [1, 5, 10])
+        """
+        batch_size = text_features.shape[0]
+        
+        # Compute similarity matrix
+        similarity = torch.matmul(text_features, image_features.T).detach().cpu()
+        
+        # Text-to-Image retrieval
+        t2i_metrics = {}
+        for k in k_values:
+            topk_indices = torch.topk(similarity, k=k, dim=1).indices
+            # Check if correct index (diagonal) is in top-k
+            correct_indices = torch.arange(batch_size).unsqueeze(1)
+            hits = (topk_indices == correct_indices).any(dim=1).float()
+            precision_at_k = hits.mean().item()
+            t2i_metrics[f"stage1/precision@{k}/t2i"] = precision_at_k
+        
+        # Image-to-Text retrieval
+        i2t_metrics = {}
+        for k in k_values:
+            topk_indices = torch.topk(similarity.T, k=k, dim=1).indices
+            correct_indices = torch.arange(batch_size).unsqueeze(1)
+            hits = (topk_indices == correct_indices).any(dim=1).float()
+            precision_at_k = hits.mean().item()
+            i2t_metrics[f"stage1/precision@{k}/i2t"] = precision_at_k
+        
+        # Log all metrics
+        wandb.log({**t2i_metrics, **i2t_metrics}, step=step)
+    
+    def log_gradient_flow_heatmap(self,
+                                  model: torch.nn.Module,
+                                  epoch: int,
+                                  step: int):
+        """
+        Log gradient flow heatmap across model layers
+        
+        Args:
+            model: The model to analyze
+            epoch: Current epoch
+            step: Current step
+        """
+        # Collect gradient norms per layer
+        layer_names = []
+        grad_norms = []
+        
+        for name, param in model.named_parameters():
+            if param.grad is not None and param.requires_grad:
+                layer_names.append(name)
+                grad_norms.append(param.grad.abs().mean().item())
+        
+        if len(grad_norms) == 0:
+            return
+        
+        # Create bar chart
+        fig, ax = plt.subplots(figsize=(12, max(6, len(layer_names) * 0.3)))
+        
+        y_pos = np.arange(len(layer_names))
+        colors = plt.cm.viridis(np.array(grad_norms) / (max(grad_norms) + 1e-8))
+        
+        ax.barh(y_pos, grad_norms, color=colors, alpha=0.8)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels([name.split('.')[-2] + '.' + name.split('.')[-1] if '.' in name else name 
+                           for name in layer_names], fontsize=8)
+        ax.set_xlabel('Gradient Magnitude')
+        ax.set_title(f'Gradient Flow Across Layers (Epoch {epoch}, Step {step})')
+        ax.grid(True, alpha=0.3, axis='x')
+        
+        plt.tight_layout()
+        wandb.log({"stage1/gradient_flow": wandb.Image(fig)}, step=step)
+        plt.close(fig)
     
     def log_stage2_metrics(self,
                           epoch: int,
@@ -740,7 +1045,7 @@ class WandBIntegration:
                                 memory_read_count: torch.Tensor,
                                 epoch: int):
         """
-        Visualize Larima GPM memory state
+        Visualize Larimar GPM memory state
         
         Args:
             memory_mean: Memory mean tensor [memory_size, code_size]
@@ -756,7 +1061,7 @@ class WandBIntegration:
         
         # Memory content heatmap
         sns.heatmap(memory_np.T, cmap='viridis', ax=ax1)
-        ax1.set_title(f'Larima GPM Memory Content (Epoch {epoch})')
+        ax1.set_title(f'Larimar GPM Memory Content (Epoch {epoch})')
         ax1.set_xlabel('Memory Slot')
         ax1.set_ylabel('Embedding Dimension')
         

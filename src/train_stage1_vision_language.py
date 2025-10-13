@@ -5,7 +5,7 @@ NO reasoning module - pure contrastive learning
 
 After this stage, model should have:
 - Aligned vision-language representations (image ↔ text matching)
-- Larima GPM episodic memory (trained)
+- Larimar GPM episodic memory (trained)
 - FIBER-style cross-modal fusion (with queue-based contrastive)
 """
 
@@ -46,7 +46,7 @@ class Stage1Config:
     ffn_dim: int = 512
     vocab_size: int = 8192
     
-    # Memory config (Larima GPM)
+    # Memory config (Larimar GPM)
     memory_size: int = 1000
     memory_dim: int = 256
     direct_writing: bool = True
@@ -103,7 +103,7 @@ class BitGenVisionLanguageModel(nn.Module):
         bitgen_config = self._create_bitgen_config(config)
         self.cross_modal_fusion = FIBERCrossModalFusion(bitgen_config)
         
-        # Larima GPM episodic memory
+        # Larimar GPM episodic memory
         self.episodic_memory = BitGenMemory(bitgen_config)
         
         # Attention layers (simplified for Stage 1)
@@ -191,7 +191,7 @@ class BitGenVisionLanguageModel(nn.Module):
             x = self.cross_modal_fusion(x, None)
             contrastive_dict = {}
         
-        # Larima GPM episodic memory
+        # Larimar GPM episodic memory
         x, memory_info = self.episodic_memory(x)
         
         # Attention layers
@@ -475,7 +475,53 @@ class Stage1Trainer:
                     acc_i2t=loss_dict['acc_i2t'].item() if contrastive_dict else 0.0,
                     lr=self.scheduler.get_last_lr()[0]
                 )
+                
+                # Log loss components
+                if contrastive_dict:
+                    self.wandb.log_loss_components_stacked(
+                        loss_t2i=loss_dict['loss_t2i'].item(),
+                        loss_i2t=loss_dict['loss_i2t'].item(),
+                        memory_kl=memory_kl_loss.item(),
+                        epoch=self.epoch,
+                        step=self.global_step
+                    )
+                
                 self.wandb.step = self.global_step
+            
+            # Comprehensive visualizations every 50 steps
+            if self.global_step % 50 == 0 and contrastive_dict:
+                # Similarity matrix heatmap
+                self.wandb.log_similarity_matrix(
+                    text_features=contrastive_dict['text_features'],
+                    image_features=contrastive_dict['image_features'],
+                    epoch=self.epoch,
+                    step=self.global_step
+                )
+                
+                # Queue quality heatmap
+                self.wandb.log_queue_quality_heatmap(
+                    current_text_features=contrastive_dict['text_features'],
+                    current_image_features=contrastive_dict['image_features'],
+                    text_queue=contrastive_dict['text_queue'],
+                    image_queue=contrastive_dict['image_queue'],
+                    epoch=self.epoch,
+                    step=self.global_step
+                )
+                
+                # Retrieval Precision@K
+                self.wandb.log_retrieval_precision_at_k(
+                    text_features=contrastive_dict['text_features'],
+                    image_features=contrastive_dict['image_features'],
+                    epoch=self.epoch,
+                    step=self.global_step
+                )
+                
+                # Gradient flow heatmap
+                self.wandb.log_gradient_flow_heatmap(
+                    model=self.model,
+                    epoch=self.epoch,
+                    step=self.global_step
+                )
         
         # Average metrics
         avg_metrics = {
@@ -649,6 +695,46 @@ class Stage1Trainer:
                 'val/acc_i2t': val_metrics['val_acc_i2t']
             }, step=self.global_step)
             
+            # Epoch-level visualizations (using validation data for clean vis)
+            print(f"📊 Generating epoch visualizations...")
+            
+            # Get a validation batch for visualizations
+            val_batch = next(iter(val_loader))
+            val_input_ids = val_batch['input_ids'].to(self.device)
+            val_images = val_batch['images'].to(self.device)
+            
+            with torch.no_grad():
+                val_outputs = self.model(
+                    input_ids=val_input_ids,
+                    images=val_images,
+                    return_contrastive_features=True
+                )
+                val_contrastive_dict = val_outputs['contrastive_features']
+            
+            if val_contrastive_dict:
+                # UMAP embedding space visualization
+                self.wandb.log_embedding_space_umap(
+                    text_embeddings=val_contrastive_dict['text_features'],
+                    image_embeddings=val_contrastive_dict['image_features'],
+                    epoch=epoch,
+                    step=self.global_step,
+                    sample_size=200
+                )
+            
+            # Memory activation heatmap
+            memory_mean = self.model.episodic_memory.gpm.memory_mean
+            # Approximate retrieval counts (would need tracking in actual training)
+            retrieval_counts = torch.ones(memory_mean.shape[0], device=memory_mean.device)
+            
+            self.wandb.log_memory_activation_heatmap(
+                memory_mean=memory_mean,
+                retrieval_counts=retrieval_counts,
+                epoch=epoch,
+                step=self.global_step
+            )
+            
+            print(f"✅ Visualizations complete")
+            
             # Early stopping check
             val_loss = val_metrics['val_loss']
             is_best = False
@@ -666,15 +752,14 @@ class Stage1Trainer:
             # Save checkpoint
             self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
             
-            # Push to HuggingFace Hub every 2 epochs or if best
-            if (epoch + 1) % 2 == 0 or is_best:
-                print(f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
-                self.hf_integration.push_model_checkpoint(
-                    model=self.model,
-                    config=self.config,
-                    epoch=epoch,
-                    metrics=combined_metrics
-                )
+            # Push to HuggingFace Hub after every epoch
+            print(f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
+            self.hf_integration.push_model_checkpoint(
+                model=self.model,
+                config=self.config,
+                epoch=epoch,
+                metrics=combined_metrics
+            )
             
             # Early stopping
             if self.patience_counter >= self.config.early_stopping_patience:
