@@ -342,19 +342,28 @@ class Stage1Trainer:
         self.global_step = 0
         self.epoch = 0
         self.total_steps = 0  # Will be set in train()
+        self.warmup_complete = False
     
     def _setup_scheduler(self, num_training_steps: int):
-        """Setup learning rate scheduler with warmup"""
-        # Linear warmup
-        def lr_lambda(current_step: int):
+        """Setup learning rate scheduler: warmup + adaptive plateau-based reduction"""
+        # Warmup scheduler (step-based)
+        def warmup_lambda(current_step: int):
             if current_step < self.config.warmup_steps:
-                # Linear warmup
                 return float(current_step) / float(max(1, self.config.warmup_steps))
-            # Cosine decay after warmup
-            progress = float(current_step - self.config.warmup_steps) / float(max(1, num_training_steps - self.config.warmup_steps))
-            return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))))
+            return 1.0  # After warmup, keep at 1.0 (full LR)
         
-        self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+        self.warmup_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, warmup_lambda)
+        
+        # Adaptive scheduler (epoch-based, kicks in after warmup)
+        # Reduces LR by 0.5x when validation loss doesn't improve for 3 epochs
+        self.plateau_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            factor=0.5,  # Reduce LR by half
+            patience=3,  # Wait 3 epochs before reducing
+            verbose=True,
+            min_lr=1e-7  # Don't go below this
+        )
         
         # Set base learning rate
         for param_group in self.optimizer.param_groups:
@@ -464,7 +473,14 @@ class Stage1Trainer:
                     self.optimizer.step()
                 
                 self.optimizer.zero_grad()
-                self.scheduler.step()
+                
+                # Step warmup scheduler during warmup phase only
+                if self.global_step < self.config.warmup_steps:
+                    self.warmup_scheduler.step()
+                elif not self.warmup_complete:
+                    self.warmup_complete = True
+                    print(f"\n🎓 Warmup complete at step {self.global_step}! Now using adaptive LR based on validation loss.")
+                
                 self.global_step += 1
                 
                 # Log gradient statistics every 100 steps
@@ -643,7 +659,9 @@ class Stage1Trainer:
             'global_step': self.global_step,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            'warmup_scheduler_state_dict': self.warmup_scheduler.state_dict(),
+            'plateau_scheduler_state_dict': self.plateau_scheduler.state_dict(),
+            'warmup_complete': self.warmup_complete,
             'metrics': metrics,
             'config': self.config
         }, checkpoint_path)
@@ -661,7 +679,9 @@ class Stage1Trainer:
                 'global_step': self.global_step,
                 'model_state_dict': self.model.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
-                'scheduler_state_dict': self.scheduler.state_dict(),
+                'warmup_scheduler_state_dict': self.warmup_scheduler.state_dict(),
+                'plateau_scheduler_state_dict': self.plateau_scheduler.state_dict(),
+                'warmup_complete': self.warmup_complete,
                 'metrics': metrics,
                 'config': self.config
             }, best_path)
@@ -778,6 +798,15 @@ class Stage1Trainer:
             )
             
             print(f"✅ Visualizations complete")
+            
+            # Adaptive learning rate reduction based on validation loss
+            # Only after warmup is complete
+            if self.warmup_complete:
+                old_lr = self.optimizer.param_groups[0]['lr']
+                self.plateau_scheduler.step(val_metrics['val_loss'])
+                new_lr = self.optimizer.param_groups[0]['lr']
+                if new_lr < old_lr:
+                    print(f"\n📉 Learning rate reduced: {old_lr:.2e} → {new_lr:.2e} (validation loss plateaued)")
             
             # Early stopping check
             val_loss = val_metrics['val_loss']
