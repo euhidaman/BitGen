@@ -28,10 +28,6 @@ py-cpuinfo
 GPUtil
 nvidia-ml-py
 pynvml
-# Power monitoring for Raspberry Pi
-RPi.GPIO
-gpiozero
-w1thermsensor
 # Performance monitoring
 ptflops
 fvcore

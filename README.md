@@ -116,7 +116,7 @@ INPUT:
                  │
                  ▼
 ┌───────────────────────────────────────────────────────────────┐
-│           Larima GPM (Generative Parametric Memory)           │
+│          Larimar GPM (Generative Parametric Memory)           │
 │  ┌──────────────────────────────────────────────┐            │
 │  │ memory_mean: [1000, 256] (trainable)         │            │
 │  │ memory_logvar: [1] (Bayesian variance)       │            │
