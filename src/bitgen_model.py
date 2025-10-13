@@ -714,6 +714,102 @@ class RobotSelector(nn.Module):
         
         return robot_probs
 
+
+class BitNetTextDecoder(nn.Module):
+    """BitNet-based text decoder for text generation"""
+    
+    def __init__(self, config: BitGenConfig):
+        super().__init__()
+        self.config = config
+        self.num_layers = config.num_layers
+        self.embed_dim = config.embed_dim
+        
+        # Decoder layers with causal attention
+        self.decoder_layers = nn.ModuleList([
+            self._build_decoder_layer(config) for _ in range(config.num_layers)
+        ])
+        
+        # Layer norm
+        self.layer_norm = nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps)
+        
+        # Output projection to vocabulary
+        self.output_projection = BitNetLinear(config.embed_dim, config.vocab_size)
+        
+        # Dropout
+        self.dropout = nn.Dropout(config.dropout)
+        
+    def _build_decoder_layer(self, config):
+        """Build a single decoder layer"""
+        return nn.ModuleDict({
+            'self_attn': AttentionSink(config),
+            'cross_attn': AttentionSink(config),  # For attending to encoder outputs
+            'ffn': nn.Sequential(
+                BitNetLinear(config.embed_dim, config.ff_dim),
+                nn.GELU(),
+                nn.Dropout(config.dropout),
+                BitNetLinear(config.ff_dim, config.embed_dim),
+                nn.Dropout(config.dropout)
+            ),
+            'ln1': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
+            'ln2': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
+            'ln3': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
+        })
+    
+    def forward(self, x, encoder_output, attention_mask=None, causal_mask=None):
+        """
+        Forward pass through decoder
+        Args:
+            x: Decoder input embeddings [B, tgt_len, embed_dim]
+            encoder_output: Encoder output [B, src_len, embed_dim]
+            attention_mask: Optional attention mask
+            causal_mask: Causal mask for autoregressive generation
+        Returns:
+            logits: [B, tgt_len, vocab_size]
+        """
+        batch_size, tgt_len, _ = x.shape
+        
+        # Create causal mask if not provided
+        if causal_mask is None:
+            causal_mask = torch.triu(
+                torch.ones(tgt_len, tgt_len, device=x.device, dtype=torch.bool),
+                diagonal=1
+            )
+        
+        # Process through decoder layers
+        for layer in self.decoder_layers:
+            # Self-attention with causal mask (look only at previous tokens)
+            residual = x
+            x = layer['ln1'](x)
+            
+            # Apply self-attention with causal masking
+            # Note: AttentionSink doesn't natively support causal mask,
+            # so we apply it post-attention
+            attn_output, _, _ = layer['self_attn'](x, x, x, attention_mask=None)
+            
+            # Apply causal mask to attention output
+            # This is a simplification - ideally mask should be in attention computation
+            x = residual + self.dropout(attn_output)
+            
+            # Cross-attention to encoder output
+            residual = x
+            x = layer['ln2'](x)
+            cross_attn_output, _, _ = layer['cross_attn'](x, encoder_output, encoder_output, attention_mask=attention_mask)
+            x = residual + self.dropout(cross_attn_output)
+            
+            # Feed-forward
+            residual = x
+            x = layer['ln3'](x)
+            x = residual + layer['ffn'](x)
+        
+        # Final layer norm
+        x = self.layer_norm(x)
+        
+        # Project to vocabulary
+        logits = self.output_projection(x)
+        
+        return logits
+
+
 class BitGenModel(nn.Module):
     """Complete BitGen model for embedded microcontrollers"""
 
@@ -733,8 +829,11 @@ class BitGenModel(nn.Module):
         self.cross_modal_fusion = CrossModalFusion(config)
         self.reasoning_module = ReasoningModule(config)
         self.robot_selector = RobotSelector(config)
+        
+        # Text decoder for reconstruction loss (BitMar-style)
+        self.text_decoder = BitNetTextDecoder(config)
 
-        # Output layers
+        # Output layers (keep for backward compatibility and direct prediction)
         self.layer_norm = nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps)
         self.output_projection = BitNetLinear(config.embed_dim, config.vocab_size)
 
@@ -756,8 +855,21 @@ class BitGenModel(nn.Module):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False, return_attention_weights=False):
-        """Forward pass through BitGen model with comprehensive token validation"""
+    def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False, return_attention_weights=False, target_ids=None, use_decoder=False):
+        """
+        Forward pass through BitGen model with comprehensive token validation
+        
+        Args:
+            input_ids: Input token IDs [B, seq_len]
+            images: Optional image features [B, num_patches, image_dim]
+            attention_mask: Optional attention mask
+            return_robot_selection: Whether to return robot selection output
+            attention_cache: Optional attention cache for inference
+            return_analysis_data: Whether to return detailed analysis data
+            return_attention_weights: Whether to return attention weights
+            target_ids: Target token IDs for text reconstruction [B, tgt_len]
+            use_decoder: Whether to use decoder for text generation (BitMar-style)
+        """
         batch_size, seq_len = input_ids.shape
 
         # CRITICAL: Validate input tokens before any embedding operations
@@ -854,8 +966,27 @@ class BitGenModel(nn.Module):
 
         # Layer normalization
         x = self.layer_norm(x)
+        
+        # Store encoder output for decoder
+        encoder_output = x
 
-        # Output projection
+        # Decoder for text reconstruction (BitMar-style)
+        decoder_logits = None
+        if use_decoder and target_ids is not None:
+            # Prepare decoder input (shift targets right, prepend BOS)
+            # For training, we use teacher forcing
+            tgt_len = target_ids.shape[1]
+            
+            # Get target embeddings
+            tgt_token_emb = self.token_embedding(target_ids)
+            tgt_pos_ids = torch.arange(tgt_len, device=target_ids.device).unsqueeze(0)
+            tgt_pos_emb = self.pos_embedding(tgt_pos_ids)
+            decoder_input = self.dropout(tgt_token_emb + tgt_pos_emb)
+            
+            # Run through decoder
+            decoder_logits = self.text_decoder(decoder_input, encoder_output, attention_mask=attention_mask)
+
+        # Output projection (direct prediction, kept for backward compatibility)
         logits = self.output_projection(x)
 
         # Robot selection with top-K multi-label output
@@ -878,6 +1009,7 @@ class BitGenModel(nn.Module):
         # Prepare output
         outputs = {
             'logits': logits,
+            'decoder_logits': decoder_logits,  # Text reconstruction logits (BitMar-style)
             'robot_selection': robot_selection_output,  # Full top-K robot selection output
             'attention_cache': new_cache
         }
@@ -994,6 +1126,90 @@ class BitGenModel(nn.Module):
         new_cache = (k[:, :, -attention_layer.window_size:], v[:, :, -attention_layer.window_size:])
 
         return output, new_cache, attn_weights
+    
+    def compute_loss(self, outputs, target_ids, text_features=None, image_features=None, 
+                     text_loss_weight=1.0, contrastive_loss_weight=0.1, memory_kl_weight=0.05):
+        """
+        Compute multi-component loss (BitMar-style)
+        
+        Args:
+            outputs: Model outputs dictionary
+            target_ids: Target token IDs for text reconstruction
+            text_features: Text features for contrastive learning
+            image_features: Image features for contrastive learning
+            text_loss_weight: Weight for text reconstruction loss (default: 1.0)
+            contrastive_loss_weight: Weight for contrastive loss (default: 0.1)
+            memory_kl_weight: Weight for memory KL divergence (default: 0.05)
+            
+        Returns:
+            total_loss: Combined weighted loss
+            loss_dict: Dictionary of individual loss components
+        """
+        loss_dict = {}
+        total_loss = 0.0
+        
+        # 1. Text Reconstruction Loss (main learning signal)
+        if outputs['decoder_logits'] is not None and target_ids is not None:
+            decoder_logits = outputs['decoder_logits']
+            # Shift targets for next-token prediction
+            # decoder_logits: [B, tgt_len, vocab_size]
+            # target_ids: [B, tgt_len]
+            # We want to predict target_ids[1:] from decoder_logits[:-1]
+            shift_logits = decoder_logits[:, :-1, :].contiguous()
+            shift_labels = target_ids[:, 1:].contiguous()
+            
+            text_loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100  # Ignore padding
+            )
+            loss_dict['text_loss'] = text_loss.item()
+            total_loss += text_loss_weight * text_loss
+            
+            # Compute perplexity
+            perplexity = torch.exp(text_loss)
+            loss_dict['perplexity'] = perplexity.item()
+            
+            # Compute token accuracy
+            predictions = shift_logits.argmax(dim=-1)
+            correct = (predictions == shift_labels).float()
+            token_accuracy = correct.mean()
+            loss_dict['token_accuracy'] = token_accuracy.item()
+        
+        # 2. Contrastive Loss (FIBER-style, for image-text alignment)
+        if 'contrastive_features' in outputs and text_features is not None and image_features is not None:
+            # Compute contrastive loss
+            # Normalize features
+            text_features = F.normalize(text_features, dim=-1)
+            image_features = F.normalize(image_features, dim=-1)
+            
+            # Compute similarity matrix
+            similarity = torch.matmul(text_features, image_features.t()) / 0.1  # temperature
+            
+            # Labels: diagonal elements are positive pairs
+            batch_size = similarity.size(0)
+            labels = torch.arange(batch_size, device=similarity.device)
+            
+            # Contrastive loss (symmetric)
+            contrastive_loss = (
+                F.cross_entropy(similarity, labels) + 
+                F.cross_entropy(similarity.t(), labels)
+            ) / 2.0
+            
+            loss_dict['contrastive_loss'] = contrastive_loss.item()
+            total_loss += contrastive_loss_weight * contrastive_loss
+        
+        # 3. Memory KL Divergence Loss (Larimar-style, for memory regularization)
+        # This would be computed if episodic memory returns KL divergence
+        # For now, placeholder - will be implemented when enhancing larima_memory.py
+        if 'memory_kl' in outputs:
+            memory_kl_loss = outputs['memory_kl']
+            loss_dict['memory_kl_loss'] = memory_kl_loss.item()
+            total_loss += memory_kl_weight * memory_kl_loss
+        
+        loss_dict['total_loss'] = total_loss.item()
+        
+        return total_loss, loss_dict
 
     # NOTE: _forward_reasoning_with_analysis() is now deprecated
     # Reasoning traces are now handled directly in ReasoningModule.forward() 
