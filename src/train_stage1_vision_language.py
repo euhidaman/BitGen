@@ -158,7 +158,9 @@ class BitGenVisionLanguageModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         images: Optional[torch.Tensor] = None,
-        return_contrastive_features: bool = False
+        return_contrastive_features: bool = False,
+        target_ids: Optional[torch.Tensor] = None,
+        use_decoder: bool = False
     ) -> Dict:
         """
         Forward pass - Vision-Language fusion only
@@ -167,6 +169,8 @@ class BitGenVisionLanguageModel(nn.Module):
             input_ids: [batch_size, seq_len]
             images: [batch_size, 3, H, W]
             return_contrastive_features: Whether to return features for contrastive loss
+            target_ids: Target token IDs for text reconstruction (optional, unused in Stage 1)
+            use_decoder: Whether to use decoder (optional, unused in Stage 1)
         
         Returns:
             outputs: Dictionary with embeddings and contrastive features
@@ -201,13 +205,79 @@ class BitGenVisionLanguageModel(nn.Module):
         # Layer norm
         x = self.layer_norm(x)
         
+        # Note: Stage 1 doesn't have decoder yet - will be added in full BitGenModel
+        # For now, we return None for decoder_logits to maintain compatibility
         outputs = {
             'embeddings': x,
             'contrastive_features': contrastive_dict,
-            'memory_info': memory_info
+            'memory_info': memory_info,
+            'decoder_logits': None  # Placeholder for compatibility with compute_loss
         }
         
         return outputs
+    
+    def compute_loss(self, outputs, target_ids, text_features=None, image_features=None,
+                     text_loss_weight=1.0, contrastive_loss_weight=0.1, memory_kl_weight=0.05):
+        """
+        Compute multi-component loss (Stage 1 version - no text reconstruction yet)
+        
+        Args:
+            outputs: Model outputs dictionary
+            target_ids: Target token IDs (unused in Stage 1)
+            text_features: Text features for contrastive learning
+            image_features: Image features for contrastive learning
+            text_loss_weight: Weight for text reconstruction loss (unused in Stage 1)
+            contrastive_loss_weight: Weight for contrastive loss
+            memory_kl_weight: Weight for memory KL divergence
+            
+        Returns:
+            total_loss: Combined weighted loss
+            loss_dict: Dictionary of individual loss components
+        """
+        loss_dict = {}
+        total_loss = 0.0
+        
+        # 1. Text Reconstruction Loss - NOT IMPLEMENTED in Stage 1
+        # Stage 1 focuses on vision-language alignment only
+        loss_dict['text_loss'] = 0.0
+        loss_dict['perplexity'] = 0.0
+        loss_dict['token_accuracy'] = 0.0
+        
+        # 2. Contrastive Loss (FIBER-style)
+        if text_features is not None and image_features is not None:
+            # Normalize features
+            text_features = F.normalize(text_features, dim=-1)
+            image_features = F.normalize(image_features, dim=-1)
+            
+            # Compute similarity matrix
+            similarity = torch.matmul(text_features, image_features.t()) / 0.1  # temperature
+            
+            # Labels: diagonal elements are positive pairs
+            batch_size = similarity.size(0)
+            labels = torch.arange(batch_size, device=similarity.device)
+            
+            # Contrastive loss (symmetric)
+            contrastive_loss = (
+                F.cross_entropy(similarity, labels) + 
+                F.cross_entropy(similarity.t(), labels)
+            ) / 2.0
+            
+            loss_dict['contrastive_loss'] = contrastive_loss.item()
+            total_loss += contrastive_loss_weight * contrastive_loss
+        else:
+            loss_dict['contrastive_loss'] = 0.0
+        
+        # 3. Memory KL Divergence Loss
+        if 'memory_kl' in outputs:
+            memory_kl_loss = outputs['memory_kl']
+            loss_dict['memory_kl_loss'] = memory_kl_loss.item()
+            total_loss += memory_kl_weight * memory_kl_loss
+        else:
+            loss_dict['memory_kl_loss'] = 0.0
+        
+        loss_dict['total_loss'] = total_loss.item() if isinstance(total_loss, torch.Tensor) else total_loss
+        
+        return total_loss, loss_dict
 
 
 def compute_contrastive_loss(
