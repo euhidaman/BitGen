@@ -16,7 +16,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from pathlib import Path
 import json
 from tqdm import tqdm
@@ -364,7 +365,7 @@ class Stage1Trainer:
             
             # Forward pass with AMP
             if self.config.use_amp:
-                with autocast():
+                with autocast('cuda'):
                     outputs = self.model(
                         input_ids=input_ids,
                         images=images,
