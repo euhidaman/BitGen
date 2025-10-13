@@ -59,10 +59,10 @@ class Stage1Config:
     # Training config
     batch_size: int = 160
     grad_accum_steps: int = 2  # Effective batch: 320
-    learning_rate: float = 5e-4
+    learning_rate: float = 1e-4  # Reduced from 5e-4 for stability
     weight_decay: float = 0.01
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
-    warmup_steps: int = 500
+    warmup_steps: int = 1000  # Increased warmup for better stability
     
     # Early stopping config
     early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
@@ -73,7 +73,7 @@ class Stage1Config:
     contrastive_weight: float = 1.0
     memory_kl_weight: float = 0.01
     queue_size: int = 4096
-    temperature: float = 0.07
+    temperature: float = 0.1  # Increased from 0.07 for more stable gradients
     
     # Optimization
     max_seq_len: int = 512
@@ -324,19 +324,16 @@ class Stage1Trainer:
         self.patience_counter = 0
         self.best_epoch = 0
         
-        # Optimizer
+        # Optimizer - start with 0 LR for warmup
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=config.learning_rate,
+            lr=0,  # Will be set by warmup scheduler
             weight_decay=config.weight_decay
         )
         
-        # Scheduler (cosine with warmup)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=config.num_epochs * 1000,  # Approximate steps
-            eta_min=1e-6
-        )
+        # Scheduler with warmup - will be initialized after dataset is loaded
+        self.scheduler = None
+        self.warmup_scheduler = None
         
         # AMP scaler
         self.scaler = GradScaler() if config.use_amp else None
@@ -344,6 +341,24 @@ class Stage1Trainer:
         # Training state
         self.global_step = 0
         self.epoch = 0
+        self.total_steps = 0  # Will be set in train()
+    
+    def _setup_scheduler(self, num_training_steps: int):
+        """Setup learning rate scheduler with warmup"""
+        # Linear warmup
+        def lr_lambda(current_step: int):
+            if current_step < self.config.warmup_steps:
+                # Linear warmup
+                return float(current_step) / float(max(1, self.config.warmup_steps))
+            # Cosine decay after warmup
+            progress = float(current_step - self.config.warmup_steps) / float(max(1, num_training_steps - self.config.warmup_steps))
+            return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))))
+        
+        self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+        
+        # Set base learning rate
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.config.learning_rate
     
     def train_epoch(self, dataloader: DataLoader) -> Dict:
         """Train for one epoch"""
@@ -355,6 +370,10 @@ class Stage1Trainer:
         total_acc_t2i = 0.0
         total_acc_i2t = 0.0
         num_batches = 0
+        
+        # Log current learning rate at start of epoch
+        current_lr = self.optimizer.param_groups[0]['lr']
+        print(f"\n📈 Starting Epoch {self.epoch+1} - Learning Rate: {current_lr:.2e}")
         
         progress_bar = tqdm(dataloader, desc=f"Epoch {self.epoch+1}")
         
@@ -447,6 +466,16 @@ class Stage1Trainer:
                 self.optimizer.zero_grad()
                 self.scheduler.step()
                 self.global_step += 1
+                
+                # Log gradient statistics every 100 steps
+                if self.global_step % 100 == 0:
+                    total_norm = 0.0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    total_norm = total_norm ** 0.5
+                    print(f"\n🔍 Step {self.global_step}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
             
             # Accumulate metrics
             total_loss += loss.item()
@@ -645,6 +674,20 @@ class Stage1Trainer:
         print(f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
         print(f"Max epochs: {self.config.num_epochs}")
         print(f"Early stopping patience: {self.config.early_stopping_patience} epochs")
+        
+        # Calculate total training steps and setup scheduler
+        steps_per_epoch = len(train_loader) // self.config.grad_accum_steps
+        total_training_steps = steps_per_epoch * self.config.num_epochs
+        self.total_steps = total_training_steps
+        
+        print(f"Steps per epoch: {steps_per_epoch}")
+        print(f"Total training steps: {total_training_steps}")
+        print(f"Warmup steps: {self.config.warmup_steps}")
+        print(f"Initial learning rate: 0 (warmup)")
+        print(f"Target learning rate: {self.config.learning_rate}")
+        
+        # Setup scheduler with warmup
+        self._setup_scheduler(total_training_steps)
         
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
