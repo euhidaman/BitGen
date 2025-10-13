@@ -16,8 +16,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+from torch.amp import autocast, GradScaler
 from pathlib import Path
 import json
 from tqdm import tqdm
@@ -335,8 +334,8 @@ class Stage1Trainer:
         self.scheduler = None
         self.warmup_scheduler = None
         
-        # AMP scaler
-        self.scaler = GradScaler() if config.use_amp else None
+        # AMP scaler (using new API)
+        self.scaler = GradScaler('cuda') if config.use_amp else None
         
         # Training state
         self.global_step = 0
@@ -361,7 +360,6 @@ class Stage1Trainer:
             mode='min',
             factor=0.5,  # Reduce LR by half
             patience=3,  # Wait 3 epochs before reducing
-            verbose=True,
             min_lr=1e-7  # Don't go below this
         )
         
