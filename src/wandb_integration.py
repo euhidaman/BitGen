@@ -592,21 +592,27 @@ class WandBIntegration:
     def log_stage1_metrics(self, 
                           epoch: int,
                           loss: float,
-                          contrastive_loss: float,
-                          memory_kl_loss: float,
-                          acc_t2i: float,
-                          acc_i2t: float,
-                          lr: float):
+                          text_loss: float = 0.0,
+                          contrastive_loss: float = 0.0,
+                          memory_kl_loss: float = 0.0,
+                          perplexity: float = 0.0,
+                          token_accuracy: float = 0.0,
+                          acc_t2i: float = 0.0,
+                          acc_i2t: float = 0.0,
+                          lr: float = 1e-4):
         """
         Log Stage 1 (Vision-Language) specific metrics organized by sections
         
         Args:
             epoch: Current epoch
             loss: Total loss
-            contrastive_loss: Contrastive learning loss
+            text_loss: Text reconstruction loss (BitMar-style)
+            contrastive_loss: Contrastive learning loss (FIBER-style)
             memory_kl_loss: Larimar GPM KL divergence loss
-            acc_t2i: Text-to-image accuracy
-            acc_i2t: Image-to-text accuracy
+            perplexity: Language modeling perplexity
+            token_accuracy: Token-level prediction accuracy
+            acc_t2i: Text-to-image accuracy (legacy, optional)
+            acc_i2t: Image-to-text accuracy (legacy, optional)
             lr: Learning rate
         """
         
@@ -615,23 +621,32 @@ class WandBIntegration:
             "train/epoch": epoch,
             "train/learning_rate": lr,
             
-            # Loss components (separate section)
+            # Loss components (separate section) - BitMar-style multi-component
             "loss/total": loss,
+            "loss/text_reconstruction": text_loss,
             "loss/contrastive_fiber": contrastive_loss,
             "loss/memory_kl_larimar": memory_kl_loss,
             
-            # Accuracy metrics (separate section)
-            "accuracy/text_to_image": acc_t2i,
-            "accuracy/image_to_text": acc_i2t,
-            "accuracy/average": (acc_t2i + acc_i2t) / 2.0,
+            # Language modeling metrics
+            "metrics/perplexity": perplexity,
+            "metrics/token_accuracy": token_accuracy,
         }
+        
+        # Add legacy accuracy metrics if provided
+        if acc_t2i > 0 or acc_i2t > 0:
+            metrics.update({
+                "accuracy/text_to_image": acc_t2i,
+                "accuracy/image_to_text": acc_i2t,
+                "accuracy/average": (acc_t2i + acc_i2t) / 2.0,
+            })
         
         wandb.log(metrics, step=self.step)
         
-        # Update best metrics
-        if acc_t2i + acc_i2t > self.best_metrics.get('best_stage1_accuracy', 0):
-            self.best_metrics['best_stage1_accuracy'] = acc_t2i + acc_i2t
+        # Update best metrics (use token accuracy as primary metric now)
+        if token_accuracy > self.best_metrics.get('best_stage1_accuracy', 0):
+            self.best_metrics['best_stage1_accuracy'] = token_accuracy
             self.best_metrics['best_stage1_epoch'] = epoch
+            self.best_metrics['best_perplexity'] = perplexity
     
     def log_similarity_matrix(self,
                              text_features: torch.Tensor,
@@ -924,7 +939,12 @@ class WandBIntegration:
         fig, ax = plt.subplots(figsize=(12, max(6, len(layer_names) * 0.3)))
         
         y_pos = np.arange(len(layer_names))
-        colors = plt.cm.viridis(np.array(grad_norms) / (max(grad_norms) + 1e-8))
+        max_grad = max(grad_norms)
+        # Normalize colors (handle case where all gradients are zero)
+        if max_grad > 0:
+            colors = plt.cm.viridis(np.array(grad_norms) / max_grad)
+        else:
+            colors = plt.cm.viridis(np.zeros(len(grad_norms)))
         
         ax.barh(y_pos, grad_norms, color=colors, alpha=0.8)
         ax.set_yticks(y_pos)

@@ -392,64 +392,80 @@ class Stage1Trainer:
             # Forward pass with AMP
             if self.config.use_amp:
                 with autocast('cuda'):
+                    # Forward pass with decoder (BitMar-style)
                     outputs = self.model(
                         input_ids=input_ids,
                         images=images,
+                        target_ids=input_ids,  # Use same sequence as target for reconstruction
+                        use_decoder=True,
                         return_contrastive_features=True
                     )
                     
-                    # Compute contrastive loss
-                    contrastive_dict = outputs['contrastive_features']
-                    if contrastive_dict:
-                        loss_dict = compute_contrastive_loss(
-                            text_features=contrastive_dict['text_features'],
-                            image_features=contrastive_dict['image_features'],
-                            text_queue=contrastive_dict['text_queue'],
-                            image_queue=contrastive_dict['image_queue'],
-                            temperature=contrastive_dict['temperature']
-                        )
-                        contrastive_loss = loss_dict['contrastive_loss']
-                    else:
-                        contrastive_loss = torch.tensor(0.0, device=self.device)
+                    # Extract features for contrastive loss
+                    contrastive_dict = outputs.get('contrastive_features', {})
+                    text_features = contrastive_dict.get('text_features') if contrastive_dict else None
+                    image_features = contrastive_dict.get('image_features') if contrastive_dict else None
                     
-                    # Compute memory KL loss
-                    memory_kl_loss = self.model.episodic_memory.get_memory_kl_loss()
+                    # Get memory KL loss
+                    memory_kl = self.model.episodic_memory.get_memory_kl_loss()
+                    outputs['memory_kl'] = memory_kl
                     
-                    # Total loss
-                    loss = (
-                        self.config.contrastive_weight * contrastive_loss +
-                        self.config.memory_kl_weight * memory_kl_loss
+                    # Compute multi-component loss (BitMar-style: text + contrastive + memory)
+                    loss, loss_dict = self.model.compute_loss(
+                        outputs=outputs,
+                        target_ids=input_ids,
+                        text_features=text_features,
+                        image_features=image_features,
+                        text_loss_weight=1.0,  # Main learning signal
+                        contrastive_loss_weight=self.config.contrastive_weight,  # 0.1
+                        memory_kl_weight=self.config.memory_kl_weight  # 0.05
                     )
+                    
+                    # Extract individual losses for logging
+                    contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                    memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
+                    text_loss = loss_dict.get('text_loss', 0.0)
+                    perplexity = loss_dict.get('perplexity', 0.0)
+                    token_accuracy = loss_dict.get('token_accuracy', 0.0)
                 
                 # Backward pass with gradient scaling
                 self.scaler.scale(loss / self.config.grad_accum_steps).backward()
             else:
+                # Forward pass with decoder (BitMar-style, no AMP)
                 outputs = self.model(
                     input_ids=input_ids,
                     images=images,
+                    target_ids=input_ids,
+                    use_decoder=True,
                     return_contrastive_features=True
                 )
                 
-                # Compute losses
-                contrastive_dict = outputs['contrastive_features']
-                if contrastive_dict:
-                    loss_dict = compute_contrastive_loss(
-                        text_features=contrastive_dict['text_features'],
-                        image_features=contrastive_dict['image_features'],
-                        text_queue=contrastive_dict['text_queue'],
-                        image_queue=contrastive_dict['image_queue'],
-                        temperature=contrastive_dict['temperature']
-                    )
-                    contrastive_loss = loss_dict['contrastive_loss']
-                else:
-                    contrastive_loss = torch.tensor(0.0, device=self.device)
+                # Extract features for contrastive loss
+                contrastive_dict = outputs.get('contrastive_features', {})
+                text_features = contrastive_dict.get('text_features') if contrastive_dict else None
+                image_features = contrastive_dict.get('image_features') if contrastive_dict else None
                 
-                memory_kl_loss = self.model.episodic_memory.get_memory_kl_loss()
+                # Get memory KL loss
+                memory_kl = self.model.episodic_memory.get_memory_kl_loss()
+                outputs['memory_kl'] = memory_kl
                 
-                loss = (
-                    self.config.contrastive_weight * contrastive_loss +
-                    self.config.memory_kl_weight * memory_kl_loss
+                # Compute multi-component loss
+                loss, loss_dict = self.model.compute_loss(
+                    outputs=outputs,
+                    target_ids=input_ids,
+                    text_features=text_features,
+                    image_features=image_features,
+                    text_loss_weight=1.0,
+                    contrastive_loss_weight=self.config.contrastive_weight,
+                    memory_kl_weight=self.config.memory_kl_weight
                 )
+                
+                # Extract individual losses for logging
+                contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
+                text_loss = loss_dict.get('text_loss', 0.0)
+                perplexity = loss_dict.get('perplexity', 0.0)
+                token_accuracy = loss_dict.get('token_accuracy', 0.0)
                 
                 (loss / self.config.grad_accum_steps).backward()
             
@@ -493,19 +509,17 @@ class Stage1Trainer:
             
             # Accumulate metrics
             total_loss += loss.item()
-            total_contrastive_loss += contrastive_loss.item()
-            total_memory_kl_loss += memory_kl_loss.item()
-            if contrastive_dict:
-                total_acc_t2i += loss_dict['acc_t2i'].item()
-                total_acc_i2t += loss_dict['acc_i2t'].item()
+            total_contrastive_loss += contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0
+            total_memory_kl_loss += memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
             num_batches += 1
             
             # Update progress bar
             current_lr = self.optimizer.param_groups[0]['lr']
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
-                'cont': f"{contrastive_loss.item():.4f}",
-                'acc_t2i': f"{loss_dict['acc_t2i'].item():.3f}" if contrastive_dict else "0.000",
+                'text': f"{text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0:.4f}",
+                'cont': f"{contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0:.4f}",
+                'ppl': f"{perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0:.2f}",
                 'lr': f"{current_lr:.2e}"
             })
             
@@ -514,10 +528,11 @@ class Stage1Trainer:
                 self.wandb.log_stage1_metrics(
                     epoch=self.epoch,
                     loss=loss.item(),
-                    contrastive_loss=contrastive_loss.item(),
-                    memory_kl_loss=memory_kl_loss.item(),
-                    acc_t2i=loss_dict['acc_t2i'].item() if contrastive_dict else 0.0,
-                    acc_i2t=loss_dict['acc_i2t'].item() if contrastive_dict else 0.0,
+                    text_loss=text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
+                    contrastive_loss=contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
+                    memory_kl_loss=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
+                    perplexity=perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0,
+                    token_accuracy=token_accuracy if isinstance(token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0,
                     lr=current_lr
                 )
                 
@@ -584,10 +599,11 @@ class Stage1Trainer:
         self.model.eval()
         
         total_loss = 0.0
+        total_text_loss = 0.0
         total_contrastive_loss = 0.0
         total_memory_kl_loss = 0.0
-        total_acc_t2i = 0.0
-        total_acc_i2t = 0.0
+        total_perplexity = 0.0
+        total_token_accuracy = 0.0
         num_batches = 0
         
         with torch.no_grad():
@@ -595,52 +611,58 @@ class Stage1Trainer:
                 input_ids = batch['input_ids'].to(self.device)
                 images = batch['images'].to(self.device)
                 
-                # Forward pass
+                # Forward pass with decoder
                 outputs = self.model(
                     input_ids=input_ids,
                     images=images,
+                    target_ids=input_ids,
+                    use_decoder=True,
                     return_contrastive_features=True
                 )
                 
-                # Compute losses
-                contrastive_dict = outputs['contrastive_features']
-                if contrastive_dict:
-                    loss_dict = compute_contrastive_loss(
-                        text_features=contrastive_dict['text_features'],
-                        image_features=contrastive_dict['image_features'],
-                        text_queue=contrastive_dict['text_queue'],
-                        image_queue=contrastive_dict['image_queue'],
-                        temperature=contrastive_dict['temperature']
-                    )
-                    contrastive_loss = loss_dict['contrastive_loss']
-                    acc_t2i = loss_dict['acc_t2i']
-                    acc_i2t = loss_dict['acc_i2t']
-                else:
-                    contrastive_loss = torch.tensor(0.0, device=self.device)
-                    acc_t2i = 0.0
-                    acc_i2t = 0.0
+                # Extract features for contrastive loss
+                contrastive_dict = outputs.get('contrastive_features', {})
+                text_features = contrastive_dict.get('text_features') if contrastive_dict else None
+                image_features = contrastive_dict.get('image_features') if contrastive_dict else None
                 
-                memory_kl_loss = self.model.episodic_memory.get_memory_kl_loss()
+                # Get memory KL loss
+                memory_kl = self.model.episodic_memory.get_memory_kl_loss()
+                outputs['memory_kl'] = memory_kl
                 
-                loss = (
-                    self.config.contrastive_weight * contrastive_loss +
-                    self.config.memory_kl_weight * memory_kl_loss
+                # Compute multi-component loss
+                loss, loss_dict = self.model.compute_loss(
+                    outputs=outputs,
+                    target_ids=input_ids,
+                    text_features=text_features,
+                    image_features=image_features,
+                    text_loss_weight=1.0,
+                    contrastive_loss_weight=self.config.contrastive_weight,
+                    memory_kl_weight=self.config.memory_kl_weight
                 )
                 
+                # Extract individual losses for logging
+                contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
+                text_loss = loss_dict.get('text_loss', 0.0)
+                perplexity = loss_dict.get('perplexity', 0.0)
+                token_accuracy = loss_dict.get('token_accuracy', 0.0)
+                
                 total_loss += loss.item()
-                total_contrastive_loss += contrastive_loss.item()
-                total_memory_kl_loss += memory_kl_loss.item()
-                total_acc_t2i += acc_t2i
-                total_acc_i2t += acc_i2t
+                total_text_loss += text_loss
+                total_contrastive_loss += contrastive_loss
+                total_memory_kl_loss += memory_kl_loss
+                total_perplexity += perplexity
+                total_token_accuracy += token_accuracy
                 num_batches += 1
         
         # Average metrics
         avg_metrics = {
             'val_loss': total_loss / num_batches,
+            'val_text_loss': total_text_loss / num_batches,
             'val_contrastive_loss': total_contrastive_loss / num_batches,
             'val_memory_kl_loss': total_memory_kl_loss / num_batches,
-            'val_acc_t2i': total_acc_t2i / num_batches,
-            'val_acc_i2t': total_acc_i2t / num_batches
+            'val_perplexity': total_perplexity / num_batches,
+            'val_token_accuracy': total_token_accuracy / num_batches
         }
         
         self.model.train()
