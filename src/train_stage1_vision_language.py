@@ -685,13 +685,14 @@ class Stage1Trainer:
                 lr=combined_metrics['learning_rate']
             )
             
-            # Log validation metrics separately
+            # Log validation metrics in organized sections
             self.wandb.log({
-                'val/loss': val_metrics['val_loss'],
-                'val/contrastive_loss': val_metrics['val_contrastive_loss'],
-                'val/memory_kl_loss': val_metrics['val_memory_kl_loss'],
-                'val/acc_t2i': val_metrics['val_acc_t2i'],
-                'val/acc_i2t': val_metrics['val_acc_i2t']
+                'validation/loss_total': val_metrics['val_loss'],
+                'validation/loss_contrastive': val_metrics['val_contrastive_loss'],
+                'validation/loss_memory_kl': val_metrics['val_memory_kl_loss'],
+                'validation/acc_text_to_image': val_metrics['val_acc_t2i'],
+                'validation/acc_image_to_text': val_metrics['val_acc_i2t'],
+                'validation/acc_average': (val_metrics['val_acc_t2i'] + val_metrics['val_acc_i2t']) / 2.0
             }, step=self.global_step)
             
             # Epoch-level visualizations (using validation data for clean vis)

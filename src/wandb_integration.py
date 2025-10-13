@@ -598,7 +598,7 @@ class WandBIntegration:
                           acc_i2t: float,
                           lr: float):
         """
-        Log Stage 1 (Vision-Language) specific metrics
+        Log Stage 1 (Vision-Language) specific metrics organized by sections
         
         Args:
             epoch: Current epoch
@@ -611,14 +611,19 @@ class WandBIntegration:
         """
         
         metrics = {
-            "stage1/epoch": epoch,
-            "stage1/loss/total": loss,
-            "stage1/loss/contrastive": contrastive_loss,
-            "stage1/loss/memory_kl": memory_kl_loss,
-            "stage1/accuracy/text_to_image": acc_t2i,
-            "stage1/accuracy/image_to_text": acc_i2t,
-            "stage1/accuracy/average": (acc_t2i + acc_i2t) / 2.0,
-            "stage1/learning_rate": lr
+            # Training metadata
+            "train/epoch": epoch,
+            "train/learning_rate": lr,
+            
+            # Loss components (separate section)
+            "loss/total": loss,
+            "loss/contrastive_fiber": contrastive_loss,
+            "loss/memory_kl_larimar": memory_kl_loss,
+            
+            # Accuracy metrics (separate section)
+            "accuracy/text_to_image": acc_t2i,
+            "accuracy/image_to_text": acc_i2t,
+            "accuracy/average": (acc_t2i + acc_i2t) / 2.0,
         }
         
         wandb.log(metrics, step=self.step)
@@ -665,7 +670,7 @@ class WandBIntegration:
         ax.plot([0, batch_size], [0, batch_size], 'b--', linewidth=2, label='Correct Matches')
         ax.legend()
         
-        wandb.log({"stage1/similarity_matrix": wandb.Image(fig)}, step=step)
+        wandb.log({"visualizations/similarity_matrix": wandb.Image(fig)}, step=step)
         plt.close(fig)
     
     def log_embedding_space_umap(self,
@@ -726,7 +731,7 @@ class WandBIntegration:
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        wandb.log({"stage1/embedding_space_umap": wandb.Image(fig)}, step=step)
+        wandb.log({"visualizations/embedding_space_umap": wandb.Image(fig)}, step=step)
         plt.close(fig)
     
     def log_memory_activation_heatmap(self,
@@ -768,7 +773,7 @@ class WandBIntegration:
         ax2.legend()
         
         plt.tight_layout()
-        wandb.log({"stage1/memory_activation": wandb.Image(fig)}, step=step)
+        wandb.log({"visualizations/memory_activation": wandb.Image(fig)}, step=step)
         plt.close(fig)
     
     def log_queue_quality_heatmap(self,
@@ -821,7 +826,7 @@ class WandBIntegration:
         ax2.set_ylabel('Current Image Index')
         
         plt.tight_layout()
-        wandb.log({"stage1/queue_quality": wandb.Image(fig)}, step=step)
+        wandb.log({"visualizations/queue_quality": wandb.Image(fig)}, step=step)
         plt.close(fig)
     
     def log_loss_components_stacked(self,
@@ -840,12 +845,12 @@ class WandBIntegration:
             epoch: Current epoch
             step: Current step
         """
-        # Log individual components
+        # Log individual components in separate section
         wandb.log({
-            "stage1/loss/t2i": loss_t2i,
-            "stage1/loss/i2t": loss_i2t,
-            "stage1/loss/memory_kl": memory_kl,
-            "stage1/loss/contrastive_total": (loss_t2i + loss_i2t) / 2.0
+            "components/loss_text_to_image": loss_t2i,
+            "components/loss_image_to_text": loss_i2t,
+            "components/loss_memory_kl": memory_kl,
+            "components/loss_contrastive_combined": (loss_t2i + loss_i2t) / 2.0
         }, step=step)
     
     def log_retrieval_precision_at_k(self,
@@ -877,7 +882,7 @@ class WandBIntegration:
             correct_indices = torch.arange(batch_size).unsqueeze(1)
             hits = (topk_indices == correct_indices).any(dim=1).float()
             precision_at_k = hits.mean().item()
-            t2i_metrics[f"stage1/precision@{k}/t2i"] = precision_at_k
+            t2i_metrics[f"metrics/precision@{k}_text_to_image"] = precision_at_k
         
         # Image-to-Text retrieval
         i2t_metrics = {}
@@ -886,7 +891,7 @@ class WandBIntegration:
             correct_indices = torch.arange(batch_size).unsqueeze(1)
             hits = (topk_indices == correct_indices).any(dim=1).float()
             precision_at_k = hits.mean().item()
-            i2t_metrics[f"stage1/precision@{k}/i2t"] = precision_at_k
+            i2t_metrics[f"metrics/precision@{k}_image_to_text"] = precision_at_k
         
         # Log all metrics
         wandb.log({**t2i_metrics, **i2t_metrics}, step=step)
@@ -930,7 +935,7 @@ class WandBIntegration:
         ax.grid(True, alpha=0.3, axis='x')
         
         plt.tight_layout()
-        wandb.log({"stage1/gradient_flow": wandb.Image(fig)}, step=step)
+        wandb.log({"visualizations/gradient_flow": wandb.Image(fig)}, step=step)
         plt.close(fig)
     
     def log_stage2_metrics(self,
