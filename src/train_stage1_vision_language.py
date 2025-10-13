@@ -501,11 +501,12 @@ class Stage1Trainer:
             num_batches += 1
             
             # Update progress bar
+            current_lr = self.optimizer.param_groups[0]['lr']
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'cont': f"{contrastive_loss.item():.4f}",
                 'acc_t2i': f"{loss_dict['acc_t2i'].item():.3f}" if contrastive_dict else "0.000",
-                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
+                'lr': f"{current_lr:.2e}"
             })
             
             # Log to wandb every 10 steps
@@ -517,7 +518,7 @@ class Stage1Trainer:
                     memory_kl_loss=memory_kl_loss.item(),
                     acc_t2i=loss_dict['acc_t2i'].item() if contrastive_dict else 0.0,
                     acc_i2t=loss_dict['acc_i2t'].item() if contrastive_dict else 0.0,
-                    lr=self.scheduler.get_last_lr()[0]
+                    lr=current_lr
                 )
                 
                 # Log loss components
