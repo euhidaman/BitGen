@@ -676,14 +676,13 @@ class Stage1Trainer:
             combined_metrics['epoch'] = epoch + 1
             combined_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
             self.wandb.log_stage1_metrics(
+                epoch=epoch,
                 loss=train_metrics['loss'],
                 contrastive_loss=train_metrics['contrastive_loss'],
-                memory_kl=train_metrics['memory_kl_loss'],
+                memory_kl_loss=train_metrics['memory_kl_loss'],
                 acc_t2i=train_metrics['acc_t2i'],
                 acc_i2t=train_metrics['acc_i2t'],
-                learning_rate=combined_metrics['learning_rate'],
-                epoch=epoch,
-                step=self.global_step
+                lr=combined_metrics['learning_rate']
             )
             
             # Log validation metrics separately
