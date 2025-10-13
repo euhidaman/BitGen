@@ -606,15 +606,14 @@ class Stage1Trainer:
                     lr=current_lr
                 )
                 
-                # Log loss components
-                if contrastive_dict:
-                    self.wandb.log_loss_components_stacked(
-                        loss_t2i=loss_dict['loss_t2i'].item(),
-                        loss_i2t=loss_dict['loss_i2t'].item(),
-                        memory_kl=memory_kl_loss.item(),
-                        epoch=self.epoch,
-                        step=self.global_step
-                    )
+                # Log loss components (new multi-component loss)
+                self.wandb.log_loss_components_stacked(
+                    text_loss=text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
+                    contrastive_loss=contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
+                    memory_kl=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
+                    epoch=self.epoch,
+                    step=self.global_step
+                )
                 
                 self.wandb.step = self.global_step
             

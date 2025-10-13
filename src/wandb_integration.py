@@ -845,28 +845,41 @@ class WandBIntegration:
         plt.close(fig)
     
     def log_loss_components_stacked(self,
-                                   loss_t2i: float,
-                                   loss_i2t: float,
-                                   memory_kl: float,
-                                   epoch: int,
-                                   step: int):
+                                   text_loss: float = 0.0,
+                                   contrastive_loss: float = 0.0,
+                                   memory_kl: float = 0.0,
+                                   loss_t2i: float = 0.0,
+                                   loss_i2t: float = 0.0,
+                                   epoch: int = 0,
+                                   step: int = 0):
         """
-        Log loss components as stacked area chart (accumulated over epoch)
+        Log loss components as stacked area chart (BitMar-style multi-component)
         
         Args:
-            loss_t2i: Text-to-image loss
-            loss_i2t: Image-to-text loss
-            memory_kl: Memory KL divergence
+            text_loss: Text reconstruction loss (BitMar-style)
+            contrastive_loss: Contrastive learning loss (FIBER-style)
+            memory_kl: Memory KL divergence (Larimar-style)
+            loss_t2i: Text-to-image loss (legacy, optional)
+            loss_i2t: Image-to-text loss (legacy, optional)
             epoch: Current epoch
             step: Current step
         """
-        # Log individual components in separate section
-        wandb.log({
-            "components/loss_text_to_image": loss_t2i,
-            "components/loss_image_to_text": loss_i2t,
-            "components/loss_memory_kl": memory_kl,
-            "components/loss_contrastive_combined": (loss_t2i + loss_i2t) / 2.0
-        }, step=step)
+        # Log individual components in separate section (new multi-component loss)
+        log_dict = {
+            "components/loss_text_reconstruction": text_loss,
+            "components/loss_contrastive_fiber": contrastive_loss,
+            "components/loss_memory_kl_larimar": memory_kl,
+        }
+        
+        # Add legacy metrics if provided
+        if loss_t2i > 0 or loss_i2t > 0:
+            log_dict.update({
+                "components/loss_text_to_image": loss_t2i,
+                "components/loss_image_to_text": loss_i2t,
+                "components/loss_contrastive_combined": (loss_t2i + loss_i2t) / 2.0
+            })
+        
+        wandb.log(log_dict, step=step)
     
     def log_retrieval_precision_at_k(self,
                                     text_features: torch.Tensor,
