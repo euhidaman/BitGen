@@ -50,6 +50,8 @@ class GPM(nn.Module):
         # For tracking memory statistics
         self.register_buffer('memory_read_count', torch.zeros(memory_size))
         self.register_buffer('memory_write_count', torch.zeros(memory_size))
+        self.register_buffer('memory_quality', torch.ones(memory_size))  # Quality scores for memories
+        self.register_buffer('memory_age', torch.zeros(memory_size))  # Age of memories (for decay)
     
     def _get_prior_params(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -123,9 +125,12 @@ class GPM(nn.Module):
         
         similarity = torch.matmul(query_norm, memory_norm.T)  # [B*L, K]
         
+        # Weight similarity by memory quality (Larimar enhancement)
+        quality_weighted_similarity = similarity * self.memory_quality.unsqueeze(0)
+        
         # Get top-k memories
         top_k = min(top_k, self._memory_size)
-        top_k_scores, top_k_indices = torch.topk(similarity, k=top_k, dim=-1)
+        top_k_scores, top_k_indices = torch.topk(quality_weighted_similarity, k=top_k, dim=-1)
         
         # Weighted retrieval
         weights = F.softmax(top_k_scores, dim=-1)  # [B*L, top_k]
@@ -250,6 +255,90 @@ class GPM(nn.Module):
         kl_loss = 0.5 * (var + mean_sq - 1.0 - self.memory_logvar)
         
         return kl_loss.mean()
+    
+    def save_memory(self, path: str):
+        """
+        Save memory state to disk (Larimar-style external storage)
+        
+        Args:
+            path: Path to save memory state
+        """
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        memory_state = {
+            'memory_mean': self.memory_mean.cpu(),
+            'memory_logvar': self.memory_logvar.cpu(),
+            'memory_read_count': self.memory_read_count.cpu(),
+            'memory_write_count': self.memory_write_count.cpu(),
+            'memory_quality': self.memory_quality.cpu(),
+            'memory_age': self.memory_age.cpu(),
+            'config': {
+                'code_size': self._code_size,
+                'memory_size': self._memory_size,
+                'direct_write': self._direct_write,
+                'ordering': self._ordering,
+                'deterministic': self._deterministic
+            }
+        }
+        
+        torch.save(memory_state, path)
+        print(f"Memory state saved to {path}")
+    
+    def load_memory(self, path: str):
+        """
+        Load memory state from disk (Larimar-style external storage)
+        
+        Args:
+            path: Path to load memory state from
+        """
+        import os
+        if not os.path.exists(path):
+            print(f"Warning: Memory state file not found at {path}")
+            return
+        
+        memory_state = torch.load(path, map_location=self.memory_mean.device)
+        
+        # Restore memory parameters
+        self.memory_mean.data = memory_state['memory_mean'].to(self.memory_mean.device)
+        self.memory_logvar.data = memory_state['memory_logvar'].to(self.memory_logvar.device)
+        self.memory_read_count.data = memory_state['memory_read_count'].to(self.memory_read_count.device)
+        self.memory_write_count.data = memory_state['memory_write_count'].to(self.memory_write_count.device)
+        self.memory_quality.data = memory_state['memory_quality'].to(self.memory_quality.device)
+        self.memory_age.data = memory_state['memory_age'].to(self.memory_age.device)
+        
+        print(f"Memory state loaded from {path}")
+        print(f"Memory size: {self._memory_size}, Code size: {self._code_size}")
+        print(f"Total reads: {self.memory_read_count.sum().item()}, Total writes: {self.memory_write_count.sum().item()}")
+    
+    def update_memory_quality(self, indices: torch.Tensor, success_rate: float):
+        """
+        Update quality scores for memories based on usage success
+        
+        Args:
+            indices: Indices of accessed memories
+            success_rate: Success rate (0.0 to 1.0) for this access
+        """
+        with torch.no_grad():
+            # Exponential moving average of quality
+            alpha = 0.1
+            for idx in indices.view(-1).unique():
+                old_quality = self.memory_quality[idx]
+                self.memory_quality[idx] = (1 - alpha) * old_quality + alpha * success_rate
+    
+    def decay_memory_age(self, decay_rate: float = 0.01):
+        """
+        Increment memory age and apply decay to old memories
+        
+        Args:
+            decay_rate: Rate at which old memories decay
+        """
+        with torch.no_grad():
+            self.memory_age += 1
+            
+            # Apply quality decay for old memories
+            age_factor = torch.exp(-decay_rate * self.memory_age)
+            self.memory_quality *= age_factor
 
 
 class BitGenMemory(nn.Module):
@@ -306,3 +395,19 @@ class BitGenMemory(nn.Module):
     def get_memory_kl_loss(self) -> torch.Tensor:
         """Get KL loss from GPM"""
         return self.gpm.get_memory_kl_loss()
+    
+    def save_memory(self, path: str):
+        """Save memory state to disk"""
+        self.gpm.save_memory(path)
+    
+    def load_memory(self, path: str):
+        """Load memory state from disk"""
+        self.gpm.load_memory(path)
+    
+    def update_memory_quality(self, indices: torch.Tensor, success_rate: float):
+        """Update memory quality scores"""
+        self.gpm.update_memory_quality(indices, success_rate)
+    
+    def decay_memory_age(self, decay_rate: float = 0.01):
+        """Apply age-based decay to memory quality"""
+        self.gpm.decay_memory_age(decay_rate)
