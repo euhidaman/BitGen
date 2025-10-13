@@ -700,6 +700,167 @@ Models are automatically pushed to HuggingFace Hub after every epoch:
 - `monitor`: System performance monitoring
 - `analyze`: Analyze training/inference results
 
+## 🏛️ BitGen Architecture Overview
+
+### **Encoder-Decoder Design (BitMar-Inspired)**
+
+BitGen follows an **encoder-decoder architecture** similar to BitMar, combining the best elements from three research projects:
+
+1. **BitMar**: Encoder-decoder structure with multi-component loss
+2. **FIBER**: Cross-modal fusion with queue-based contrastive learning
+3. **Larimar**: Enhanced Generative Parametric Memory (GPM) with Bayesian inference
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        BITGEN ARCHITECTURE                              │
+│                  (BitMar + FIBER + Enhanced Larimar)                    │
+└─────────────────────────────────────────────────────────────────────────┘
+
+INPUT STAGE:
+┌──────────────┐         ┌──────────────┐
+│ Text Tokens  │         │ Image Patches│
+│ [B, seq_len] │         │ [B, patches] │
+└──────────────┘         └──────────────┘
+       │                         │
+       ▼                         ▼
+┌──────────────┐         ┌──────────────┐
+│Token + Pos   │         │DINOv2 Vision │
+│Embeddings    │         │Encoder       │
+└──────────────┘         └──────────────┘
+       │                         │
+       └─────────┬───────────────┘
+                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   FIBER CROSS-MODAL FUSION                      │
+│  • Queue-based contrastive learning (4096 negative samples)    │
+│  • Temperature-scaled similarity (τ = 0.1)                      │
+│  • Bidirectional alignment: image ↔ text                        │
+└─────────────────────────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              ENHANCED LARIMAR GPM MEMORY                        │
+│  • Bayesian parametric memory: mean + logvar                    │
+│  • Top-K retrieval with cosine similarity (k=5)                 │
+│  • Memory quality tracking (read/write counts)                  │
+│  • KL divergence regularization                                 │
+│  • Save/load capability for external storage                    │
+└─────────────────────────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│           MULTI-LAYER ATTENTION (6 layers)                      │
+│  • Attention Sinks for streaming inference                      │
+│  • Multi-head self-attention                                    │
+│  • Gradient monitoring for stability                            │
+└─────────────────────────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              REASONING MODULE (Tiny-R1 Style)                   │
+│  • LSTM-based chain-of-thought reasoning                        │
+│  • Adaptive reasoning steps (max 8)                             │
+│  • Gate mechanism for reasoning depth                           │
+└─────────────────────────────────────────────────────────────────┘
+                 │
+                 ├────────────────┬────────────────┐
+                 ▼                ▼                ▼
+        ┌────────────────┐ ┌────────────┐ ┌──────────────┐
+        │ ENCODER OUTPUT │ │  DECODER   │ │ROBOT SELECTOR│
+        │   (Direct)     │ │   (New!)   │ │  (Top-K)     │
+        └────────────────┘ └────────────┘ └──────────────┘
+
+DECODER STAGE (BitMar-Style):
+┌─────────────────────────────────────────────────────────────────┐
+│                 BITNET TEXT DECODER                             │
+│  • Multi-layer decoder with causal attention                    │
+│  • Cross-attention to encoder output                            │
+│  • Teacher forcing during training                              │
+│  • Autoregressive generation during inference                   │
+└─────────────────────────────────────────────────────────────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+        │Text Reconstruction│
+        │    Logits        │
+        │ [B, tgt_len, V]  │
+        └─────────────────┘
+```
+
+### **Multi-Component Loss Function (BitMar-Style)**
+
+The model is trained with three loss components, following BitMar's approach:
+
+```
+Total Loss = α·Text Loss + β·Contrastive Loss + γ·Memory KL Loss
+
+Where:
+  α = 1.0   (text reconstruction - main learning signal)
+  β = 0.1   (image-text alignment - FIBER-style)
+  γ = 0.05  (memory regularization - Larimar-style)
+```
+
+**Loss Components:**
+
+1. **Text Reconstruction Loss** (α = 1.0) - PRIMARY SIGNAL
+   - Cross-entropy on decoder output
+   - Next-token prediction with teacher forcing
+   - Metrics: Perplexity, Token Accuracy
+   - This is the main learning objective
+
+2. **Contrastive Loss** (β = 0.1) - ALIGNMENT
+   - FIBER-style queue-based contrastive learning
+   - Symmetric: loss_t2i + loss_i2t
+   - Temperature-scaled similarity (τ = 0.1)
+   - Ensures vision-language alignment
+
+3. **Memory KL Divergence** (γ = 0.05) - REGULARIZATION
+   - Larimar-style Bayesian memory regularization
+   - KL(posterior || prior) on memory distributions
+   - Prevents memory overfitting
+   - Encourages generalization
+
+### **Key Improvements from Original BitGen**
+
+| Component | Before | After (Current) |
+|-----------|--------|-----------------|
+| **Architecture** | Encoder only | Encoder-decoder (BitMar-style) |
+| **Loss Function** | Contrastive only | Multi-component (text + contrastive + memory KL) |
+| **Memory** | Simple GPM | Enhanced GPM with Bayesian inference + quality tracking |
+| **Cross-Modal** | Basic fusion | FIBER-style queue-based (4096 negatives) |
+| **Text Generation** | Direct projection | Proper decoder with causal attention |
+| **Learning Signal** | Weak (contrastive only) | Strong (text reconstruction primary) |
+| **Optimization** | Fixed LR | Warmup + adaptive (ReduceLROnPlateau) |
+
+### **Training Stability Features**
+
+- **Warmup Scheduler**: 1000 steps linear warmup
+- **Adaptive LR**: ReduceLROnPlateau (patience=3, factor=0.5)
+- **Temperature**: 0.1 (smoother gradients than 0.07)
+- **Gradient Monitoring**: Track gradient norms every 100 steps
+- **Mixed Precision**: torch.amp.autocast for faster training
+- **Gradient Clipping**: Prevents exploding gradients
+
+### **Architecture Diagram: Loss Computation Flow**
+
+```
+Forward Pass → Model Outputs → Compute Multi-Loss → Backprop
+     │              │                    │                │
+     │              ├── decoder_logits ──┤                │
+     │              ├── contrastive_feat─┤                │
+     │              └── memory_kl ────────┤                │
+     │                                    │                │
+     ▼                                    ▼                ▼
+ [Input]                        [Loss Components]    [Gradients]
+  Text                           • text_loss (1.0)      │
+  Images                         • contrastive (0.1)    │
+  Targets                        • memory_kl (0.05)     │
+                                 ────────────────────   │
+                                 Total Loss = Σ(αᵢ·Lᵢ)  │
+                                                        ▼
+                                                   [Optimizer]
+```
+
 ## 📈 Performance Targets
 
 ### Training Efficiency
