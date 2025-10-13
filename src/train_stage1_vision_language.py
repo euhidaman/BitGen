@@ -55,13 +55,13 @@ class Stage1Config:
     vision_embed_dim: int = 128
     fusion_layers: int = 2
     
-    # Training config
+    # Training config (BitMar-style - KISS!)
     batch_size: int = 160
     grad_accum_steps: int = 2  # Effective batch: 320
-    learning_rate: float = 1e-4  # Reduced from 5e-4 for stability
-    weight_decay: float = 0.01
+    learning_rate: float = 2e-4  # Match BitMar exactly
+    weight_decay: float = 0.02  # Match BitMar exactly
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
-    warmup_steps: int = 1000  # Increased warmup for better stability
+    warmup_steps: int = 1000  # Match BitMar exactly
     
     # Early stopping config
     early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
@@ -411,34 +411,16 @@ class Stage1Trainer:
         self.global_step = 0
         self.epoch = 0
         self.total_steps = 0  # Will be set in train()
-        self.warmup_complete = False
     
     def _setup_scheduler(self, num_training_steps: int):
-        """Setup learning rate scheduler: cosine warmup + adaptive plateau-based reduction"""
-        # Cosine warmup scheduler (smoother, more dynamic than linear)
-        import math
-        def warmup_lambda(current_step: int):
-            if current_step < self.config.warmup_steps:
-                # Cosine warmup: smooth increase from 0 to 1
-                progress = float(current_step) / float(max(1, self.config.warmup_steps))
-                return 0.5 * (1.0 + math.cos(math.pi * (1.0 - progress)))
-            return 1.0  # After warmup, keep at 1.0 (full LR)
-        
-        self.warmup_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, warmup_lambda)
-        
-        # Adaptive scheduler (epoch-based, kicks in after warmup)
-        # Reduces LR by 0.5x when validation loss doesn't improve for 3 epochs
-        self.plateau_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        """Setup learning rate scheduler: BitMar-style cosine with warm restarts (KISS!)"""
+        # Simple cosine annealing with warm restarts - exactly like BitMar
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            mode='min',
-            factor=0.5,  # Reduce LR by half
-            patience=3,  # Wait 3 epochs before reducing
-            min_lr=1e-7  # Don't go below this
+            T_0=1000,  # Restart every 1000 steps (match BitMar)
+            T_mult=2,  # Double the restart period each time
+            eta_min=self.config.learning_rate * 0.1  # Min LR = 10% of max
         )
-        
-        # Set base learning rate
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = self.config.learning_rate
     
     def train_epoch(self, dataloader: DataLoader) -> Dict:
         """Train for one epoch"""
@@ -561,12 +543,8 @@ class Stage1Trainer:
                 
                 self.optimizer.zero_grad()
                 
-                # Step warmup scheduler during warmup phase only
-                if self.global_step < self.config.warmup_steps:
-                    self.warmup_scheduler.step()
-                elif not self.warmup_complete:
-                    self.warmup_complete = True
-                    print(f"\n🎓 Warmup complete at step {self.global_step}! Now using adaptive LR based on validation loss.")
+                # Step scheduler every iteration (BitMar-style - KISS!)
+                self.scheduler.step()
                 
                 self.global_step += 1
                 
@@ -892,14 +870,8 @@ class Stage1Trainer:
             
             print(f"✅ Visualizations complete")
             
-            # Adaptive learning rate reduction based on validation loss
-            # Only after warmup is complete
-            if self.warmup_complete:
-                old_lr = self.optimizer.param_groups[0]['lr']
-                self.plateau_scheduler.step(val_metrics['val_loss'])
-                new_lr = self.optimizer.param_groups[0]['lr']
-                if new_lr < old_lr:
-                    print(f"\n📉 Learning rate reduced: {old_lr:.2e} → {new_lr:.2e} (validation loss plateaued)")
+            # Cosine scheduler handles LR automatically (BitMar-style - KISS!)
+            # No manual LR reduction needed
             
             # Early stopping check
             val_loss = val_metrics['val_loss']
