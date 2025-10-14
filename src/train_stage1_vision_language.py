@@ -672,8 +672,25 @@ class Stage1Trainer:
 
             # Gradient accumulation
             if (batch_idx + 1) % self.config.grad_accum_steps == 0:
+                # Log gradient statistics BEFORE clipping (every 100 steps)
+                if (self.global_step + 1) % 100 == 0:
+                    if self.config.use_amp:
+                        self.scaler.unscale_(self.optimizer)
+                    
+                    total_norm = 0.0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    total_norm = total_norm ** 0.5
+                    print(
+                        f"\n🔍 Step {self.global_step + 1}: Gradient norm = {total_norm:.6f} (before clip), LR = {self.optimizer.param_groups[0]['lr']:.2e}")
+                
                 if self.config.use_amp:
-                    self.scaler.unscale_(self.optimizer)
+                    # Unscale if not already done
+                    if (self.global_step + 1) % 100 != 0:
+                        self.scaler.unscale_(self.optimizer)
+                    
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         self.config.max_grad_norm
@@ -686,17 +703,6 @@ class Stage1Trainer:
                         self.config.max_grad_norm
                     )
                     self.optimizer.step()
-
-                # Log gradient statistics BEFORE zeroing (every 100 steps)
-                if (self.global_step + 1) % 100 == 0:
-                    total_norm = 0.0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                    total_norm = total_norm ** 0.5
-                    print(
-                        f"\n🔍 Step {self.global_step + 1}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
 
                 self.optimizer.zero_grad()
                 

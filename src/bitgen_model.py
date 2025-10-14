@@ -341,6 +341,16 @@ class CrossModalFusion(nn.Module):
         self.embed_dim = config.embed_dim
         self.vision_embed_dim = config.vision_embed_dim
         self.num_fuse_layers = config.fusion_layers
+        
+        # FIBER-style queue for contrastive learning (momentum-based)
+        self.queue_size = getattr(config, 'queue_size', 8192)  # Default 8192
+        self.register_buffer('text_queue', torch.randn(config.embed_dim, self.queue_size))
+        self.register_buffer('image_queue', torch.randn(config.embed_dim, self.queue_size))
+        self.register_buffer('queue_ptr', torch.zeros(1, dtype=torch.long))
+        
+        # Normalize queues
+        self.text_queue = F.normalize(self.text_queue, p=2, dim=0)
+        self.image_queue = F.normalize(self.image_queue, p=2, dim=0)
 
         # MANDATORY: DINOv2 Vision Encoder - no fallback allowed
         try:
@@ -430,6 +440,29 @@ class CrossModalFusion(nn.Module):
 
         # Average pooling for image features
         self.avgpool = nn.AdaptiveAvgPool1d(1)
+
+    @torch.no_grad()
+    def _dequeue_and_enqueue(self, text_keys, image_keys):
+        """Update queues with new features (momentum-based, no gradients)"""
+        batch_size = text_keys.shape[0]
+        
+        ptr = int(self.queue_ptr)
+        
+        # Replace oldest features in queue (circular buffer)
+        if ptr + batch_size <= self.queue_size:
+            self.text_queue[:, ptr:ptr + batch_size] = text_keys.T
+            self.image_queue[:, ptr:ptr + batch_size] = image_keys.T
+            ptr = (ptr + batch_size) % self.queue_size
+        else:
+            # Wrap around
+            remaining = self.queue_size - ptr
+            self.text_queue[:, ptr:] = text_keys[:remaining].T
+            self.image_queue[:, ptr:] = image_keys[:remaining].T
+            self.text_queue[:, :batch_size - remaining] = text_keys[remaining:].T
+            self.image_queue[:, :batch_size - remaining] = image_keys[remaining:].T
+            ptr = batch_size - remaining
+        
+        self.queue_ptr[0] = ptr
 
     def encode_vision_dinov2(self, images):
         """Mandatory DINOv2-base feature extraction from HuggingFace - no fallback"""
@@ -559,9 +592,15 @@ class CrossModalFusion(nn.Module):
                 text_cls = torch.clamp(text_cls, min=-10.0, max=10.0)
                 image_cls = torch.clamp(image_cls, min=-10.0, max=10.0)
 
+            # Update queues (momentum-based, no gradients)
+            if self.training:
+                self._dequeue_and_enqueue(text_cls.detach(), image_cls.detach())
+
             return fused_output, {
                 'text_features': text_cls,
                 'image_features': image_cls,
+                'text_queue': self.text_queue.clone(),  # [embed_dim, queue_size]
+                'image_queue': self.image_queue.clone(),  # [embed_dim, queue_size]
                 'temperature': self.temperature
             }
 
