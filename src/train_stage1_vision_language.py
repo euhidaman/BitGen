@@ -609,6 +609,17 @@ class Stage1Trainer:
                     )
                     self.optimizer.step()
 
+                # Log gradient statistics BEFORE zeroing (every 100 steps)
+                if (self.global_step + 1) % 100 == 0:
+                    total_norm = 0.0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    total_norm = total_norm ** 0.5
+                    print(
+                        f"\n🔍 Step {self.global_step + 1}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
+
                 self.optimizer.zero_grad()
                 
                 # Step scheduler every iteration (BitMar-style - KISS!)
@@ -618,16 +629,7 @@ class Stage1Trainer:
                 
                 # Clear CUDA cache periodically to avoid fragmentation
                 if self.global_step % 50 == 0:
-                    torch.cuda.empty_cache()                # Log gradient statistics every 100 steps
-                if self.global_step % 100 == 0:
-                    total_norm = 0.0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                    total_norm = total_norm ** 0.5
-                    print(
-                        f"\n🔍 Step {self.global_step}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
+                    torch.cuda.empty_cache()
 
             # Accumulate metrics
             total_loss += loss.item()
