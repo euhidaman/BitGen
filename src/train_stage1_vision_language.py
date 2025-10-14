@@ -672,11 +672,12 @@ class Stage1Trainer:
 
             # Gradient accumulation
             if (batch_idx + 1) % self.config.grad_accum_steps == 0:
+                # Unscale gradients ONCE before any operations (AMP)
+                if self.config.use_amp:
+                    self.scaler.unscale_(self.optimizer)
+                
                 # Log gradient statistics BEFORE clipping (every 100 steps)
                 if (self.global_step + 1) % 100 == 0:
-                    if self.config.use_amp:
-                        self.scaler.unscale_(self.optimizer)
-                    
                     total_norm = 0.0
                     for p in self.model.parameters():
                         if p.grad is not None:
@@ -686,22 +687,17 @@ class Stage1Trainer:
                     print(
                         f"\n🔍 Step {self.global_step + 1}: Gradient norm = {total_norm:.6f} (before clip), LR = {self.optimizer.param_groups[0]['lr']:.2e}")
                 
+                # Clip gradients (after unscaling, before stepping)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.max_grad_norm
+                )
+                
+                # Optimizer step
                 if self.config.use_amp:
-                    # Unscale if not already done
-                    if (self.global_step + 1) % 100 != 0:
-                        self.scaler.unscale_(self.optimizer)
-                    
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.max_grad_norm
-                    )
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.max_grad_norm
-                    )
                     self.optimizer.step()
 
                 self.optimizer.zero_grad()
