@@ -17,6 +17,7 @@ from larima_memory import BitGenMemory
 from bitgen_model import BitGenConfig, BitNetLinear, BitNetTextDecoder
 import os
 import sys
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -448,10 +449,10 @@ class Stage1Trainer:
         self.patience_counter = 0
         self.best_epoch = 0
 
-        # Optimizer - start with 0 LR for warmup
+        # Optimizer - start with target LR (scheduler will handle warmup)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=0,  # Will be set by warmup scheduler
+            lr=config.learning_rate,  # Start with target LR
             weight_decay=config.weight_decay
         )
 
@@ -468,14 +469,19 @@ class Stage1Trainer:
         self.total_steps = 0  # Will be set in train()
 
     def _setup_scheduler(self, num_training_steps: int):
-        """Setup learning rate scheduler: BitMar-style cosine with warm restarts (KISS!)"""
-        # Simple cosine annealing with warm restarts - exactly like BitMar
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer,
-            T_0=1000,  # Restart every 1000 steps (match BitMar)
-            T_mult=2,  # Double the restart period each time
-            eta_min=self.config.learning_rate * 0.1  # Min LR = 10% of max
-        )
+        """Setup learning rate scheduler with linear warmup then cosine decay"""
+        from torch.optim.lr_scheduler import LambdaLR
+        
+        def lr_lambda(current_step: int):
+            # Linear warmup for first warmup_steps
+            if current_step < self.config.warmup_steps:
+                return float(current_step) / float(max(1, self.config.warmup_steps))
+            
+            # Cosine decay after warmup
+            progress = float(current_step - self.config.warmup_steps) / float(max(1, num_training_steps - self.config.warmup_steps))
+            return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))  # Cosine from 1.0 to 0.1
+        
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
 
     def train_epoch(self, dataloader: DataLoader) -> Dict:
         """Train for one epoch"""
