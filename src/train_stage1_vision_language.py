@@ -83,7 +83,7 @@ class Stage1Config:
     use_amp: bool = True
     
     # HuggingFace Hub config
-    push_to_hub_interval: int = 1000  # Push every N steps (not epochs!)
+    push_to_hub_every_epoch: bool = True  # Push checkpoint at end of each epoch
     max_checkpoints_to_keep: int = 5  # Keep last N checkpoints only
 
     # Paths
@@ -734,11 +734,6 @@ class Stage1Trainer:
                 'i2t': f"{acc_i2t if isinstance(acc_i2t, float) else acc_i2t.item() if hasattr(acc_i2t, 'item') else 0.0:.2f}",
                 'lr': f"{current_lr:.2e}"
             })
-            
-            # Push to HuggingFace Hub at intervals (BitMar-style)
-            if self.global_step > 0 and self.global_step % self.config.push_to_hub_interval == 0:
-                print(f"\n📤 Pushing checkpoint at step {self.global_step} to HuggingFace Hub...")
-                self._push_checkpoint_to_hub(self.global_step)
 
             # Log to wandb every 10 steps
             if self.global_step % 10 == 0:
@@ -932,17 +927,17 @@ class Stage1Trainer:
             }, best_path)
             print(f"✅ New best model saved: {best_path}")
     
-    def _push_checkpoint_to_hub(self, step: int):
-        """Push checkpoint to HuggingFace Hub at specific iteration (BitMar-style)"""
+    def _push_checkpoint_to_hub(self, epoch: int):
+        """Push checkpoint to HuggingFace Hub at end of epoch"""
         try:
             # Create checkpoint folder name
-            checkpoint_name = f"checkpoint-{step}"
+            checkpoint_name = f"checkpoint-epoch-{epoch+1}"
             checkpoint_path = os.path.join(self.config.checkpoint_dir, f"{checkpoint_name}.pt")
             
             # Save checkpoint
             torch.save({
-                'global_step': step,
-                'epoch': self.epoch,
+                'global_step': self.global_step,
+                'epoch': epoch,
                 'model_state_dict': self.model.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'scheduler_state_dict': self.scheduler.state_dict(),
@@ -954,8 +949,8 @@ class Stage1Trainer:
                 checkpoint_path=checkpoint_path,
                 checkpoint_name=checkpoint_name,
                 metrics={
-                    'step': step,
-                    'epoch': self.epoch
+                    'step': self.global_step,
+                    'epoch': epoch
                 }
             )
             
@@ -967,13 +962,13 @@ class Stage1Trainer:
             print(f"⚠️ Failed to push checkpoint: {e}")
     
     def _cleanup_old_checkpoints(self, keep_last: int = 5):
-        """Keep only last N checkpoints to save disk space (BitMar-style)"""
+        """Keep only last N checkpoints to save disk space"""
         try:
-            checkpoint_dir = PathlibPath(self.config.checkpoint_dir)
+            checkpoint_dir = Path(self.config.checkpoint_dir)
             # Get all checkpoint files (excluding best model)
             checkpoints = sorted(
-                [f for f in checkpoint_dir.glob("checkpoint-*.pt")],
-                key=lambda x: int(x.stem.split('-')[1])  # Sort by step number
+                [f for f in checkpoint_dir.glob("checkpoint-epoch-*.pt")],
+                key=lambda x: int(x.stem.split('-')[-1])  # Sort by epoch number
             )
             
             # Remove old checkpoints
