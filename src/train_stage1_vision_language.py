@@ -14,7 +14,7 @@ from wandb_integration import setup_wandb_integration
 from data_loader import COCODataset
 from fiber_fusion import FIBERCrossModalFusion
 from larima_memory import BitGenMemory
-from bitgen_model import BitGenConfig, BitNetLinear
+from bitgen_model import BitGenConfig, BitNetLinear, BitNetTextDecoder
 import os
 import sys
 import torch
@@ -122,6 +122,9 @@ class BitGenVisionLanguageModel(nn.Module):
         self.layer_norm = nn.LayerNorm(config.embed_dim)
         self.dropout = nn.Dropout(0.1)
 
+        # Text decoder for reconstruction loss (BitMar-style)
+        self.text_decoder = BitNetTextDecoder(bitgen_config)
+
         # Initialize weights
         self.apply(self._init_weights)
 
@@ -206,13 +209,28 @@ class BitGenVisionLanguageModel(nn.Module):
         # Layer norm
         x = self.layer_norm(x)
 
-        # Note: Stage 1 doesn't have decoder yet - will be added in full BitGenModel
-        # For now, we return None for decoder_logits to maintain compatibility
+        # Text decoder for reconstruction loss (BitMar-style)
+        decoder_logits = None
+        if use_decoder and target_ids is not None:
+            # Get target embeddings
+            target_emb = self.token_embedding(target_ids)
+            target_pos_ids = torch.arange(target_ids.size(1), device=target_ids.device).unsqueeze(0)
+            target_pos_emb = self.pos_embedding(target_pos_ids)
+            target_inputs = self.dropout(target_emb + target_pos_emb)
+            
+            # Use encoder output (x) as context for decoder
+            decoder_logits = self.text_decoder(
+                x=target_inputs,
+                encoder_output=x,
+                attention_mask=None,
+                causal_mask=None
+            )
+
         outputs = {
             'embeddings': x,
             'contrastive_features': contrastive_dict,
             'memory_info': memory_info,
-            'decoder_logits': None  # Placeholder for compatibility with compute_loss
+            'decoder_logits': decoder_logits
         }
 
         return outputs
@@ -238,11 +256,38 @@ class BitGenVisionLanguageModel(nn.Module):
         loss_dict = {}
         total_loss = 0.0
 
-        # 1. Text Reconstruction Loss - NOT IMPLEMENTED in Stage 1
-        # Stage 1 focuses on vision-language alignment only
-        loss_dict['text_loss'] = 0.0
-        loss_dict['perplexity'] = 0.0
-        loss_dict['token_accuracy'] = 0.0
+        # 1. Text Reconstruction Loss (BitMar-style)
+        if outputs.get('decoder_logits') is not None and target_ids is not None:
+            decoder_logits = outputs['decoder_logits']  # [B, seq_len, vocab_size]
+            
+            # Reshape for loss computation
+            batch_size, seq_len, vocab_size = decoder_logits.shape
+            flat_logits = decoder_logits.reshape(-1, vocab_size)
+            flat_targets = target_ids.reshape(-1)
+            
+            # Cross-entropy loss
+            text_loss = F.cross_entropy(
+                flat_logits,
+                flat_targets,
+                ignore_index=-100  # Ignore padding tokens
+            )
+            
+            # Compute perplexity
+            perplexity = torch.exp(text_loss)
+            
+            # Compute token accuracy
+            predictions = flat_logits.argmax(dim=-1)
+            correct = (predictions == flat_targets).float()
+            token_accuracy = correct.mean()
+            
+            loss_dict['text_loss'] = text_loss.item()
+            loss_dict['perplexity'] = perplexity.item()
+            loss_dict['token_accuracy'] = token_accuracy.item()
+            total_loss += text_loss_weight * text_loss
+        else:
+            loss_dict['text_loss'] = 0.0
+            loss_dict['perplexity'] = 0.0
+            loss_dict['token_accuracy'] = 0.0
 
         # 2. Contrastive Loss (FIBER-style)
         if text_features is not None and image_features is not None:
@@ -784,9 +829,7 @@ class Stage1Trainer:
                 'global_step': self.global_step,
                 'model_state_dict': self.model.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
-                'warmup_scheduler_state_dict': self.warmup_scheduler.state_dict(),
-                'plateau_scheduler_state_dict': self.plateau_scheduler.state_dict(),
-                'warmup_complete': self.warmup_complete,
+                'scheduler_state_dict': self.scheduler.state_dict(),
                 'metrics': metrics,
                 'config': self.config
             }, best_path)
