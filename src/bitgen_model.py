@@ -797,15 +797,16 @@ class RobotSelector(nn.Module):
 class BitNetTextDecoder(nn.Module):
     """BitNet-based text decoder for text generation"""
 
-    def __init__(self, config: BitGenConfig):
+    def __init__(self, config: BitGenConfig, num_decoder_layers: int = 2):
         super().__init__()
         self.config = config
-        self.num_layers = config.num_layers
+        # Use fewer layers for decoder to save memory (default: 2 instead of 6)
+        self.num_layers = num_decoder_layers
         self.embed_dim = config.embed_dim
 
         # Decoder layers with causal attention
         self.decoder_layers = nn.ModuleList([
-            self._build_decoder_layer(config) for _ in range(config.num_layers)
+            self._build_decoder_layer(config) for _ in range(self.num_layers)
         ])
 
         # Layer norm

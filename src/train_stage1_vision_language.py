@@ -55,8 +55,8 @@ class Stage1Config:
     fusion_layers: int = 2
 
     # Training config (BitMar-style - KISS!)
-    batch_size: int = 160
-    grad_accum_steps: int = 2  # Effective batch: 320
+    batch_size: int = 128  # Balanced for memory with 2-layer decoder
+    grad_accum_steps: int = 2  # Effective batch: 256 (close to original 320)
     learning_rate: float = 2e-4  # Match BitMar exactly
     weight_decay: float = 0.02  # Match BitMar exactly
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
@@ -123,7 +123,8 @@ class BitGenVisionLanguageModel(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
         # Text decoder for reconstruction loss (BitMar-style)
-        self.text_decoder = BitNetTextDecoder(bitgen_config)
+        # Use only 2 decoder layers to save memory (vs 6 encoder layers)
+        self.text_decoder = BitNetTextDecoder(bitgen_config, num_decoder_layers=2)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -603,13 +604,15 @@ class Stage1Trainer:
                     self.optimizer.step()
 
                 self.optimizer.zero_grad()
-
+                
                 # Step scheduler every iteration (BitMar-style - KISS!)
                 self.scheduler.step()
-
+                
                 self.global_step += 1
-
-                # Log gradient statistics every 100 steps
+                
+                # Clear CUDA cache periodically to avoid fragmentation
+                if self.global_step % 50 == 0:
+                    torch.cuda.empty_cache()                # Log gradient statistics every 100 steps
                 if self.global_step % 100 == 0:
                     total_norm = 0.0
                     for p in self.model.parameters():
