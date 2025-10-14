@@ -826,10 +826,10 @@ class BitNetTextDecoder(nn.Module):
             # For attending to encoder outputs
             'cross_attn': AttentionSink(config),
             'ffn': nn.Sequential(
-                BitNetLinear(config.embed_dim, config.ff_dim),
+                BitNetLinear(config.embed_dim, config.ffn_dim),
                 nn.GELU(),
                 nn.Dropout(config.dropout),
-                BitNetLinear(config.ff_dim, config.embed_dim),
+                BitNetLinear(config.ffn_dim, config.embed_dim),
                 nn.Dropout(config.dropout)
             ),
             'ln1': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
