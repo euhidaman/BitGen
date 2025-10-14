@@ -822,15 +822,15 @@ Where:
 
 ### **Key Improvements from Original BitGen**
 
-| Component | Before | After (Current) |
-|-----------|--------|-----------------|
-| **Architecture** | Encoder only | Encoder-decoder (BitMar-style) |
-| **Loss Function** | Contrastive only | Multi-component (text + contrastive + memory KL) |
-| **Memory** | Simple GPM | Enhanced GPM with Bayesian inference + quality tracking |
-| **Cross-Modal** | Basic fusion | FIBER-style queue-based (4096 negatives) |
-| **Text Generation** | Direct projection | Proper decoder with causal attention |
-| **Learning Signal** | Weak (contrastive only) | Strong (text reconstruction primary) |
-| **Optimization** | Fixed LR | Warmup + adaptive (ReduceLROnPlateau) |
+| Component           | Before                  | After (Current)                                         |
+| ------------------- | ----------------------- | ------------------------------------------------------- |
+| **Architecture**    | Encoder only            | Encoder-decoder (BitMar-style)                          |
+| **Loss Function**   | Contrastive only        | Multi-component (text + contrastive + memory KL)        |
+| **Memory**          | Simple GPM              | Enhanced GPM with Bayesian inference + quality tracking |
+| **Cross-Modal**     | Basic fusion            | FIBER-style queue-based (4096 negatives)                |
+| **Text Generation** | Direct projection       | Proper decoder with causal attention                    |
+| **Learning Signal** | Weak (contrastive only) | Strong (text reconstruction primary)                    |
+| **Optimization**    | Fixed LR                | Warmup + adaptive (ReduceLROnPlateau)                   |
 
 ### **Training Stability Features**
 

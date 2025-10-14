@@ -12,6 +12,7 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
+
 @dataclass
 class BitGenConfig:
     """Configuration for BitGen model optimized for embedded systems"""
@@ -49,7 +50,7 @@ class BitGenConfig:
     num_robots: int = 5  # Exactly 5 robots from multi_robot_selection_dataset.json
     top_k_robots: int = 3  # Top-3 robot selection for multi-robot deployment
     robot_embed_dim: int = 32
-    
+
     def __post_init__(self):
         """Initialize robot types from multi_robot_selection_dataset.json"""
         if self.robot_types is None:
@@ -73,6 +74,7 @@ class BitGenConfig:
     dropout: float = 0.1
     layer_norm_eps: float = 1e-5
 
+
 class BitNetLinear(nn.Module):
     """1.58-bit quantized linear layer for embedded deployment"""
 
@@ -83,7 +85,8 @@ class BitNetLinear(nn.Module):
 
         # Store weights in full precision for training
         # FIXED: Better initialization for faster convergence
-        self.weight = nn.Parameter(torch.randn(out_features, in_features) * math.sqrt(2.0 / in_features))
+        self.weight = nn.Parameter(torch.randn(
+            out_features, in_features) * math.sqrt(2.0 / in_features))
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_features))
         else:
@@ -126,6 +129,7 @@ class BitNetLinear(nn.Module):
 
             return output
 
+
 class EpisodicMemory(nn.Module):
     """Larimar-inspired episodic memory for embedded systems"""
 
@@ -136,8 +140,10 @@ class EpisodicMemory(nn.Module):
         self.embed_dim = config.embed_dim
 
         # Memory parameters
-        self.memory_keys = nn.Parameter(torch.randn(config.memory_size, config.memory_dim))
-        self.memory_values = nn.Parameter(torch.randn(config.memory_size, config.embed_dim))
+        self.memory_keys = nn.Parameter(torch.randn(
+            config.memory_size, config.memory_dim))
+        self.memory_values = nn.Parameter(
+            torch.randn(config.memory_size, config.embed_dim))
 
         # Memory operations
         self.key_proj = BitNetLinear(config.embed_dim, config.memory_dim)
@@ -156,10 +162,13 @@ class EpisodicMemory(nn.Module):
         query_values = self.value_proj(x)  # [B, S, embed_dim]
 
         # Memory retrieval
-        similarities = torch.matmul(query_keys, self.memory_keys.T)  # [B, S, memory_size]
-        attention_weights = F.softmax(similarities / math.sqrt(self.memory_dim), dim=-1)
+        similarities = torch.matmul(
+            query_keys, self.memory_keys.T)  # [B, S, memory_size]
+        attention_weights = F.softmax(
+            similarities / math.sqrt(self.memory_dim), dim=-1)
 
-        retrieved_memories = torch.matmul(attention_weights, self.memory_values)  # [B, S, embed_dim]
+        retrieved_memories = torch.matmul(
+            attention_weights, self.memory_values)  # [B, S, embed_dim]
 
         # Combine input with retrieved memories
         combined = x + retrieved_memories
@@ -186,7 +195,8 @@ class EpisodicMemory(nn.Module):
         batch_size, seq_len, _ = keys.shape
 
         # Find most activated memory slots
-        max_attention, max_indices = attention_weights.max(dim=1)  # [B, memory_size]
+        max_attention, max_indices = attention_weights.max(
+            dim=1)  # [B, memory_size]
 
         # Update memory slots with high attention
         update_mask = (max_attention > 0.1).float()
@@ -199,9 +209,10 @@ class EpisodicMemory(nn.Module):
                     best_seq_idx = attention_weights[b, :, m].argmax().item()
 
                     self.memory_keys.data[m] = (1 - weight * 0.1) * self.memory_keys.data[m] + \
-                                              weight * 0.1 * keys[b, best_seq_idx]
+                        weight * 0.1 * keys[b, best_seq_idx]
                     self.memory_values.data[m] = (1 - weight * 0.1) * self.memory_values.data[m] + \
-                                                weight * 0.1 * values[b, best_seq_idx]
+                        weight * 0.1 * values[b, best_seq_idx]
+
 
 class VisionAttentionSink(nn.Module):
     """Attention layer specifically for vision processing with correct dimensions"""
@@ -214,18 +225,25 @@ class VisionAttentionSink(nn.Module):
         self.window_size = config.window_size
 
         # Linear projections for vision embeddings
-        self.q_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
-        self.k_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
-        self.v_proj = BitNetLinear(config.vision_embed_dim, config.num_heads * self.head_dim)
-        self.out_proj = BitNetLinear(config.num_heads * self.head_dim, config.vision_embed_dim)
+        self.q_proj = BitNetLinear(
+            config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.k_proj = BitNetLinear(
+            config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.v_proj = BitNetLinear(
+            config.vision_embed_dim, config.num_heads * self.head_dim)
+        self.out_proj = BitNetLinear(
+            config.num_heads * self.head_dim, config.vision_embed_dim)
 
     def forward(self, x, cache=None):
         batch_size, seq_len, embed_dim = x.shape
 
         # Project to Q, K, V
-        q = self.q_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
 
         # Compute attention
         scale = 1.0 / math.sqrt(self.head_dim)
@@ -240,6 +258,7 @@ class VisionAttentionSink(nn.Module):
 
         return output, None  # No cache for vision processing
 
+
 class AttentionSink(nn.Module):
     """Attention with sliding window and sink tokens for memory efficiency"""
 
@@ -251,18 +270,25 @@ class AttentionSink(nn.Module):
         self.window_size = config.window_size
 
         # Linear projections
-        self.q_proj = BitNetLinear(config.embed_dim, config.num_heads * config.head_dim)
-        self.k_proj = BitNetLinear(config.embed_dim, config.num_heads * config.head_dim)
-        self.v_proj = BitNetLinear(config.embed_dim, config.num_heads * config.head_dim)
-        self.out_proj = BitNetLinear(config.num_heads * config.head_dim, config.embed_dim)
+        self.q_proj = BitNetLinear(
+            config.embed_dim, config.num_heads * config.head_dim)
+        self.k_proj = BitNetLinear(
+            config.embed_dim, config.num_heads * config.head_dim)
+        self.v_proj = BitNetLinear(
+            config.embed_dim, config.num_heads * config.head_dim)
+        self.out_proj = BitNetLinear(
+            config.num_heads * config.head_dim, config.embed_dim)
 
     def forward(self, x, cache=None):
         batch_size, seq_len, embed_dim = x.shape
 
         # Project to Q, K, V
-        q = self.q_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(batch_size, seq_len,
+                                self.num_heads, self.head_dim).transpose(1, 2)
 
         # Attention sinks implementation
         if cache is not None and len(cache) > 0:
@@ -289,7 +315,8 @@ class AttentionSink(nn.Module):
 
         # Causal mask for autoregressive generation
         if seq_len > 1:
-            mask = torch.triu(torch.ones(seq_len, k.size(2)), diagonal=1).bool()
+            mask = torch.triu(torch.ones(seq_len, k.size(2)),
+                              diagonal=1).bool()
             mask = mask.to(scores.device)
             scores.masked_fill_(mask.unsqueeze(0).unsqueeze(0), float('-inf'))
 
@@ -304,6 +331,7 @@ class AttentionSink(nn.Module):
         new_cache = (k[:, :, -self.window_size:], v[:, :, -self.window_size:])
 
         return output, new_cache
+
 
 class CrossModalFusion(nn.Module):
     """FIBER-inspired advanced cross-modal fusion with mandatory DINOv2 vision encoding"""
@@ -320,7 +348,8 @@ class CrossModalFusion(nn.Module):
             print("🔄 Loading facebook/dinov2-base from HuggingFace...")
 
             # Load DINOv2-base model from HuggingFace
-            self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
+            self.dinov2_model = Dinov2Model.from_pretrained(
+                'facebook/dinov2-base')
             # CRITICAL FIX: Keep in train mode to allow gradient flow!
             self.dinov2_model.train()
 
@@ -331,9 +360,11 @@ class CrossModalFusion(nn.Module):
 
             # DINOv2-base outputs 768 dimensions
             self.dinov2_dim = 768
-            self.dinov2_to_vision = BitNetLinear(self.dinov2_dim, config.vision_embed_dim)
+            self.dinov2_to_vision = BitNetLinear(
+                self.dinov2_dim, config.vision_embed_dim)
 
-            print("✅ facebook/dinov2-base loaded successfully - TRAINABLE (requires_grad=True)!")
+            print(
+                "✅ facebook/dinov2-base loaded successfully - TRAINABLE (requires_grad=True)!")
 
         except ImportError as e:
             raise ImportError(
@@ -349,12 +380,16 @@ class CrossModalFusion(nn.Module):
             )
 
         # FIBER-style cross-modal transforms
-        self.cross_modal_text_transform = BitNetLinear(config.embed_dim, config.embed_dim)
-        self.cross_modal_image_transform = BitNetLinear(config.vision_embed_dim, config.embed_dim)
+        self.cross_modal_text_transform = BitNetLinear(
+            config.embed_dim, config.embed_dim)
+        self.cross_modal_image_transform = BitNetLinear(
+            config.vision_embed_dim, config.embed_dim)
 
         # Contrastive learning transforms (ITC)
-        self.cross_modal_text_transform_itc = BitNetLinear(config.embed_dim, config.embed_dim)
-        self.cross_modal_image_transform_itc = BitNetLinear(config.vision_embed_dim, config.embed_dim)
+        self.cross_modal_text_transform_itc = BitNetLinear(
+            config.embed_dim, config.embed_dim)
+        self.cross_modal_image_transform_itc = BitNetLinear(
+            config.vision_embed_dim, config.embed_dim)
 
         # FIBER-style poolers
         self.cross_modal_text_pooler = nn.Sequential(
@@ -402,11 +437,14 @@ class CrossModalFusion(nn.Module):
 
         # Preprocess images for DINOv2 (expects 224x224)
         if height != 224 or width != 224:
-            images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+            images = F.interpolate(images, size=(
+                224, 224), mode='bilinear', align_corners=False)
 
         # Normalize for DINOv2 (ImageNet normalization)
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(
+            1, 3, 1, 1).to(images.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(
+            1, 3, 1, 1).to(images.device)
         images_normalized = (images - mean) / std
 
         # CRITICAL FIX: Extract DINOv2 features WITH GRADIENTS for contrastive learning!
@@ -415,11 +453,13 @@ class CrossModalFusion(nn.Module):
 
         # Get patch embeddings (exclude CLS token)
         # outputs.last_hidden_state shape: [batch_size, num_patches + 1, 768]
-        patch_features = outputs.last_hidden_state[:, 1:, :]  # Remove CLS token
+        # Remove CLS token
+        patch_features = outputs.last_hidden_state[:, 1:, :]
 
         # Project DINOv2 features to our vision embedding dimension
         # Both DINOv2 AND projection are trainable for contrastive learning
-        vision_features = self.dinov2_to_vision(patch_features)  # [batch_size, num_patches, vision_embed_dim]
+        # [batch_size, num_patches, vision_embed_dim]
+        vision_features = self.dinov2_to_vision(patch_features)
 
         return vision_features
 
@@ -435,11 +475,14 @@ class CrossModalFusion(nn.Module):
         batch_size, seq_len, embed_dim = text_embeddings.shape
 
         # Encode vision with FIBER-style approach
-        original_image_embeds = self.encode_vision_fiber_style(images)  # [B, num_patches, vision_embed_dim=128]
+        original_image_embeds = self.encode_vision_fiber_style(
+            images)  # [B, num_patches, vision_embed_dim=128]
 
         # Transform to common embedding space
-        image_embeds = self.cross_modal_image_transform(original_image_embeds)  # [B, num_patches, embed_dim=256]
-        text_embeds = self.cross_modal_text_transform(text_embeddings)  # [B, seq_len, embed_dim=256]
+        image_embeds = self.cross_modal_image_transform(
+            original_image_embeds)  # [B, num_patches, embed_dim=256]
+        text_embeds = self.cross_modal_text_transform(
+            text_embeddings)  # [B, seq_len, embed_dim=256]
 
         # FIBER-style progressive cross-modal attention fusion
         fused_text = text_embeds.clone()
@@ -450,25 +493,29 @@ class CrossModalFusion(nn.Module):
 
             # Query from text, Key-Value from image
             q = fused_text  # [B, seq_len, embed_dim]
-            k = v = cross_att_layer(image_embeds)  # [B, num_patches, embed_dim//2]
+            # [B, num_patches, embed_dim//2]
+            k = v = cross_att_layer(image_embeds)
 
             # Expand k, v to match text embedding dimension
             k = torch.cat([k, k], dim=-1)  # [B, num_patches, embed_dim]
             v = torch.cat([v, v], dim=-1)  # [B, num_patches, embed_dim]
 
             # Simplified attention computation
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(embed_dim)
+            attn_scores = torch.matmul(
+                q, k.transpose(-2, -1)) / math.sqrt(embed_dim)
             attn_weights = F.softmax(attn_scores, dim=-1)
 
             # Apply attention to values
-            cross_attended = torch.matmul(attn_weights, v)  # [B, seq_len, embed_dim]
+            cross_attended = torch.matmul(
+                attn_weights, v)  # [B, seq_len, embed_dim]
 
             # Residual connection
             fused_text = fused_text + cross_attended * 0.1  # Small weight for stability
 
         # Final fusion
         # Create image summary for concatenation
-        avg_image_features = self.avgpool(image_embeds.transpose(1, 2)).view(batch_size, 1, embed_dim)
+        avg_image_features = self.avgpool(
+            image_embeds.transpose(1, 2)).view(batch_size, 1, embed_dim)
         avg_image_features = avg_image_features.expand(-1, seq_len, -1)
 
         # Concatenate and fuse
@@ -479,27 +526,35 @@ class CrossModalFusion(nn.Module):
         if return_contrastive_features:
             # Text features for contrastive learning
             text_itc = self.cross_modal_text_transform_itc(text_embeddings)
-            
+
             # STABILITY: Check for NaN before pooling
             if torch.isnan(text_itc).any() or torch.isinf(text_itc).any():
                 # Return safe default features
-                text_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
-                image_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
+                text_cls = torch.zeros(
+                    batch_size, self.config.embed_dim, device=text_embeddings.device)
+                image_cls = torch.zeros(
+                    batch_size, self.config.embed_dim, device=text_embeddings.device)
             else:
-                text_cls = self.cross_modal_text_pooler_itc(text_itc[:, 0:1])  # Use first token as CLS
-                text_cls = F.normalize(text_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
+                text_cls = self.cross_modal_text_pooler_itc(
+                    text_itc[:, 0:1])  # Use first token as CLS
+                text_cls = F.normalize(
+                    text_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
 
                 # Image features for contrastive learning - USE ORIGINAL EMBEDDINGS
-                image_itc = self.cross_modal_image_transform_itc(original_image_embeds)
-                
+                image_itc = self.cross_modal_image_transform_itc(
+                    original_image_embeds)
+
                 # STABILITY: Check for NaN in image features
                 if torch.isnan(image_itc).any() or torch.isinf(image_itc).any():
-                    image_cls = torch.zeros(batch_size, self.config.embed_dim, device=text_embeddings.device)
+                    image_cls = torch.zeros(
+                        batch_size, self.config.embed_dim, device=text_embeddings.device)
                 else:
-                    image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
+                    image_avg = self.avgpool(
+                        image_itc.transpose(1, 2)).view(batch_size, 1, -1)
                     image_cls = self.cross_modal_image_pooler_itc(image_avg)
-                    image_cls = F.normalize(image_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
-                
+                    image_cls = F.normalize(
+                        image_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
+
                 # STABILITY: Final check - clamp extreme values
                 text_cls = torch.clamp(text_cls, min=-10.0, max=10.0)
                 image_cls = torch.clamp(image_cls, min=-10.0, max=10.0)
@@ -517,7 +572,8 @@ class CrossModalFusion(nn.Module):
         batch_size = text_features.size(0)
 
         # Compute similarity matrix
-        logits_per_text = torch.matmul(text_features, image_features.T) / temperature
+        logits_per_text = torch.matmul(
+            text_features, image_features.T) / temperature
         logits_per_image = logits_per_text.T
 
         # Labels for contrastive learning (diagonal)
@@ -533,6 +589,7 @@ class CrossModalFusion(nn.Module):
         """Legacy method for backward compatibility"""
         return self.encode_vision_fiber_style(images)
 
+
 class ReasoningModule(nn.Module):
     """Tiny-R1 inspired Chain-of-Thought reasoning module for robot selection"""
 
@@ -542,9 +599,12 @@ class ReasoningModule(nn.Module):
         self.max_steps = config.max_reasoning_steps
 
         # Chain-of-thought reasoning components
-        self.reasoning_encoder = BitNetLinear(config.embed_dim, config.reasoning_dim)
-        self.step_processor = nn.LSTM(config.reasoning_dim, config.reasoning_dim, batch_first=True)
-        self.reasoning_decoder = BitNetLinear(config.reasoning_dim, config.embed_dim)
+        self.reasoning_encoder = BitNetLinear(
+            config.embed_dim, config.reasoning_dim)
+        self.step_processor = nn.LSTM(
+            config.reasoning_dim, config.reasoning_dim, batch_first=True)
+        self.reasoning_decoder = BitNetLinear(
+            config.reasoning_dim, config.embed_dim)
 
         # Step controller with confidence tracking
         self.step_gate = BitNetLinear(config.reasoning_dim, 1)
@@ -555,7 +615,8 @@ class ReasoningModule(nn.Module):
         batch_size, seq_len, embed_dim = x.shape
 
         # Encode to reasoning space
-        reasoning_input = self.reasoning_encoder(x.mean(dim=1))  # [B, reasoning_dim]
+        reasoning_input = self.reasoning_encoder(
+            x.mean(dim=1))  # [B, reasoning_dim]
 
         # Store reasoning traces for chain-of-thought analysis (like tiny-r1)
         reasoning_states = []
@@ -577,29 +638,35 @@ class ReasoningModule(nn.Module):
             # Check if reasoning should continue
             gate_score = torch.sigmoid(self.step_gate(output.squeeze(1)))
             gate_scores.append(gate_score)
-            
+
             if (gate_score < 0.5).all() and step > 2:  # Minimum 3 steps
                 break
 
             current_state = output
 
         # Aggregate reasoning steps
-        final_reasoning = torch.stack(reasoning_states, dim=0).mean(dim=0)  # [B, reasoning_dim]
+        final_reasoning = torch.stack(reasoning_states, dim=0).mean(
+            dim=0)  # [B, reasoning_dim]
 
-        reasoning_output = self.reasoning_decoder(final_reasoning)  # [B, embed_dim]
-        reasoning_output = reasoning_output.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
+        reasoning_output = self.reasoning_decoder(
+            final_reasoning)  # [B, embed_dim]
+        reasoning_output = reasoning_output.unsqueeze(
+            1).expand(-1, seq_len, -1)  # [B, seq_len, embed_dim]
 
         # Return with optional reasoning trace for logging
         if return_reasoning_trace:
             reasoning_info = {
-                'reasoning_states': reasoning_states,  # List of tensors [B, reasoning_dim]
+                # List of tensors [B, reasoning_dim]
+                'reasoning_states': reasoning_states,
                 'reasoning_confidences': reasoning_confidences,  # List of confidence scores
                 'gate_scores': gate_scores,  # List of gate decisions
-                'num_steps': len(reasoning_states)  # Number of reasoning steps taken
+                # Number of reasoning steps taken
+                'num_steps': len(reasoning_states)
             }
             return x + reasoning_output, reasoning_info
-        
+
         return x + reasoning_output
+
 
 class RobotSelector(nn.Module):
     """Top-K Multi-Label Robot Selection for multi-robot deployment scenarios"""
@@ -618,9 +685,11 @@ class RobotSelector(nn.Module):
         )
 
         # Selection network for multi-label classification (NOT softmax)
-        self.task_encoder = BitNetLinear(config.embed_dim, config.robot_embed_dim)
-        self.robot_scorer = BitNetLinear(config.robot_embed_dim * 2, 1)  # Binary score per robot
-        
+        self.task_encoder = BitNetLinear(
+            config.embed_dim, config.robot_embed_dim)
+        self.robot_scorer = BitNetLinear(
+            config.robot_embed_dim * 2, 1)  # Binary score per robot
+
         # STABILITY: Initialize scorer with small weights
         if hasattr(self.robot_scorer, 'weight'):
             nn.init.normal_(self.robot_scorer.weight, mean=0.0, std=0.02)
@@ -630,11 +699,11 @@ class RobotSelector(nn.Module):
     def forward(self, task_representation, return_top_k=True):
         """
         Select top-K robots for given task using multi-label classification
-        
+
         Args:
             task_representation: [B, seq_len, embed_dim] - Task/scene representation
             return_top_k: Whether to return top-K results with robot names
-            
+
         Returns:
             If return_top_k=True: Dict with all_probs, top_k_probs, top_k_indices, top_k_robots
             If return_top_k=False: [B, num_robots] probability tensor
@@ -643,11 +712,12 @@ class RobotSelector(nn.Module):
 
         # Encode task representation to robot embedding space
         task_repr_mean = task_representation.mean(dim=1)  # [B, embed_dim]
-        
+
         # STABILITY: Check for NaN in input
         if torch.isnan(task_repr_mean).any() or torch.isinf(task_repr_mean).any():
             # Return safe default: uniform probabilities
-            robot_probs = torch.ones(batch_size, self.num_robots, device=task_representation.device) * 0.5
+            robot_probs = torch.ones(
+                batch_size, self.num_robots, device=task_representation.device) * 0.5
             if return_top_k:
                 return {
                     'all_probs': robot_probs,
@@ -657,21 +727,24 @@ class RobotSelector(nn.Module):
                     'top_k_robots': [[self.robot_types[i] for i in range(self.top_k)] for _ in range(batch_size)]
                 }
             return robot_probs
-        
-        task_encoded = self.task_encoder(task_repr_mean)  # [B, robot_embed_dim]
-        
+
+        task_encoded = self.task_encoder(
+            task_repr_mean)  # [B, robot_embed_dim]
+
         # STABILITY: Normalize task encoding to prevent extreme values
-        task_encoded = torch.nn.functional.normalize(task_encoded, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
+        task_encoded = torch.nn.functional.normalize(
+            task_encoded, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
 
         # Compute independent score for each robot (multi-label, not mutually exclusive)
         robot_scores = []
         for i, robot_emb in enumerate(self.robot_embeddings):
             # Normalize robot embedding too
-            robot_emb_norm = torch.nn.functional.normalize(robot_emb, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
-            
+            robot_emb_norm = torch.nn.functional.normalize(
+                robot_emb, p=2, dim=-1) * (self.robot_embed_dim ** 0.5)
+
             # Concatenate task encoding with robot embedding
             combined = torch.cat([
-                task_encoded, 
+                task_encoded,
                 robot_emb_norm.unsqueeze(0).expand(batch_size, -1)
             ], dim=-1)
             # Score: how suitable is this robot for this task?
@@ -679,22 +752,24 @@ class RobotSelector(nn.Module):
             robot_scores.append(score)
 
         robot_scores = torch.stack(robot_scores, dim=1)  # [B, num_robots]
-        
+
         # CRITICAL: Clamp logits to prevent numerical overflow in sigmoid
         # sigmoid(x) = 1/(1+exp(-x)) can overflow if x is too large/small
         robot_scores = torch.clamp(robot_scores, min=-50.0, max=50.0)
-        
+
         # Use sigmoid for independent probabilities (multi-label)
-        robot_probs = torch.sigmoid(robot_scores)  # Each robot has independent probability
+        # Each robot has independent probability
+        robot_probs = torch.sigmoid(robot_scores)
 
         if return_top_k:
             # Get top-K most suitable robots
-            top_k_probs, top_k_indices = torch.topk(robot_probs, k=min(self.top_k, self.num_robots), dim=1)
-            
+            top_k_probs, top_k_indices = torch.topk(
+                robot_probs, k=min(self.top_k, self.num_robots), dim=1)
+
             # SAFETY: Clamp indices to valid range to prevent index out of bounds
             max_valid_idx = len(self.robot_types) - 1
             top_k_indices = torch.clamp(top_k_indices, 0, max_valid_idx)
-            
+
             # Convert indices to robot type names for interpretability
             top_k_robots = []
             for batch_indices in top_k_indices:
@@ -703,46 +778,53 @@ class RobotSelector(nn.Module):
                     for idx in batch_indices
                 ]
                 top_k_robots.append(batch_robots)
-            
+
             return {
-                'all_probs': robot_probs,  # [B, num_robots] - All robot probabilities
-                'all_logits': robot_scores,  # [B, num_robots] - Raw logits (for loss calculation)
+                # [B, num_robots] - All robot probabilities
+                'all_probs': robot_probs,
+                # [B, num_robots] - Raw logits (for loss calculation)
+                'all_logits': robot_scores,
                 'top_k_probs': top_k_probs,  # [B, top_k] - Top-K probabilities
-                'top_k_indices': top_k_indices,  # [B, top_k] - Top-K robot indices
-                'top_k_robots': top_k_robots  # List[List[str]] - Top-K robot names
+                # [B, top_k] - Top-K robot indices
+                'top_k_indices': top_k_indices,
+                # List[List[str]] - Top-K robot names
+                'top_k_robots': top_k_robots
             }
-        
+
         return robot_probs
 
 
 class BitNetTextDecoder(nn.Module):
     """BitNet-based text decoder for text generation"""
-    
+
     def __init__(self, config: BitGenConfig):
         super().__init__()
         self.config = config
         self.num_layers = config.num_layers
         self.embed_dim = config.embed_dim
-        
+
         # Decoder layers with causal attention
         self.decoder_layers = nn.ModuleList([
             self._build_decoder_layer(config) for _ in range(config.num_layers)
         ])
-        
+
         # Layer norm
-        self.layer_norm = nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps)
-        
+        self.layer_norm = nn.LayerNorm(
+            config.embed_dim, eps=config.layer_norm_eps)
+
         # Output projection to vocabulary
-        self.output_projection = BitNetLinear(config.embed_dim, config.vocab_size)
-        
+        self.output_projection = BitNetLinear(
+            config.embed_dim, config.vocab_size)
+
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
-        
+
     def _build_decoder_layer(self, config):
         """Build a single decoder layer"""
         return nn.ModuleDict({
             'self_attn': AttentionSink(config),
-            'cross_attn': AttentionSink(config),  # For attending to encoder outputs
+            # For attending to encoder outputs
+            'cross_attn': AttentionSink(config),
             'ffn': nn.Sequential(
                 BitNetLinear(config.embed_dim, config.ff_dim),
                 nn.GELU(),
@@ -754,7 +836,7 @@ class BitNetTextDecoder(nn.Module):
             'ln2': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
             'ln3': nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps),
         })
-    
+
     def forward(self, x, encoder_output, attention_mask=None, causal_mask=None):
         """
         Forward pass through decoder
@@ -767,46 +849,49 @@ class BitNetTextDecoder(nn.Module):
             logits: [B, tgt_len, vocab_size]
         """
         batch_size, tgt_len, _ = x.shape
-        
+
         # Create causal mask if not provided
         if causal_mask is None:
             causal_mask = torch.triu(
-                torch.ones(tgt_len, tgt_len, device=x.device, dtype=torch.bool),
+                torch.ones(tgt_len, tgt_len, device=x.device,
+                           dtype=torch.bool),
                 diagonal=1
             )
-        
+
         # Process through decoder layers
         for layer in self.decoder_layers:
             # Self-attention with causal mask (look only at previous tokens)
             residual = x
             x = layer['ln1'](x)
-            
+
             # Apply self-attention with causal masking
             # Note: AttentionSink doesn't natively support causal mask,
             # so we apply it post-attention
-            attn_output, _, _ = layer['self_attn'](x, x, x, attention_mask=None)
-            
+            attn_output, _, _ = layer['self_attn'](
+                x, x, x, attention_mask=None)
+
             # Apply causal mask to attention output
             # This is a simplification - ideally mask should be in attention computation
             x = residual + self.dropout(attn_output)
-            
+
             # Cross-attention to encoder output
             residual = x
             x = layer['ln2'](x)
-            cross_attn_output, _, _ = layer['cross_attn'](x, encoder_output, encoder_output, attention_mask=attention_mask)
+            cross_attn_output, _, _ = layer['cross_attn'](
+                x, encoder_output, encoder_output, attention_mask=attention_mask)
             x = residual + self.dropout(cross_attn_output)
-            
+
             # Feed-forward
             residual = x
             x = layer['ln3'](x)
             x = residual + layer['ffn'](x)
-        
+
         # Final layer norm
         x = self.layer_norm(x)
-        
+
         # Project to vocabulary
         logits = self.output_projection(x)
-        
+
         return logits
 
 
@@ -818,7 +903,8 @@ class BitGenModel(nn.Module):
         self.config = config
 
         # Token embeddings
-        self.token_embedding = nn.Embedding(config.vocab_size, config.embed_dim)
+        self.token_embedding = nn.Embedding(
+            config.vocab_size, config.embed_dim)
         self.pos_embedding = nn.Embedding(config.max_seq_len, config.embed_dim)
 
         # Core components
@@ -829,13 +915,15 @@ class BitGenModel(nn.Module):
         self.cross_modal_fusion = CrossModalFusion(config)
         self.reasoning_module = ReasoningModule(config)
         self.robot_selector = RobotSelector(config)
-        
+
         # Text decoder for reconstruction loss (BitMar-style)
         self.text_decoder = BitNetTextDecoder(config)
 
         # Output layers (keep for backward compatibility and direct prediction)
-        self.layer_norm = nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps)
-        self.output_projection = BitNetLinear(config.embed_dim, config.vocab_size)
+        self.layer_norm = nn.LayerNorm(
+            config.embed_dim, eps=config.layer_norm_eps)
+        self.output_projection = BitNetLinear(
+            config.embed_dim, config.vocab_size)
 
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
@@ -858,7 +946,7 @@ class BitGenModel(nn.Module):
     def forward(self, input_ids, images=None, attention_mask=None, return_robot_selection=False, attention_cache=None, return_analysis_data=False, return_attention_weights=False, target_ids=None, use_decoder=False):
         """
         Forward pass through BitGen model with comprehensive token validation
-        
+
         Args:
             input_ids: Input token IDs [B, seq_len]
             images: Optional image features [B, num_patches, image_dim]
@@ -875,10 +963,12 @@ class BitGenModel(nn.Module):
         # CRITICAL: Validate input tokens before any embedding operations
         if input_ids.max() >= self.config.vocab_size or input_ids.min() < 0:
             print(f"EMERGENCY: Token validation failed in model forward pass")
-            print(f"Token range: [{input_ids.min().item()}, {input_ids.max().item()}], vocab_size: {self.config.vocab_size}")
+            print(
+                f"Token range: [{input_ids.min().item()}, {input_ids.max().item()}], vocab_size: {self.config.vocab_size}")
             # Emergency clamp to prevent CUDA errors
             input_ids = torch.clamp(input_ids, 0, self.config.vocab_size - 1)
-            print(f"Applied emergency clamping: [{input_ids.min().item()}, {input_ids.max().item()}]")
+            print(
+                f"Applied emergency clamping: [{input_ids.min().item()}, {input_ids.max().item()}]")
 
         # Token and position embeddings with safe indexing
         try:
@@ -886,14 +976,17 @@ class BitGenModel(nn.Module):
         except RuntimeError as e:
             if "index" in str(e).lower():
                 print(f"Token embedding failed: {e}")
-                print(f"input_ids shape: {input_ids.shape}, max: {input_ids.max()}, vocab_size: {self.config.vocab_size}")
-                raise RuntimeError(f"Token embedding indexing error: max_token={input_ids.max()}, vocab_size={self.config.vocab_size}")
+                print(
+                    f"input_ids shape: {input_ids.shape}, max: {input_ids.max()}, vocab_size: {self.config.vocab_size}")
+                raise RuntimeError(
+                    f"Token embedding indexing error: max_token={input_ids.max()}, vocab_size={self.config.vocab_size}")
             raise
 
         # Safe position embedding
         pos_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         if seq_len > self.config.max_seq_len:
-            print(f"WARNING: Sequence length {seq_len} exceeds max_seq_len {self.config.max_seq_len}")
+            print(
+                f"WARNING: Sequence length {seq_len} exceeds max_seq_len {self.config.max_seq_len}")
             pos_ids = pos_ids[:, :self.config.max_seq_len]
 
         try:
@@ -901,8 +994,10 @@ class BitGenModel(nn.Module):
         except RuntimeError as e:
             if "index" in str(e).lower():
                 print(f"Position embedding failed: {e}")
-                print(f"pos_ids shape: {pos_ids.shape}, max: {pos_ids.max()}, max_seq_len: {self.config.max_seq_len}")
-                raise RuntimeError(f"Position embedding indexing error: max_pos={pos_ids.max()}, max_seq_len={self.config.max_seq_len}")
+                print(
+                    f"pos_ids shape: {pos_ids.shape}, max: {pos_ids.max()}, max_seq_len: {self.config.max_seq_len}")
+                raise RuntimeError(
+                    f"Position embedding indexing error: max_pos={pos_ids.max()}, max_seq_len={self.config.max_seq_len}")
             raise
 
         x = self.dropout(token_emb + pos_emb)
@@ -916,7 +1011,8 @@ class BitGenModel(nn.Module):
 
         if images is not None:
             # Get contrastive features and intermediate outputs for monitoring
-            fusion_output = self.cross_modal_fusion(x, images, return_contrastive_features=True)
+            fusion_output = self.cross_modal_fusion(
+                x, images, return_contrastive_features=True)
             if isinstance(fusion_output, tuple):
                 x, contrastive_features = fusion_output
                 # Extract text and image features for monitoring
@@ -958,7 +1054,8 @@ class BitGenModel(nn.Module):
         reasoning_input = x
         if return_robot_selection or return_analysis_data:
             # Get reasoning traces for robot selection and logging
-            x, reasoning_info = self.reasoning_module(x, return_reasoning_trace=True)
+            x, reasoning_info = self.reasoning_module(
+                x, return_reasoning_trace=True)
         else:
             # Standard reasoning without traces
             x = self.reasoning_module(x, return_reasoning_trace=False)
@@ -966,7 +1063,7 @@ class BitGenModel(nn.Module):
 
         # Layer normalization
         x = self.layer_norm(x)
-        
+
         # Store encoder output for decoder
         encoder_output = x
 
@@ -976,15 +1073,17 @@ class BitGenModel(nn.Module):
             # Prepare decoder input (shift targets right, prepend BOS)
             # For training, we use teacher forcing
             tgt_len = target_ids.shape[1]
-            
+
             # Get target embeddings
             tgt_token_emb = self.token_embedding(target_ids)
-            tgt_pos_ids = torch.arange(tgt_len, device=target_ids.device).unsqueeze(0)
+            tgt_pos_ids = torch.arange(
+                tgt_len, device=target_ids.device).unsqueeze(0)
             tgt_pos_emb = self.pos_embedding(tgt_pos_ids)
             decoder_input = self.dropout(tgt_token_emb + tgt_pos_emb)
-            
+
             # Run through decoder
-            decoder_logits = self.text_decoder(decoder_input, encoder_output, attention_mask=attention_mask)
+            decoder_logits = self.text_decoder(
+                decoder_input, encoder_output, attention_mask=attention_mask)
 
         # Output projection (direct prediction, kept for backward compatibility)
         logits = self.output_projection(x)
@@ -1009,7 +1108,8 @@ class BitGenModel(nn.Module):
         # Prepare output
         outputs = {
             'logits': logits,
-            'decoder_logits': decoder_logits,  # Text reconstruction logits (BitMar-style)
+            # Text reconstruction logits (BitMar-style)
+            'decoder_logits': decoder_logits,
             'robot_selection': robot_selection_output,  # Full top-K robot selection output
             'attention_cache': new_cache
         }
@@ -1020,7 +1120,8 @@ class BitGenModel(nn.Module):
 
         # Add monitoring data for wandb
         if return_attention_weights or return_analysis_data:
-            outputs['attention_weights'] = all_attention_weights[0] if len(all_attention_weights) > 0 else None
+            outputs['attention_weights'] = all_attention_weights[0] if len(
+                all_attention_weights) > 0 else None
             outputs['memory_bank'] = memory_info.get('memory_values')
             outputs['memory_usage'] = {
                 'read_count': memory_info.get('read_count', 0),
@@ -1045,7 +1146,8 @@ class BitGenModel(nn.Module):
                 'retrieved_memories': memory_info['retrieved_memories'],
 
                 # Attention analysis
-                'all_attention_weights': all_attention_weights,  # List of attention weights per layer
+                # List of attention weights per layer
+                'all_attention_weights': all_attention_weights,
                 'input_embeddings': token_emb + pos_emb,
                 'final_embeddings': x,
 
@@ -1058,7 +1160,7 @@ class BitGenModel(nn.Module):
                 # Robot selection analysis (Top-K multi-label)
                 **robot_info
             })
-        
+
         # Always include reasoning info if robot selection is enabled
         if return_robot_selection and reasoning_info:
             outputs['reasoning_info'] = reasoning_info
@@ -1070,9 +1172,12 @@ class BitGenModel(nn.Module):
         batch_size, seq_len, embed_dim = x.shape
 
         # Project to Q, K, V
-        q = attention_layer.q_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
-        k = attention_layer.k_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
-        v = attention_layer.v_proj(x).view(batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
+        q = attention_layer.q_proj(x).view(
+            batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
+        k = attention_layer.k_proj(x).view(
+            batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
+        v = attention_layer.v_proj(x).view(
+            batch_size, seq_len, attention_layer.num_heads, attention_layer.head_dim).transpose(1, 2)
 
         # Handle cache
         if cache is not None and len(cache) > 0:
@@ -1097,7 +1202,8 @@ class BitGenModel(nn.Module):
 
         # Causal mask
         if seq_len > 1:
-            mask = torch.triu(torch.ones(seq_len, k.size(2)), diagonal=1).bool()
+            mask = torch.triu(torch.ones(seq_len, k.size(2)),
+                              diagonal=1).bool()
             mask = mask.to(scores.device)
             scores.masked_fill_(mask.unsqueeze(0).unsqueeze(0), float('-inf'))
 
@@ -1110,7 +1216,7 @@ class BitGenModel(nn.Module):
             elif attention_mask.dim() == 3:
                 # [batch, 1, seq_len] -> [batch, 1, 1, seq_len]
                 attention_mask = attention_mask.unsqueeze(1)
-            
+
             # Convert attention_mask (0s and 1s) to additive mask (0s and -inf)
             attention_mask = (1.0 - attention_mask) * -10000.0
             scores = scores + attention_mask
@@ -1123,15 +1229,16 @@ class BitGenModel(nn.Module):
         output = attention_layer.out_proj(out)
 
         # Update cache
-        new_cache = (k[:, :, -attention_layer.window_size:], v[:, :, -attention_layer.window_size:])
+        new_cache = (k[:, :, -attention_layer.window_size:],
+                     v[:, :, -attention_layer.window_size:])
 
         return output, new_cache, attn_weights
-    
-    def compute_loss(self, outputs, target_ids, text_features=None, image_features=None, 
+
+    def compute_loss(self, outputs, target_ids, text_features=None, image_features=None,
                      text_loss_weight=1.0, contrastive_loss_weight=0.1, memory_kl_weight=0.05):
         """
         Compute multi-component loss (BitMar-style)
-        
+
         Args:
             outputs: Model outputs dictionary
             target_ids: Target token IDs for text reconstruction
@@ -1140,14 +1247,14 @@ class BitGenModel(nn.Module):
             text_loss_weight: Weight for text reconstruction loss (default: 1.0)
             contrastive_loss_weight: Weight for contrastive loss (default: 0.1)
             memory_kl_weight: Weight for memory KL divergence (default: 0.05)
-            
+
         Returns:
             total_loss: Combined weighted loss
             loss_dict: Dictionary of individual loss components
         """
         loss_dict = {}
         total_loss = 0.0
-        
+
         # 1. Text Reconstruction Loss (main learning signal)
         if outputs['decoder_logits'] is not None and target_ids is not None:
             decoder_logits = outputs['decoder_logits']
@@ -1157,7 +1264,7 @@ class BitGenModel(nn.Module):
             # We want to predict target_ids[1:] from decoder_logits[:-1]
             shift_logits = decoder_logits[:, :-1, :].contiguous()
             shift_labels = target_ids[:, 1:].contiguous()
-            
+
             text_loss = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
@@ -1165,40 +1272,41 @@ class BitGenModel(nn.Module):
             )
             loss_dict['text_loss'] = text_loss.item()
             total_loss += text_loss_weight * text_loss
-            
+
             # Compute perplexity
             perplexity = torch.exp(text_loss)
             loss_dict['perplexity'] = perplexity.item()
-            
+
             # Compute token accuracy
             predictions = shift_logits.argmax(dim=-1)
             correct = (predictions == shift_labels).float()
             token_accuracy = correct.mean()
             loss_dict['token_accuracy'] = token_accuracy.item()
-        
+
         # 2. Contrastive Loss (FIBER-style, for image-text alignment)
         if 'contrastive_features' in outputs and text_features is not None and image_features is not None:
             # Compute contrastive loss
             # Normalize features
             text_features = F.normalize(text_features, dim=-1)
             image_features = F.normalize(image_features, dim=-1)
-            
+
             # Compute similarity matrix
-            similarity = torch.matmul(text_features, image_features.t()) / 0.1  # temperature
-            
+            similarity = torch.matmul(
+                text_features, image_features.t()) / 0.1  # temperature
+
             # Labels: diagonal elements are positive pairs
             batch_size = similarity.size(0)
             labels = torch.arange(batch_size, device=similarity.device)
-            
+
             # Contrastive loss (symmetric)
             contrastive_loss = (
-                F.cross_entropy(similarity, labels) + 
+                F.cross_entropy(similarity, labels) +
                 F.cross_entropy(similarity.t(), labels)
             ) / 2.0
-            
+
             loss_dict['contrastive_loss'] = contrastive_loss.item()
             total_loss += contrastive_loss_weight * contrastive_loss
-        
+
         # 3. Memory KL Divergence Loss (Larimar-style, for memory regularization)
         # This would be computed if episodic memory returns KL divergence
         # For now, placeholder - will be implemented when enhancing larima_memory.py
@@ -1206,13 +1314,13 @@ class BitGenModel(nn.Module):
             memory_kl_loss = outputs['memory_kl']
             loss_dict['memory_kl_loss'] = memory_kl_loss.item()
             total_loss += memory_kl_weight * memory_kl_loss
-        
+
         loss_dict['total_loss'] = total_loss.item()
-        
+
         return total_loss, loss_dict
 
     # NOTE: _forward_reasoning_with_analysis() is now deprecated
-    # Reasoning traces are now handled directly in ReasoningModule.forward() 
+    # Reasoning traces are now handled directly in ReasoningModule.forward()
     # with return_reasoning_trace=True parameter
 
     def export_for_embedded(self, output_path: str):
@@ -1228,7 +1336,8 @@ class BitGenModel(nn.Module):
                 for name, param in self.named_parameters():
                     if 'BitNetLinear' in str(type(param)):
                         # Quantize BitNet layers
-                        quantized_weight, scale = self._quantize_for_embedded(param)
+                        quantized_weight, scale = self._quantize_for_embedded(
+                            param)
                         embedded_state[name] = quantized_weight
                         embedded_state[f"{name}_scale"] = scale
                     else:
@@ -1261,7 +1370,8 @@ class BitGenModel(nn.Module):
     def get_memory_usage(self):
         """Get model memory usage for embedded optimization"""
         total_params = sum(p.numel() for p in self.parameters())
-        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        trainable_params = sum(p.numel()
+                               for p in self.parameters() if p.requires_grad)
 
         # Estimate memory in MB (assuming float32)
         memory_mb = total_params * 4 / (1024 * 1024)
@@ -1274,6 +1384,8 @@ class BitGenModel(nn.Module):
         }
 
 # Factory function for different model sizes with consistent vocab
+
+
 def create_bitgen_model(size='tiny'):
     """Create BitGen model optimized for different embedded systems with consistent vocabulary"""
 

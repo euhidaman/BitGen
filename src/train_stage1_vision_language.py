@@ -9,6 +9,12 @@ After this stage, model should have:
 - FIBER-style cross-modal fusion (with queue-based contrastive)
 """
 
+from huggingface_integration import HuggingFaceIntegration
+from wandb_integration import setup_wandb_integration
+from data_loader import COCODataset
+from fiber_fusion import FIBERCrossModalFusion
+from larima_memory import BitGenMemory
+from bitgen_model import BitGenConfig, BitNetLinear
 import os
 import sys
 import torch
@@ -27,13 +33,6 @@ from typing import Dict, Optional, Tuple
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from bitgen_model import BitGenConfig, BitNetLinear
-from larima_memory import BitGenMemory
-from fiber_fusion import FIBERCrossModalFusion
-from data_loader import COCODataset
-from wandb_integration import setup_wandb_integration
-from huggingface_integration import HuggingFaceIntegration
-
 
 @dataclass
 class Stage1Config:
@@ -45,16 +44,16 @@ class Stage1Config:
     head_dim: int = 32
     ffn_dim: int = 512
     vocab_size: int = 8192
-    
+
     # Memory config (Larimar GPM)
     memory_size: int = 1000
     memory_dim: int = 256
     direct_writing: bool = True
-    
+
     # Vision config
     vision_embed_dim: int = 128
     fusion_layers: int = 2
-    
+
     # Training config (BitMar-style - KISS!)
     batch_size: int = 160
     grad_accum_steps: int = 2  # Effective batch: 320
@@ -62,23 +61,23 @@ class Stage1Config:
     weight_decay: float = 0.02  # Match BitMar exactly
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
     warmup_steps: int = 1000  # Match BitMar exactly
-    
+
     # Early stopping config
     early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
     min_delta: float = 0.001  # Minimum improvement to consider
     validation_split: float = 0.05  # 5% for validation
-    
+
     # Contrastive learning config
     contrastive_weight: float = 1.0
     memory_kl_weight: float = 0.01
     queue_size: int = 4096
     temperature: float = 0.1  # Increased from 0.07 for more stable gradients
-    
+
     # Optimization
     max_seq_len: int = 512
     max_grad_norm: float = 1.0
     use_amp: bool = True
-    
+
     # Paths
     data_file: str = "data/coco/validated_coco.json"
     checkpoint_dir: str = "checkpoints/stage1"
@@ -90,22 +89,23 @@ class BitGenVisionLanguageModel(nn.Module):
     BitGen Stage 1 Model: Vision-Language Pre-training ONLY
     No reasoning module - will be added in Stage 2
     """
-    
+
     def __init__(self, config: Stage1Config):
         super().__init__()
         self.config = config
-        
+
         # Token embeddings
-        self.token_embedding = nn.Embedding(config.vocab_size, config.embed_dim)
+        self.token_embedding = nn.Embedding(
+            config.vocab_size, config.embed_dim)
         self.pos_embedding = nn.Embedding(config.max_seq_len, config.embed_dim)
-        
+
         # FIBER cross-modal fusion (with DINOv2)
         bitgen_config = self._create_bitgen_config(config)
         self.cross_modal_fusion = FIBERCrossModalFusion(bitgen_config)
-        
+
         # Larimar GPM episodic memory
         self.episodic_memory = BitGenMemory(bitgen_config)
-        
+
         # Attention layers (simplified for Stage 1)
         self.attention_layers = nn.ModuleList([
             nn.TransformerEncoderLayer(
@@ -117,14 +117,14 @@ class BitGenVisionLanguageModel(nn.Module):
             )
             for _ in range(config.num_layers)
         ])
-        
+
         # Output layers
         self.layer_norm = nn.LayerNorm(config.embed_dim)
         self.dropout = nn.Dropout(0.1)
-        
+
         # Initialize weights
         self.apply(self._init_weights)
-    
+
     def _create_bitgen_config(self, config: Stage1Config):
         """Create BitGenConfig from Stage1Config"""
         return BitGenConfig(
@@ -141,7 +141,7 @@ class BitGenVisionLanguageModel(nn.Module):
             fusion_layers=config.fusion_layers,
             max_seq_len=config.max_seq_len
         )
-    
+
     def _init_weights(self, module):
         """Initialize weights"""
         if isinstance(module, nn.Linear):
@@ -153,7 +153,7 @@ class BitGenVisionLanguageModel(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
-    
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -164,47 +164,48 @@ class BitGenVisionLanguageModel(nn.Module):
     ) -> Dict:
         """
         Forward pass - Vision-Language fusion only
-        
+
         Args:
             input_ids: [batch_size, seq_len]
             images: [batch_size, 3, H, W]
             return_contrastive_features: Whether to return features for contrastive loss
             target_ids: Target token IDs for text reconstruction (optional, unused in Stage 1)
             use_decoder: Whether to use decoder (optional, unused in Stage 1)
-        
+
         Returns:
             outputs: Dictionary with embeddings and contrastive features
         """
         batch_size, seq_len = input_ids.shape
-        
+
         # Token + position embeddings
         token_emb = self.token_embedding(input_ids)
         pos_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         pos_emb = self.pos_embedding(pos_ids)
         x = self.dropout(token_emb + pos_emb)
-        
+
         # FIBER cross-modal fusion
         if images is not None and return_contrastive_features:
             x, contrastive_dict = self.cross_modal_fusion(
                 x, images, return_contrastive_features=True
             )
         elif images is not None:
-            x = self.cross_modal_fusion(x, images, return_contrastive_features=False)
+            x = self.cross_modal_fusion(
+                x, images, return_contrastive_features=False)
             contrastive_dict = {}
         else:
             x = self.cross_modal_fusion(x, None)
             contrastive_dict = {}
-        
+
         # Larimar GPM episodic memory
         x, memory_info = self.episodic_memory(x)
-        
+
         # Attention layers
         for attention_layer in self.attention_layers:
             x = attention_layer(x)
-        
+
         # Layer norm
         x = self.layer_norm(x)
-        
+
         # Note: Stage 1 doesn't have decoder yet - will be added in full BitGenModel
         # For now, we return None for decoder_logits to maintain compatibility
         outputs = {
@@ -213,14 +214,14 @@ class BitGenVisionLanguageModel(nn.Module):
             'memory_info': memory_info,
             'decoder_logits': None  # Placeholder for compatibility with compute_loss
         }
-        
+
         return outputs
-    
+
     def compute_loss(self, outputs, target_ids, text_features=None, image_features=None,
                      text_loss_weight=1.0, contrastive_loss_weight=0.1, memory_kl_weight=0.05):
         """
         Compute multi-component loss (Stage 1 version - no text reconstruction yet)
-        
+
         Args:
             outputs: Model outputs dictionary
             target_ids: Target token IDs (unused in Stage 1)
@@ -229,44 +230,45 @@ class BitGenVisionLanguageModel(nn.Module):
             text_loss_weight: Weight for text reconstruction loss (unused in Stage 1)
             contrastive_loss_weight: Weight for contrastive loss
             memory_kl_weight: Weight for memory KL divergence
-            
+
         Returns:
             total_loss: Combined weighted loss
             loss_dict: Dictionary of individual loss components
         """
         loss_dict = {}
         total_loss = 0.0
-        
+
         # 1. Text Reconstruction Loss - NOT IMPLEMENTED in Stage 1
         # Stage 1 focuses on vision-language alignment only
         loss_dict['text_loss'] = 0.0
         loss_dict['perplexity'] = 0.0
         loss_dict['token_accuracy'] = 0.0
-        
+
         # 2. Contrastive Loss (FIBER-style)
         if text_features is not None and image_features is not None:
             # Normalize features
             text_features = F.normalize(text_features, dim=-1)
             image_features = F.normalize(image_features, dim=-1)
-            
+
             # Compute similarity matrix
-            similarity = torch.matmul(text_features, image_features.t()) / 0.1  # temperature
-            
+            similarity = torch.matmul(
+                text_features, image_features.t()) / 0.1  # temperature
+
             # Labels: diagonal elements are positive pairs
             batch_size = similarity.size(0)
             labels = torch.arange(batch_size, device=similarity.device)
-            
+
             # Contrastive loss (symmetric)
             contrastive_loss = (
-                F.cross_entropy(similarity, labels) + 
+                F.cross_entropy(similarity, labels) +
                 F.cross_entropy(similarity.t(), labels)
             ) / 2.0
-            
+
             loss_dict['contrastive_loss'] = contrastive_loss.item()
             total_loss += contrastive_loss_weight * contrastive_loss
         else:
             loss_dict['contrastive_loss'] = 0.0
-        
+
         # 3. Memory KL Divergence Loss
         if 'memory_kl' in outputs:
             memory_kl_loss = outputs['memory_kl']
@@ -274,9 +276,10 @@ class BitGenVisionLanguageModel(nn.Module):
             total_loss += memory_kl_weight * memory_kl_loss
         else:
             loss_dict['memory_kl_loss'] = 0.0
-        
-        loss_dict['total_loss'] = total_loss.item() if isinstance(total_loss, torch.Tensor) else total_loss
-        
+
+        loss_dict['total_loss'] = total_loss.item() if isinstance(
+            total_loss, torch.Tensor) else total_loss
+
         return total_loss, loss_dict
 
 
@@ -289,48 +292,52 @@ def compute_contrastive_loss(
 ) -> Dict[str, torch.Tensor]:
     """
     Compute queue-based contrastive loss (FIBER approach)
-    
+
     Args:
         text_features: [batch_size, embed_dim] - normalized
         image_features: [batch_size, embed_dim] - normalized
         text_queue: [embed_dim, queue_size] - normalized
         image_queue: [embed_dim, queue_size] - normalized
         temperature: Scalar temperature parameter
-    
+
     Returns:
         loss_dict: Dictionary with contrastive losses
     """
     batch_size = text_features.shape[0]
-    
+
     # Image-to-text contrastive
     # Positives: diagonal (matching pairs)
     # Negatives: off-diagonal (batch) + queue
-    
+
     # Text-to-image similarity (with queue negatives)
-    sim_t2i_batch = torch.matmul(text_features, image_features.T) / temperature  # [B, B]
-    sim_t2i_queue = torch.matmul(text_features, image_queue) / temperature  # [B, Q]
+    sim_t2i_batch = torch.matmul(
+        text_features, image_features.T) / temperature  # [B, B]
+    sim_t2i_queue = torch.matmul(
+        text_features, image_queue) / temperature  # [B, Q]
     sim_t2i = torch.cat([sim_t2i_batch, sim_t2i_queue], dim=1)  # [B, B+Q]
-    
+
     # Image-to-text similarity (with queue negatives)
-    sim_i2t_batch = torch.matmul(image_features, text_features.T) / temperature  # [B, B]
-    sim_i2t_queue = torch.matmul(image_features, text_queue) / temperature  # [B, Q]
+    sim_i2t_batch = torch.matmul(
+        image_features, text_features.T) / temperature  # [B, B]
+    sim_i2t_queue = torch.matmul(
+        image_features, text_queue) / temperature  # [B, Q]
     sim_i2t = torch.cat([sim_i2t_batch, sim_i2t_queue], dim=1)  # [B, B+Q]
-    
+
     # Labels (diagonal is positive)
     labels = torch.arange(batch_size, device=text_features.device)
-    
+
     # Cross-entropy loss
     loss_t2i = F.cross_entropy(sim_t2i, labels)
     loss_i2t = F.cross_entropy(sim_i2t, labels)
-    
+
     # Total contrastive loss
     contrastive_loss = (loss_t2i + loss_i2t) / 2.0
-    
+
     # Compute accuracy (for monitoring)
     with torch.no_grad():
         acc_t2i = (sim_t2i_batch.argmax(dim=1) == labels).float().mean()
         acc_i2t = (sim_i2t_batch.argmax(dim=1) == labels).float().mean()
-    
+
     return {
         'contrastive_loss': contrastive_loss,
         'loss_t2i': loss_t2i,
@@ -342,25 +349,27 @@ def compute_contrastive_loss(
 
 class Stage1Trainer:
     """Trainer for Stage 1: Vision-Language Pre-training"""
-    
+
     def __init__(self, config: Stage1Config):
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
+        self.device = torch.device(
+            'cuda' if torch.cuda.is_available() else 'cpu')
+
         # Create directories
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(config.log_dir, exist_ok=True)
-        
+
         # Initialize model
         print("Initializing BitGen Vision-Language model...")
         self.model = BitGenVisionLanguageModel(config).to(self.device)
-        
+
         # Count parameters
         total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        trainable_params = sum(p.numel()
+                               for p in self.model.parameters() if p.requires_grad)
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
-        
+
         # Initialize WandB
         config_dict = {
             'stage': 'stage1',
@@ -380,38 +389,38 @@ class Stage1Trainer:
             config=config_dict,
             stage="stage1"
         )
-        
+
         # Initialize HuggingFace Hub - Stage 1: PreReasoning (Vision-Language)
         self.hf_integration = HuggingFaceIntegration(
             repo_name="BitGen-PreReasoning",
             stage="stage1"
         )
         self.hf_integration.create_repo()
-        
+
         # Early stopping tracking
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.best_epoch = 0
-        
+
         # Optimizer - start with 0 LR for warmup
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=0,  # Will be set by warmup scheduler
             weight_decay=config.weight_decay
         )
-        
+
         # Scheduler with warmup - will be initialized after dataset is loaded
         self.scheduler = None
         self.warmup_scheduler = None
-        
+
         # AMP scaler (using new API)
         self.scaler = GradScaler('cuda') if config.use_amp else None
-        
+
         # Training state
         self.global_step = 0
         self.epoch = 0
         self.total_steps = 0  # Will be set in train()
-    
+
     def _setup_scheduler(self, num_training_steps: int):
         """Setup learning rate scheduler: BitMar-style cosine with warm restarts (KISS!)"""
         # Simple cosine annealing with warm restarts - exactly like BitMar
@@ -421,11 +430,11 @@ class Stage1Trainer:
             T_mult=2,  # Double the restart period each time
             eta_min=self.config.learning_rate * 0.1  # Min LR = 10% of max
         )
-    
+
     def train_epoch(self, dataloader: DataLoader) -> Dict:
         """Train for one epoch"""
         self.model.train()
-        
+
         total_loss = 0.0
         total_contrastive_loss = 0.0
         total_memory_kl_loss = 0.0
@@ -433,18 +442,19 @@ class Stage1Trainer:
         total_perplexity = 0.0
         total_token_accuracy = 0.0
         num_batches = 0
-        
+
         # Log current learning rate at start of epoch
         current_lr = self.optimizer.param_groups[0]['lr']
-        print(f"\n📈 Starting Epoch {self.epoch+1} - Learning Rate: {current_lr:.2e}")
-        
+        print(
+            f"\n📈 Starting Epoch {self.epoch+1} - Learning Rate: {current_lr:.2e}")
+
         progress_bar = tqdm(dataloader, desc=f"Epoch {self.epoch+1}")
-        
+
         for batch_idx, batch in enumerate(progress_bar):
             # Move to device
             input_ids = batch['input_ids'].to(self.device)
             images = batch['images'].to(self.device)
-            
+
             # Forward pass with AMP
             if self.config.use_amp:
                 with autocast('cuda'):
@@ -456,16 +466,18 @@ class Stage1Trainer:
                         use_decoder=True,
                         return_contrastive_features=True
                     )
-                    
+
                     # Extract features for contrastive loss
                     contrastive_dict = outputs.get('contrastive_features', {})
-                    text_features = contrastive_dict.get('text_features') if contrastive_dict else None
-                    image_features = contrastive_dict.get('image_features') if contrastive_dict else None
-                    
+                    text_features = contrastive_dict.get(
+                        'text_features') if contrastive_dict else None
+                    image_features = contrastive_dict.get(
+                        'image_features') if contrastive_dict else None
+
                     # Get memory KL loss
                     memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                     outputs['memory_kl'] = memory_kl
-                    
+
                     # Compute multi-component loss (BitMar-style: text + contrastive + memory)
                     loss, loss_dict = self.model.compute_loss(
                         outputs=outputs,
@@ -476,16 +488,17 @@ class Stage1Trainer:
                         contrastive_loss_weight=self.config.contrastive_weight,  # 0.1
                         memory_kl_weight=self.config.memory_kl_weight  # 0.05
                     )
-                    
+
                     # Extract individual losses for logging
                     contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
                     memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                     text_loss = loss_dict.get('text_loss', 0.0)
                     perplexity = loss_dict.get('perplexity', 0.0)
                     token_accuracy = loss_dict.get('token_accuracy', 0.0)
-                
+
                 # Backward pass with gradient scaling
-                self.scaler.scale(loss / self.config.grad_accum_steps).backward()
+                self.scaler.scale(
+                    loss / self.config.grad_accum_steps).backward()
             else:
                 # Forward pass with decoder (BitMar-style, no AMP)
                 outputs = self.model(
@@ -495,16 +508,18 @@ class Stage1Trainer:
                     use_decoder=True,
                     return_contrastive_features=True
                 )
-                
+
                 # Extract features for contrastive loss
                 contrastive_dict = outputs.get('contrastive_features', {})
-                text_features = contrastive_dict.get('text_features') if contrastive_dict else None
-                image_features = contrastive_dict.get('image_features') if contrastive_dict else None
-                
+                text_features = contrastive_dict.get(
+                    'text_features') if contrastive_dict else None
+                image_features = contrastive_dict.get(
+                    'image_features') if contrastive_dict else None
+
                 # Get memory KL loss
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
-                
+
                 # Compute multi-component loss
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
@@ -515,16 +530,16 @@ class Stage1Trainer:
                     contrastive_loss_weight=self.config.contrastive_weight,
                     memory_kl_weight=self.config.memory_kl_weight
                 )
-                
+
                 # Extract individual losses for logging
                 contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
                 memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                 text_loss = loss_dict.get('text_loss', 0.0)
                 perplexity = loss_dict.get('perplexity', 0.0)
                 token_accuracy = loss_dict.get('token_accuracy', 0.0)
-                
+
                 (loss / self.config.grad_accum_steps).backward()
-            
+
             # Gradient accumulation
             if (batch_idx + 1) % self.config.grad_accum_steps == 0:
                 if self.config.use_amp:
@@ -541,14 +556,14 @@ class Stage1Trainer:
                         self.config.max_grad_norm
                     )
                     self.optimizer.step()
-                
+
                 self.optimizer.zero_grad()
-                
+
                 # Step scheduler every iteration (BitMar-style - KISS!)
                 self.scheduler.step()
-                
+
                 self.global_step += 1
-                
+
                 # Log gradient statistics every 100 steps
                 if self.global_step % 100 == 0:
                     total_norm = 0.0
@@ -557,17 +572,23 @@ class Stage1Trainer:
                             param_norm = p.grad.data.norm(2)
                             total_norm += param_norm.item() ** 2
                     total_norm = total_norm ** 0.5
-                    print(f"\n🔍 Step {self.global_step}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
-            
+                    print(
+                        f"\n🔍 Step {self.global_step}: Gradient norm = {total_norm:.6f}, LR = {self.optimizer.param_groups[0]['lr']:.2e}")
+
             # Accumulate metrics
             total_loss += loss.item()
-            total_contrastive_loss += contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0
-            total_memory_kl_loss += memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
-            total_text_loss += text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0
-            total_perplexity += perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0
-            total_token_accuracy += token_accuracy if isinstance(token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0
+            total_contrastive_loss += contrastive_loss if isinstance(
+                contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0
+            total_memory_kl_loss += memory_kl_loss if isinstance(
+                memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
+            total_text_loss += text_loss if isinstance(
+                text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0
+            total_perplexity += perplexity if isinstance(
+                perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0
+            total_token_accuracy += token_accuracy if isinstance(
+                token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0
             num_batches += 1
-            
+
             # Update progress bar
             current_lr = self.optimizer.param_groups[0]['lr']
             progress_bar.set_postfix({
@@ -577,31 +598,39 @@ class Stage1Trainer:
                 'ppl': f"{perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0:.2f}",
                 'lr': f"{current_lr:.2e}"
             })
-            
+
             # Log to wandb every 10 steps
             if self.global_step % 10 == 0:
                 self.wandb.log_stage1_metrics(
                     epoch=self.epoch,
                     loss=loss.item(),
-                    text_loss=text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
-                    contrastive_loss=contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
-                    memory_kl_loss=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
-                    perplexity=perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0,
-                    token_accuracy=token_accuracy if isinstance(token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0,
+                    text_loss=text_loss if isinstance(
+                        text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
+                    contrastive_loss=contrastive_loss if isinstance(
+                        contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
+                    memory_kl_loss=memory_kl_loss if isinstance(
+                        memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
+                    perplexity=perplexity if isinstance(perplexity, float) else perplexity.item(
+                    ) if hasattr(perplexity, 'item') else 0.0,
+                    token_accuracy=token_accuracy if isinstance(
+                        token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0,
                     lr=current_lr
                 )
-                
+
                 # Log loss components (new multi-component loss)
                 self.wandb.log_loss_components_stacked(
-                    text_loss=text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
-                    contrastive_loss=contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
-                    memory_kl=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
+                    text_loss=text_loss if isinstance(
+                        text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
+                    contrastive_loss=contrastive_loss if isinstance(
+                        contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
+                    memory_kl=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item(
+                    ) if hasattr(memory_kl_loss, 'item') else 0.0,
                     epoch=self.epoch,
                     step=self.global_step
                 )
-                
+
                 self.wandb.step = self.global_step
-            
+
             # Comprehensive visualizations every 50 steps
             if self.global_step % 50 == 0 and contrastive_dict:
                 # Similarity matrix heatmap
@@ -611,7 +640,7 @@ class Stage1Trainer:
                     epoch=self.epoch,
                     step=self.global_step
                 )
-                
+
                 # Queue quality heatmap
                 self.wandb.log_queue_quality_heatmap(
                     current_text_features=contrastive_dict['text_features'],
@@ -621,7 +650,7 @@ class Stage1Trainer:
                     epoch=self.epoch,
                     step=self.global_step
                 )
-                
+
                 # Retrieval Precision@K
                 self.wandb.log_retrieval_precision_at_k(
                     text_features=contrastive_dict['text_features'],
@@ -629,14 +658,14 @@ class Stage1Trainer:
                     epoch=self.epoch,
                     step=self.global_step
                 )
-                
+
                 # Gradient flow heatmap
                 self.wandb.log_gradient_flow_heatmap(
                     model=self.model,
                     epoch=self.epoch,
                     step=self.global_step
                 )
-        
+
         # Average metrics
         avg_metrics = {
             'loss': total_loss / num_batches,
@@ -646,13 +675,13 @@ class Stage1Trainer:
             'perplexity': total_perplexity / num_batches,
             'token_accuracy': total_token_accuracy / num_batches
         }
-        
+
         return avg_metrics
-    
+
     def validate(self, dataloader: DataLoader) -> Dict:
         """Validation loop to check model convergence"""
         self.model.eval()
-        
+
         total_loss = 0.0
         total_text_loss = 0.0
         total_contrastive_loss = 0.0
@@ -660,12 +689,12 @@ class Stage1Trainer:
         total_perplexity = 0.0
         total_token_accuracy = 0.0
         num_batches = 0
-        
+
         with torch.no_grad():
             for batch_idx, batch in enumerate(tqdm(dataloader, desc="Validation")):
                 input_ids = batch['input_ids'].to(self.device)
                 images = batch['images'].to(self.device)
-                
+
                 # Forward pass with decoder
                 outputs = self.model(
                     input_ids=input_ids,
@@ -674,16 +703,18 @@ class Stage1Trainer:
                     use_decoder=True,
                     return_contrastive_features=True
                 )
-                
+
                 # Extract features for contrastive loss
                 contrastive_dict = outputs.get('contrastive_features', {})
-                text_features = contrastive_dict.get('text_features') if contrastive_dict else None
-                image_features = contrastive_dict.get('image_features') if contrastive_dict else None
-                
+                text_features = contrastive_dict.get(
+                    'text_features') if contrastive_dict else None
+                image_features = contrastive_dict.get(
+                    'image_features') if contrastive_dict else None
+
                 # Get memory KL loss
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
-                
+
                 # Compute multi-component loss
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
@@ -694,14 +725,14 @@ class Stage1Trainer:
                     contrastive_loss_weight=self.config.contrastive_weight,
                     memory_kl_weight=self.config.memory_kl_weight
                 )
-                
+
                 # Extract individual losses for logging
                 contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
                 memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                 text_loss = loss_dict.get('text_loss', 0.0)
                 perplexity = loss_dict.get('perplexity', 0.0)
                 token_accuracy = loss_dict.get('token_accuracy', 0.0)
-                
+
                 total_loss += loss.item()
                 total_text_loss += text_loss
                 total_contrastive_loss += contrastive_loss
@@ -709,7 +740,7 @@ class Stage1Trainer:
                 total_perplexity += perplexity
                 total_token_accuracy += token_accuracy
                 num_batches += 1
-        
+
         # Average metrics
         avg_metrics = {
             'val_loss': total_loss / num_batches,
@@ -719,17 +750,17 @@ class Stage1Trainer:
             'val_perplexity': total_perplexity / num_batches,
             'val_token_accuracy': total_token_accuracy / num_batches
         }
-        
+
         self.model.train()
         return avg_metrics
-    
+
     def save_checkpoint(self, epoch: int, metrics: Dict, is_best: bool = False):
         """Save checkpoint"""
         checkpoint_path = os.path.join(
             self.config.checkpoint_dir,
             f"stage1_epoch{epoch+1}.pt"
         )
-        
+
         torch.save({
             'epoch': epoch,
             'global_step': self.global_step,
@@ -741,9 +772,9 @@ class Stage1Trainer:
             'metrics': metrics,
             'config': self.config
         }, checkpoint_path)
-        
+
         print(f"Saved checkpoint: {checkpoint_path}")
-        
+
         # Save best model separately
         if is_best:
             best_path = os.path.join(
@@ -762,38 +793,40 @@ class Stage1Trainer:
                 'config': self.config
             }, best_path)
             print(f"✅ New best model saved: {best_path}")
-    
+
     def train(self, train_loader: DataLoader, val_loader: DataLoader):
         """Full training loop with validation and early stopping"""
         print("Starting Stage 1 training: Vision-Language Pre-training")
         print(f"Device: {self.device}")
-        print(f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
+        print(
+            f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
         print(f"Max epochs: {self.config.num_epochs}")
-        print(f"Early stopping patience: {self.config.early_stopping_patience} epochs")
-        
+        print(
+            f"Early stopping patience: {self.config.early_stopping_patience} epochs")
+
         # Calculate total training steps and setup scheduler
         steps_per_epoch = len(train_loader) // self.config.grad_accum_steps
         total_training_steps = steps_per_epoch * self.config.num_epochs
         self.total_steps = total_training_steps
-        
+
         print(f"Steps per epoch: {steps_per_epoch}")
         print(f"Total training steps: {total_training_steps}")
         print(f"Warmup steps: {self.config.warmup_steps}")
         print(f"Initial learning rate: 0 (warmup)")
         print(f"Target learning rate: {self.config.learning_rate}")
-        
+
         # Setup scheduler with warmup
         self._setup_scheduler(total_training_steps)
-        
+
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
-            
+
             # Train epoch
             train_metrics = self.train_epoch(train_loader)
-            
+
             # Validation epoch
             val_metrics = self.validate(val_loader)
-            
+
             # Print metrics
             print(f"\n{'='*60}")
             print(f"Epoch {epoch+1}/{self.config.num_epochs} Summary:")
@@ -801,22 +834,28 @@ class Stage1Trainer:
             print(f"Training Metrics:")
             print(f"  Loss: {train_metrics['loss']:.4f}")
             print(f"  Text Loss: {train_metrics.get('text_loss', 0.0):.4f}")
-            print(f"  Contrastive Loss: {train_metrics['contrastive_loss']:.4f}")
+            print(
+                f"  Contrastive Loss: {train_metrics['contrastive_loss']:.4f}")
             print(f"  Memory KL Loss: {train_metrics['memory_kl_loss']:.4f}")
             if 'perplexity' in train_metrics:
                 print(f"  Perplexity: {train_metrics['perplexity']:.2f}")
             if 'token_accuracy' in train_metrics:
-                print(f"  Token Accuracy: {train_metrics['token_accuracy']:.3f}")
+                print(
+                    f"  Token Accuracy: {train_metrics['token_accuracy']:.3f}")
             print(f"\nValidation Metrics:")
             print(f"  Val Loss: {val_metrics['val_loss']:.4f}")
-            print(f"  Val Text Loss: {val_metrics.get('val_text_loss', 0.0):.4f}")
-            print(f"  Val Contrastive Loss: {val_metrics['val_contrastive_loss']:.4f}")
-            print(f"  Val Memory KL Loss: {val_metrics['val_memory_kl_loss']:.4f}")
+            print(
+                f"  Val Text Loss: {val_metrics.get('val_text_loss', 0.0):.4f}")
+            print(
+                f"  Val Contrastive Loss: {val_metrics['val_contrastive_loss']:.4f}")
+            print(
+                f"  Val Memory KL Loss: {val_metrics['val_memory_kl_loss']:.4f}")
             if 'val_perplexity' in val_metrics:
                 print(f"  Val Perplexity: {val_metrics['val_perplexity']:.2f}")
             if 'val_token_accuracy' in val_metrics:
-                print(f"  Val Token Accuracy: {val_metrics['val_token_accuracy']:.3f}")
-            
+                print(
+                    f"  Val Token Accuracy: {val_metrics['val_token_accuracy']:.3f}")
+
             # Log all metrics to WandB
             combined_metrics = {**train_metrics, **val_metrics}
             combined_metrics['epoch'] = epoch + 1
@@ -831,14 +870,14 @@ class Stage1Trainer:
                 token_accuracy=train_metrics.get('token_accuracy', 0.0),
                 lr=combined_metrics['learning_rate']
             )
-            
+
             # Log validation metrics in organized sections
             log_dict = {
                 'validation/loss_total': val_metrics['val_loss'],
                 'validation/loss_contrastive': val_metrics['val_contrastive_loss'],
                 'validation/loss_memory_kl': val_metrics['val_memory_kl_loss'],
             }
-            
+
             # Add text-specific metrics if available
             if 'val_text_loss' in val_metrics:
                 log_dict['validation/loss_text'] = val_metrics['val_text_loss']
@@ -846,17 +885,18 @@ class Stage1Trainer:
                 log_dict['validation/perplexity'] = val_metrics['val_perplexity']
             if 'val_token_accuracy' in val_metrics:
                 log_dict['validation/token_accuracy'] = val_metrics['val_token_accuracy']
-            
-            self.wandb.log(log_dict, step=self.global_step)
-            
+
+            import wandb
+            wandb.log(log_dict, step=self.global_step)
+
             # Epoch-level visualizations (using validation data for clean vis)
             print(f"📊 Generating epoch visualizations...")
-            
+
             # Get a validation batch for visualizations
             val_batch = next(iter(val_loader))
             val_input_ids = val_batch['input_ids'].to(self.device)
             val_images = val_batch['images'].to(self.device)
-            
+
             with torch.no_grad():
                 val_outputs = self.model(
                     input_ids=val_input_ids,
@@ -864,7 +904,7 @@ class Stage1Trainer:
                     return_contrastive_features=True
                 )
                 val_contrastive_dict = val_outputs['contrastive_features']
-            
+
             if val_contrastive_dict:
                 # UMAP embedding space visualization
                 self.wandb.log_embedding_space_umap(
@@ -874,28 +914,29 @@ class Stage1Trainer:
                     step=self.global_step,
                     sample_size=200
                 )
-            
+
             # Memory activation heatmap
             memory_mean = self.model.episodic_memory.gpm.memory_mean
             # Approximate retrieval counts (would need tracking in actual training)
-            retrieval_counts = torch.ones(memory_mean.shape[0], device=memory_mean.device)
-            
+            retrieval_counts = torch.ones(
+                memory_mean.shape[0], device=memory_mean.device)
+
             self.wandb.log_memory_activation_heatmap(
                 memory_mean=memory_mean,
                 retrieval_counts=retrieval_counts,
                 epoch=epoch,
                 step=self.global_step
             )
-            
+
             print(f"✅ Visualizations complete")
-            
+
             # Cosine scheduler handles LR automatically (BitMar-style - KISS!)
             # No manual LR reduction needed
-            
+
             # Early stopping check
             val_loss = val_metrics['val_loss']
             is_best = False
-            
+
             if val_loss < self.best_val_loss - self.config.min_delta:
                 self.best_val_loss = val_loss
                 self.patience_counter = 0
@@ -904,26 +945,29 @@ class Stage1Trainer:
                 print(f"\n✅ New best validation loss: {val_loss:.4f}")
             else:
                 self.patience_counter += 1
-                print(f"\n⏸️  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
-            
+                print(
+                    f"\n⏸️  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
+
             # Save checkpoint
             self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
-            
+
             # Push to HuggingFace Hub after every epoch
-            print(f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
+            print(
+                f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
             self.hf_integration.push_model_checkpoint(
                 model=self.model,
                 config=self.config,
                 epoch=epoch,
                 metrics=combined_metrics
             )
-            
+
             # Early stopping
             if self.patience_counter >= self.config.early_stopping_patience:
                 print(f"\n🛑 Early stopping triggered after {epoch+1} epochs")
-                print(f"   Best epoch: {self.best_epoch+1} with val_loss: {self.best_val_loss:.4f}")
+                print(
+                    f"   Best epoch: {self.best_epoch+1} with val_loss: {self.best_val_loss:.4f}")
                 break
-        
+
         print("\n" + "="*60)
         print("Stage 1 training complete!")
         print(f"Best epoch: {self.best_epoch+1}")
@@ -934,7 +978,7 @@ class Stage1Trainer:
 def main():
     """Main training script"""
     config = Stage1Config()
-    
+
     # Load COCO dataset
     print("Loading COCO dataset...")
     full_dataset = COCODataset(
@@ -942,22 +986,22 @@ def main():
         max_seq_len=config.max_seq_len,
         vocab_size=config.vocab_size
     )
-    
+
     # Split into train and validation
     dataset_size = len(full_dataset)
     val_size = int(dataset_size * config.validation_split)
     train_size = dataset_size - val_size
-    
+
     train_dataset, val_dataset = torch.utils.data.random_split(
         full_dataset,
         [train_size, val_size],
         generator=torch.Generator().manual_seed(42)
     )
-    
+
     print(f"Total dataset size: {dataset_size:,}")
     print(f"Training set: {train_size:,} samples")
     print(f"Validation set: {val_size:,} samples")
-    
+
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
@@ -966,7 +1010,7 @@ def main():
         num_workers=4,
         pin_memory=True
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
@@ -974,10 +1018,10 @@ def main():
         num_workers=4,
         pin_memory=True
     )
-    
+
     # Initialize trainer
     trainer = Stage1Trainer(config)
-    
+
     # Train with validation and early stopping
     trainer.train(train_loader, val_loader)
 
