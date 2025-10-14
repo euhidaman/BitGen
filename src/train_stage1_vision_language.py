@@ -123,8 +123,8 @@ class BitGenVisionLanguageModel(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
         # Text decoder for reconstruction loss (BitMar-style)
-        # Use only 2 decoder layers to save memory (vs 6 encoder layers)
-        self.text_decoder = BitNetTextDecoder(bitgen_config, num_decoder_layers=2)
+        # Use 4 decoder layers for better capacity (vs 6 encoder layers)
+        self.text_decoder = BitNetTextDecoder(bitgen_config, num_decoder_layers=4)
 
         # Initialize weights
         self.apply(self._init_weights)
