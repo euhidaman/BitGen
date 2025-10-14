@@ -766,9 +766,7 @@ class Stage1Trainer:
             'global_step': self.global_step,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'warmup_scheduler_state_dict': self.warmup_scheduler.state_dict(),
-            'plateau_scheduler_state_dict': self.plateau_scheduler.state_dict(),
-            'warmup_complete': self.warmup_complete,
+            'scheduler_state_dict': self.scheduler.state_dict(),
             'metrics': metrics,
             'config': self.config
         }, checkpoint_path)
