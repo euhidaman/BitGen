@@ -240,11 +240,21 @@ class GPM(nn.Module):
             importance = torch.norm(x, p=2, dim=-1)  # [batch_size, seq_len]
             write_info = self.write(x, importance)
 
+        # Compute memory utilization and quality metrics
+        memory_usage_rate = (self.memory_write_count > 0).float().mean().item()
+        memory_quality_avg = self.memory_quality.mean().item()
+        memory_quality_std = self.memory_quality.std().item()
+        
         memory_info = {
             **read_info,
             **write_info,
             'memory_mean_norm': torch.norm(self.memory_mean, p=2, dim=-1).mean().item(),
-            'memory_logvar': self.memory_logvar.item()
+            'memory_logvar': self.memory_logvar.item(),
+            'memory_usage_rate': memory_usage_rate,  # % of slots used
+            'memory_quality_avg': memory_quality_avg,  # Avg quality of memories
+            'memory_quality_std': memory_quality_std,  # Diversity of quality
+            'total_reads': self.memory_read_count.sum().item(),
+            'total_writes': self.memory_write_count.sum().item()
         }
 
         return output, memory_info

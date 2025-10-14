@@ -327,4 +327,286 @@ class HuggingFaceIntegration:
         except Exception as e:
             logger.error(f"Failed to push folder: {e}")
             return False
+    
+    def push_checkpoint(self, checkpoint_path: str, checkpoint_name: str, metrics: Dict):
+        """
+        Push checkpoint to HuggingFace Hub at specific iteration (BitMar-style)
+        
+        Args:
+            checkpoint_path: Local path to checkpoint file
+            checkpoint_name: Name of checkpoint (e.g., "checkpoint-1000")
+            metrics: Dictionary with step, epoch, and other metrics
+        """
+        if not self.has_hf:
+            logger.warning("HuggingFace Hub not available, skipping push")
+            return False
+        
+        try:
+            from huggingface_hub import upload_file
+            import json
+            import tempfile
+            
+            checkpoint_path = Path(checkpoint_path)
+            if not checkpoint_path.exists():
+                logger.error(f"Checkpoint not found: {checkpoint_path}")
+                return False
+            
+            # Upload checkpoint to subfolder
+            repo_path = f"{checkpoint_name}/{checkpoint_name}.pt"
+            upload_file(
+                path_or_fileobj=str(checkpoint_path),
+                path_in_repo=repo_path,
+                repo_id=self.repo_id,
+                commit_message=f"Add {checkpoint_name} at step {metrics.get('step', 0)}"
+            )
+            
+            # Also upload metrics
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(metrics, f, indent=2)
+                temp_metrics_path = f.name
+            
+            metrics_repo_path = f"{checkpoint_name}/metrics.json"
+            upload_file(
+                path_or_fileobj=temp_metrics_path,
+                path_in_repo=metrics_repo_path,
+                repo_id=self.repo_id,
+                commit_message=f"Add metrics for {checkpoint_name}"
+            )
+            
+            os.unlink(temp_metrics_path)
+            
+            logger.info(f"✓ Pushed {checkpoint_name} to {self.repo_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to push checkpoint {checkpoint_name}: {e}")
+            return False
+    
+    def create_model_card(self, config_dict: Dict, training_args: Dict):
+        """
+        Create and push comprehensive model card to HuggingFace Hub
+        
+        Args:
+            config_dict: Model configuration dictionary
+            training_args: Training arguments and hyperparameters
+        """
+        if not self.has_hf:
+            return False
+        
+        try:
+            import tempfile
+            from huggingface_hub import upload_file
+            from datetime import datetime
+            
+            # Generate model card content
+            model_card = f"""---
+language: en
+license: mit
+tags:
+- vision-language
+- image-captioning
+- contrastive-learning
+- bitnet
+- efficient-ai
+- edge-ai
+datasets:
+- coco
+metrics:
+- accuracy
+---
+
+# BitGen Stage 1: Vision-Language Pre-training
+
+## Model Description
+
+**BitGen** is a tiny, efficient vision-language model designed for edge devices and resource-constrained environments. This is the **Stage 1 checkpoint** focusing on vision-language pre-training using the COCO dataset.
+
+### Architecture
+
+BitGen combines three powerful components:
+
+1. **BitMar Encoder-Decoder**: 1.58-bit quantized transformer (BitNet b1.58) for extreme efficiency
+2. **FIBER Cross-Modal Fusion**: Queue-based contrastive learning for vision-language alignment
+3. **Larimar GPM**: Generative Parametric Memory for episodic memory and reasoning
+
+### Model Size (Tiny Configuration)
+
+- **Embedding Dimension**: {config_dict.get('embed_dim', 128)}
+- **Encoder Layers**: {config_dict.get('num_layers', 4)}
+- **Decoder Layers**: 2
+- **Attention Heads**: {config_dict.get('num_heads', 4)}
+- **FFN Dimension**: {config_dict.get('ffn_dim', 256)}
+- **Vocabulary Size**: {config_dict.get('vocab_size', 50257)} (GPT-2 tokenizer)
+- **Memory Slots**: {config_dict.get('memory_size', 32)}
+- **Max Sequence Length**: {config_dict.get('max_seq_len', 256)}
+- **Total Parameters**: ~5-10M (tiny enough for edge devices!)
+
+### Training Data
+
+- **Dataset**: MS-COCO Captions (validated subset)
+- **Image-Caption Pairs**: ~118k training samples
+- **Tokenizer**: GPT-2 BPE tokenizer
+
+### Training Objectives
+
+1. **Image-Text Contrastive (ITC) Loss** [Weight: {training_args.get('contrastive_weight', 1.0)} - PRIMARY]
+   - FIBER-style queue-based contrastive learning
+   - Aligns vision and language representations
+   - Hard negative mining from queue
+
+2. **Image-Text Matching (ITM) Loss** [Weight: {training_args.get('itm_weight', 0.5)}]
+   - Binary classification with hard negatives
+   - Learns fine-grained image-caption associations
+
+3. **Text Reconstruction Loss** [Weight: {training_args.get('text_loss_weight', 0.5)} - AUXILIARY]
+   - Decoder reconstructs captions from fused features
+   - Maintains language understanding
+   - Label smoothing (0.1) to prevent mode collapse
+
+4. **Memory KL Divergence** [Weight: {training_args.get('memory_kl_weight', 0.1)}]
+   - Larimar GPM episodic memory regularization
+   - Bayesian inference over memory parameters
+
+### Key Features
+
+✅ **Tiny Model**: Suitable for edge devices (Raspberry Pi, mobile phones)  
+✅ **1.58-bit Quantization**: Extreme efficiency via BitNet b1.58  
+✅ **Vision-Language Alignment**: FIBER-style contrastive learning  
+✅ **Episodic Memory**: Larimar GPM for memory-augmented reasoning  
+✅ **Hard Negative Mining**: ITM loss for robust alignment  
+✅ **DINOv2 Vision Encoder**: State-of-the-art vision features (trainable)  
+
+## Usage
+
+### Loading the Model
+
+```python
+from transformers import AutoModel
+import torch
+
+# Load model from HuggingFace Hub
+model = AutoModel.from_pretrained("babylm-ntust/BitGen-PreReasoning-stage1")
+model.eval()
+```
+
+### Inference Example
+
+```python
+from transformers import GPT2Tokenizer
+from PIL import Image
+import torchvision.transforms as transforms
+
+# Setup
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
+
+# Load image and caption
+image = Image.open("path/to/image.jpg").convert('RGB')
+caption = "A cat sitting on a couch"
+
+# Prepare inputs
+image_tensor = transform(image).unsqueeze(0)
+tokens = tokenizer(caption, return_tensors='pt', padding=True, truncation=True, max_length=256)
+input_ids = tokens['input_ids']
+
+# Forward pass
+with torch.no_grad():
+    outputs = model(
+        input_ids=input_ids,
+        images=image_tensor,
+        return_contrastive_features=True
+    )
+    
+    # Get similarity
+    text_feat = outputs['contrastive_features']['text_features']
+    image_feat = outputs['contrastive_features']['image_features']
+    similarity = (text_feat @ image_feat.T).item()
+    print(f"Similarity: {{similarity:.4f}}")
+```
+
+## Training Details
+
+### Hyperparameters
+
+- **Batch Size**: {training_args.get('batch_size', 128)} (effective: {training_args.get('batch_size', 128) * training_args.get('grad_accum_steps', 2)})
+- **Learning Rate**: {training_args.get('learning_rate', 2e-4)}
+- **Optimizer**: AdamW (weight_decay={training_args.get('weight_decay', 0.02)})
+- **Gradient Accumulation**: {training_args.get('grad_accum_steps', 2)} steps
+- **Max Gradient Norm**: {training_args.get('max_grad_norm', 1.0)}
+- **Mixed Precision**: AMP
+- **Temperature**: {training_args.get('temperature', 0.07)}
+- **Queue Size**: {training_args.get('queue_size', 4096)}
+
+### Training Schedule
+
+- **Warmup Steps**: {training_args.get('warmup_steps', 1000)}
+- **Scheduler**: Cosine decay with min LR = 0.1 × initial LR
+- **Early Stopping**: Patience = {training_args.get('early_stopping_patience', 5)} epochs
+
+## Limitations and Biases
+
+### Limitations
+
+1. **Tiny Model**: Designed for efficiency, not SOTA performance
+2. **English Only**: Trained on English captions
+3. **Stage 1 Only**: Pre-training phase; reasoning module in Stage 2
+4. **Limited Context**: Max sequence length of 256 tokens
+5. **COCO-Centric**: Training data from MS-COCO
+
+### Biases
+
+- Dataset bias from MS-COCO (Western-centric, object-focused)
+- Vision bias from DINOv2 training data
+- Language bias from GPT-2 tokenizer
+
+## Citation
+
+```bibtex
+@software{{bitgen2025,
+  title={{BitGen: Tiny Vision-Language Model for Edge Devices}},
+  author={{BitGen Team}},
+  year={{2025}},
+  url={{https://huggingface.co/babylm-ntust/BitGen-PreReasoning-stage1}}
+}}
+```
+
+## Model Card Contact
+
+For questions or issues, please open an issue on the [GitHub repository](https://github.com/euhidaman/BitGen).
+
+---
+
+**License**: MIT  
+**Model Version**: Stage 1 (Vision-Language Pre-training)  
+**Last Updated**: {datetime.now().strftime('%Y-%m-%d')}
+"""
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+                f.write(model_card)
+                temp_path = f.name
+            
+            # Upload as README.md
+            upload_file(
+                path_or_fileobj=temp_path,
+                path_in_repo="README.md",
+                repo_id=self.repo_id,
+                commit_message="Update model card"
+            )
+            
+            os.unlink(temp_path)
+            
+            logger.info(f"✓ Model card pushed to {self.repo_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create model card: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 

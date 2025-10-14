@@ -30,6 +30,7 @@ from tqdm import tqdm
 import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
+from pathlib import Path as PathlibPath
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -968,7 +969,7 @@ class Stage1Trainer:
     def _cleanup_old_checkpoints(self, keep_last: int = 5):
         """Keep only last N checkpoints to save disk space (BitMar-style)"""
         try:
-            checkpoint_dir = Path(self.config.checkpoint_dir)
+            checkpoint_dir = PathlibPath(self.config.checkpoint_dir)
             # Get all checkpoint files (excluding best model)
             checkpoints = sorted(
                 [f for f in checkpoint_dir.glob("checkpoint-*.pt")],
@@ -1006,6 +1007,34 @@ class Stage1Trainer:
 
         # Setup scheduler with warmup
         self._setup_scheduler(total_training_steps)
+        
+        # Create and push model card to HuggingFace Hub
+        print("\n📝 Creating model card on HuggingFace Hub...")
+        config_dict = {
+            'embed_dim': self.config.embed_dim,
+            'num_layers': self.config.num_layers,
+            'num_heads': self.config.num_heads,
+            'ffn_dim': self.config.ffn_dim,
+            'vocab_size': self.config.vocab_size,
+            'memory_size': self.config.memory_size,
+            'max_seq_len': self.config.max_seq_len
+        }
+        training_args = {
+            'batch_size': self.config.batch_size,
+            'grad_accum_steps': self.config.grad_accum_steps,
+            'learning_rate': self.config.learning_rate,
+            'weight_decay': self.config.weight_decay,
+            'warmup_steps': self.config.warmup_steps,
+            'max_grad_norm': self.config.max_grad_norm,
+            'contrastive_weight': self.config.contrastive_weight,
+            'text_loss_weight': self.config.text_loss_weight,
+            'memory_kl_weight': self.config.memory_kl_weight,
+            'itm_weight': self.config.itm_weight,
+            'temperature': self.config.temperature,
+            'queue_size': self.config.queue_size,
+            'early_stopping_patience': self.config.early_stopping_patience
+        }
+        self.hf_integration.create_model_card(config_dict, training_args)
 
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
