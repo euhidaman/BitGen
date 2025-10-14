@@ -9,6 +9,11 @@ After this stage, model should have:
 - FIBER-style cross-modal fusion (with queue-based contrastive)
 """
 
+# Suppress warnings
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*pynvml.*')
+warnings.filterwarnings('ignore', category=UserWarning, message='.*UnsupportedFieldAttributeWarning.*')
+
 from huggingface_integration import HuggingFaceIntegration
 from wandb_integration import setup_wandb_integration
 from data_loader import COCODataset
