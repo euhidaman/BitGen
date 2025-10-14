@@ -37,22 +37,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 @dataclass
 class Stage1Config:
-    """Configuration for Stage 1 training"""
-    # Model config
-    embed_dim: int = 256
-    num_layers: int = 6
-    num_heads: int = 8
+    """Configuration for Stage 1 training - TINY model for edge devices (BitMar-sized)"""
+    # Model config - REDUCED to match BitMar (suitable for tiny devices!)
+    embed_dim: int = 128  # Was 256 → 128 (match BitMar)
+    num_layers: int = 4  # Was 6 → 4 (match BitMar)
+    num_heads: int = 4  # Was 8 → 4 (match BitMar)
     head_dim: int = 32
-    ffn_dim: int = 512
-    vocab_size: int = 8192
+    ffn_dim: int = 256  # Was 512 → 256 (match BitMar)
+    vocab_size: int = 50257  # Was 8192 → 50257 (GPT-2 vocabulary for compatibility)
 
-    # Memory config (Larimar GPM)
-    memory_size: int = 1000
-    memory_dim: int = 256
+    # Memory config (Larimar GPM) - REDUCED for tiny model
+    memory_size: int = 32  # Was 1000 → 32 (match BitMar)
+    memory_dim: int = 128  # Match embed_dim
     direct_writing: bool = True
 
     # Vision config
-    vision_embed_dim: int = 128
+    vision_embed_dim: int = 128  # Match embed_dim for consistency
     fusion_layers: int = 2
 
     # Training config (BitMar-style - KISS!)
@@ -70,14 +70,20 @@ class Stage1Config:
 
     # Contrastive learning config
     contrastive_weight: float = 1.0
-    memory_kl_weight: float = 0.01
+    text_loss_weight: float = 0.5  # Auxiliary loss for text reconstruction
+    memory_kl_weight: float = 0.1  # Episodic memory regularization
+    itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives)
     queue_size: int = 4096
-    temperature: float = 0.1  # Increased from 0.07 for more stable gradients
+    temperature: float = 0.07  # FIBER default
 
     # Optimization
-    max_seq_len: int = 512
+    max_seq_len: int = 256  # Was 512 → 256 (match BitMar)
     max_grad_norm: float = 1.0
     use_amp: bool = True
+    
+    # HuggingFace Hub config
+    push_to_hub_interval: int = 1000  # Push every N steps (not epochs!)
+    max_checkpoints_to_keep: int = 5  # Keep last N checkpoints only
 
     # Paths
     data_file: str = "data/coco/validated_coco.json"
@@ -124,8 +130,8 @@ class BitGenVisionLanguageModel(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
         # Text decoder for reconstruction loss (BitMar-style)
-        # Use 4 decoder layers for better capacity (vs 6 encoder layers)
-        self.text_decoder = BitNetTextDecoder(bitgen_config, num_decoder_layers=4)
+        # Use 2 decoder layers to keep model tiny (encoder has 4 layers)
+        self.text_decoder = BitNetTextDecoder(bitgen_config, num_decoder_layers=2)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -237,19 +243,25 @@ class BitGenVisionLanguageModel(nn.Module):
 
         return outputs
 
-    def compute_loss(self, outputs, target_ids, text_features=None, image_features=None,
-                     text_loss_weight=1.0, contrastive_loss_weight=0.1, memory_kl_weight=0.05):
+    def compute_loss(self, outputs, target_ids, contrastive_dict=None,
+                     text_loss_weight=0.5, contrastive_loss_weight=1.0, memory_kl_weight=0.1, itm_weight=0.5):
         """
-        Compute multi-component loss (Stage 1 version - no text reconstruction yet)
+        Compute multi-component loss with proper vision-language alignment
+        
+        Loss Components:
+        1. Image-Text Contrastive (ITC) Loss: Primary signal for vision-language alignment
+        2. Image-Text Matching (ITM) Loss: Binary classification with hard negatives
+        3. Text Reconstruction Loss: Auxiliary loss for language understanding
+        4. Memory KL Loss: Episodic memory regularization
 
         Args:
             outputs: Model outputs dictionary
-            target_ids: Target token IDs (unused in Stage 1)
-            text_features: Text features for contrastive learning
-            image_features: Image features for contrastive learning
-            text_loss_weight: Weight for text reconstruction loss (unused in Stage 1)
-            contrastive_loss_weight: Weight for contrastive loss
+            target_ids: Target token IDs for text reconstruction
+            contrastive_dict: Dictionary with text_features, image_features, queues, temperature
+            text_loss_weight: Weight for text reconstruction loss (auxiliary)
+            contrastive_loss_weight: Weight for ITC loss (PRIMARY)
             memory_kl_weight: Weight for memory KL divergence
+            itm_weight: Weight for image-text matching loss
 
         Returns:
             total_loss: Combined weighted loss
@@ -258,7 +270,79 @@ class BitGenVisionLanguageModel(nn.Module):
         loss_dict = {}
         total_loss = 0.0
 
-        # 1. Text Reconstruction Loss (BitMar-style)
+        # 1. Image-Text Contrastive (ITC) Loss - PRIMARY learning signal
+        if contrastive_dict is not None:
+            text_features = contrastive_dict['text_features']  # [B, D]
+            image_features = contrastive_dict['image_features']  # [B, D]
+            text_queue = contrastive_dict['text_queue']  # [D, Q]
+            image_queue = contrastive_dict['image_queue']  # [D, Q]
+            temperature = contrastive_dict['temperature']
+            
+            # Compute FIBER-style queue-based contrastive loss
+            contrastive_result = compute_contrastive_loss(
+                text_features, image_features,
+                text_queue, image_queue, temperature
+            )
+            
+            contrastive_loss = contrastive_result['contrastive_loss']
+            loss_dict['contrastive_loss'] = contrastive_loss.item()
+            loss_dict['acc_t2i'] = contrastive_result['acc_t2i'].item()
+            loss_dict['acc_i2t'] = contrastive_result['acc_i2t'].item()
+            total_loss += contrastive_loss_weight * contrastive_loss
+        else:
+            loss_dict['contrastive_loss'] = 0.0
+            loss_dict['acc_t2i'] = 0.0
+            loss_dict['acc_i2t'] = 0.0
+
+        # 2. Image-Text Matching (ITM) Loss - Hard negative mining
+        if contrastive_dict is not None:
+            text_features = contrastive_dict['text_features']
+            image_features = contrastive_dict['image_features']
+            batch_size = text_features.shape[0]
+            
+            # Create hard negatives by shuffling within batch
+            # Positive pairs: (text[i], image[i]) → label = 1
+            # Negative pairs: (text[i], image[j where j≠i]) → label = 0
+            
+            # Positive pairs
+            pos_similarity = (text_features * image_features).sum(dim=-1)  # [B]
+            pos_labels = torch.ones(batch_size, device=text_features.device)
+            
+            # Hard negative pairs (use most confusing negatives)
+            with torch.no_grad():
+                sim_matrix = text_features @ image_features.T  # [B, B]
+                # Mask diagonal (positive pairs)
+                mask = torch.eye(batch_size, device=sim_matrix.device).bool()
+                sim_matrix.masked_fill_(mask, float('-inf'))
+                # Get hardest negative for each sample
+                hard_neg_idx = sim_matrix.argmax(dim=1)  # [B]
+            
+            neg_image_features = image_features[hard_neg_idx]
+            neg_similarity = (text_features * neg_image_features).sum(dim=-1)  # [B]
+            neg_labels = torch.zeros(batch_size, device=text_features.device)
+            
+            # Combine positive and negative pairs
+            all_similarities = torch.cat([pos_similarity, neg_similarity], dim=0)
+            all_labels = torch.cat([pos_labels, neg_labels], dim=0)
+            
+            # Binary classification loss
+            itm_loss = F.binary_cross_entropy_with_logits(
+                all_similarities, all_labels
+            )
+            
+            # Compute ITM accuracy
+            with torch.no_grad():
+                itm_preds = (torch.sigmoid(all_similarities) > 0.5).float()
+                itm_acc = (itm_preds == all_labels).float().mean()
+            
+            loss_dict['itm_loss'] = itm_loss.item()
+            loss_dict['itm_acc'] = itm_acc.item()
+            total_loss += itm_weight * itm_loss
+        else:
+            loss_dict['itm_loss'] = 0.0
+            loss_dict['itm_acc'] = 0.0
+
+        # 3. Text Reconstruction Loss (AUXILIARY - for language understanding)
         if outputs.get('decoder_logits') is not None and target_ids is not None:
             decoder_logits = outputs['decoder_logits']  # [B, seq_len, vocab_size]
             
@@ -267,21 +351,26 @@ class BitGenVisionLanguageModel(nn.Module):
             flat_logits = decoder_logits.reshape(-1, vocab_size)
             flat_targets = target_ids.reshape(-1)
             
-            # Cross-entropy loss with label smoothing to prevent collapse
+            # Cross-entropy loss with label smoothing
             text_loss = F.cross_entropy(
                 flat_logits,
                 flat_targets,
                 ignore_index=-100,  # Ignore padding tokens
-                label_smoothing=0.1  # Add label smoothing to prevent mode collapse
+                label_smoothing=0.1  # Prevent mode collapse
             )
             
             # Compute perplexity (clip to prevent inf)
             perplexity = torch.exp(torch.clamp(text_loss, max=10.0))
             
             # Compute token accuracy
-            predictions = flat_logits.argmax(dim=-1)
-            correct = (predictions == flat_targets).float()
-            token_accuracy = correct.mean()
+            with torch.no_grad():
+                predictions = flat_logits.argmax(dim=-1)
+                mask = (flat_targets != -100)
+                if mask.any():
+                    correct = (predictions == flat_targets) & mask
+                    token_accuracy = correct.float().sum() / mask.float().sum()
+                else:
+                    token_accuracy = torch.tensor(0.0)
             
             loss_dict['text_loss'] = text_loss.item()
             loss_dict['perplexity'] = perplexity.item()
@@ -292,38 +381,21 @@ class BitGenVisionLanguageModel(nn.Module):
             loss_dict['perplexity'] = 0.0
             loss_dict['token_accuracy'] = 0.0
 
-        # 2. Contrastive Loss (FIBER-style)
-        if text_features is not None and image_features is not None:
-            # Normalize features
-            text_features = F.normalize(text_features, dim=-1)
-            image_features = F.normalize(image_features, dim=-1)
-
-            # Compute similarity matrix
-            similarity = torch.matmul(
-                text_features, image_features.t()) / 0.1  # temperature
-
-            # Labels: diagonal elements are positive pairs
-            batch_size = similarity.size(0)
-            labels = torch.arange(batch_size, device=similarity.device)
-
-            # Contrastive loss (symmetric)
-            contrastive_loss = (
-                F.cross_entropy(similarity, labels) +
-                F.cross_entropy(similarity.t(), labels)
-            ) / 2.0
-
-            loss_dict['contrastive_loss'] = contrastive_loss.item()
-            total_loss += contrastive_loss_weight * contrastive_loss
-        else:
-            loss_dict['contrastive_loss'] = 0.0
-
-        # 3. Memory KL Divergence Loss
+        # 4. Memory KL Divergence Loss (Episodic memory regularization)
         if 'memory_kl' in outputs:
             memory_kl_loss = outputs['memory_kl']
             loss_dict['memory_kl_loss'] = memory_kl_loss.item()
             total_loss += memory_kl_weight * memory_kl_loss
         else:
             loss_dict['memory_kl_loss'] = 0.0
+        
+        # Add memory utilization metrics
+        if 'memory_info' in outputs:
+            memory_info = outputs['memory_info']
+            if 'memory_usage_rate' in memory_info:
+                loss_dict['memory_utilization'] = memory_info['memory_usage_rate']
+            if 'memory_quality_avg' in memory_info:
+                loss_dict['memory_quality'] = memory_info['memory_quality_avg']
 
         loss_dict['total_loss'] = total_loss.item() if isinstance(
             total_loss, torch.Tensor) else total_loss
@@ -531,19 +603,23 @@ class Stage1Trainer:
                     memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                     outputs['memory_kl'] = memory_kl
 
-                    # Compute multi-component loss (Balanced: contrastive primary, text secondary)
+                    # Compute multi-component loss with proper alignment learning
                     loss, loss_dict = self.model.compute_loss(
                         outputs=outputs,
                         target_ids=input_ids,
-                        text_features=text_features,
-                        image_features=image_features,
-                        text_loss_weight=0.1,  # Reduced to prevent decoder collapse
-                        contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
-                        memory_kl_weight=self.config.memory_kl_weight  # 0.01
+                        contrastive_dict=contrastive_dict,  # Pass full dict with queues
+                        text_loss_weight=self.config.text_loss_weight,  # 0.5 - AUXILIARY
+                        contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY
+                        memory_kl_weight=self.config.memory_kl_weight,  # 0.1
+                        itm_weight=self.config.itm_weight  # 0.5 - Hard negative mining
                     )
 
                     # Extract individual losses for logging
                     contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                    itm_loss = loss_dict.get('itm_loss', 0.0)
+                    itm_acc = loss_dict.get('itm_acc', 0.0)
+                    acc_t2i = loss_dict.get('acc_t2i', 0.0)
+                    acc_i2t = loss_dict.get('acc_i2t', 0.0)
                     memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                     text_loss = loss_dict.get('text_loss', 0.0)
                     perplexity = loss_dict.get('perplexity', 0.0)
@@ -564,28 +640,28 @@ class Stage1Trainer:
 
                 # Extract features for contrastive loss
                 contrastive_dict = outputs.get('contrastive_features', {})
-                text_features = contrastive_dict.get(
-                    'text_features') if contrastive_dict else None
-                image_features = contrastive_dict.get(
-                    'image_features') if contrastive_dict else None
 
                 # Get memory KL loss
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
 
-                # Compute multi-component loss (Balanced: contrastive primary, text secondary)
+                # Compute multi-component loss with proper alignment learning
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
                     target_ids=input_ids,
-                    text_features=text_features,
-                    image_features=image_features,
-                    text_loss_weight=0.1,  # Reduced to prevent decoder collapse
-                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
-                    memory_kl_weight=self.config.memory_kl_weight  # 0.01
+                    contrastive_dict=contrastive_dict,  # Pass full dict with queues
+                    text_loss_weight=self.config.text_loss_weight,  # 0.5 - AUXILIARY
+                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY
+                    memory_kl_weight=self.config.memory_kl_weight,  # 0.1
+                    itm_weight=self.config.itm_weight  # 0.5 - Hard negative mining
                 )
 
                 # Extract individual losses for logging
                 contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                itm_loss = loss_dict.get('itm_loss', 0.0)
+                itm_acc = loss_dict.get('itm_acc', 0.0)
+                acc_t2i = loss_dict.get('acc_t2i', 0.0)
+                acc_i2t = loss_dict.get('acc_i2t', 0.0)
                 memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                 text_loss = loss_dict.get('text_loss', 0.0)
                 perplexity = loss_dict.get('perplexity', 0.0)
