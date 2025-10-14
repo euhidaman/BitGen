@@ -160,8 +160,8 @@ class HuggingFaceIntegration:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
                 
-                # Save model state dict
-                model_path = tmpdir_path / f"model_epoch_{epoch}.pt"
+                # Save model state dict (standard HuggingFace naming)
+                model_path = tmpdir_path / "pytorch_model.bin"
                 torch.save(model.state_dict(), model_path)
                 
                 # Convert config to dict if it's a BitGenConfig object
@@ -175,10 +175,13 @@ class HuggingFaceIntegration:
                 with open(config_path, 'w') as f:
                     json.dump(config_dict, f, indent=2)
                 
-                # Save metrics
-                metrics_path = tmpdir_path / f"metrics_epoch_{epoch}.json"
+                # Save training metadata (single file, overwritten each epoch)
+                metadata_path = tmpdir_path / "training_metadata.json"
                 # Convert tensor values to floats for JSON serialization
-                json_metrics = {}
+                json_metrics = {
+                    'epoch': epoch,
+                    'stage': self.stage
+                }
                 for k, v in metrics.items():
                     if isinstance(v, torch.Tensor):
                         json_metrics[k] = v.item()
@@ -187,16 +190,17 @@ class HuggingFaceIntegration:
                     else:
                         json_metrics[k] = str(v)
                         
-                with open(metrics_path, 'w') as f:
+                with open(metadata_path, 'w') as f:
                     json.dump(json_metrics, f, indent=2)
                 
                 # Upload files with retry logic
+                # Each upload OVERWRITES the previous file (no subdirectories)
                 commit_msg = f"Checkpoint at epoch {epoch} - Loss: {metrics.get('total_loss', 0.0):.4f}"
                 
                 files_to_upload = [
-                    (str(model_path), f"checkpoints/model_epoch_{epoch}.pt"),
-                    (str(config_path), "config.json"),
-                    (str(metrics_path), f"metrics/metrics_epoch_{epoch}.json")
+                    (str(model_path), "pytorch_model.bin"),  # ROOT - overwrites previous
+                    (str(config_path), "config.json"),       # ROOT - overwrites previous
+                    (str(metadata_path), "training_metadata.json")  # ROOT - overwrites previous
                 ]
                 
                 # Upload each file with retry logic
@@ -478,13 +482,15 @@ BitGen combines three powerful components:
 
 ## Usage
 
+> **Note**: This repository contains only the **latest checkpoint**. Each training epoch overwrites the previous model file (`pytorch_model.bin`) to save storage. Git history preserves all versions.
+
 ### Loading the Model
 
 ```python
 from transformers import AutoModel
 import torch
 
-# Load model from HuggingFace Hub
+# Load model from HuggingFace Hub (always the latest checkpoint)
 model = AutoModel.from_pretrained("babylm-ntust/BitGen-PreReasoning-stage1")
 model.eval()
 ```
