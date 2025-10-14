@@ -267,15 +267,16 @@ class BitGenVisionLanguageModel(nn.Module):
             flat_logits = decoder_logits.reshape(-1, vocab_size)
             flat_targets = target_ids.reshape(-1)
             
-            # Cross-entropy loss
+            # Cross-entropy loss with label smoothing to prevent collapse
             text_loss = F.cross_entropy(
                 flat_logits,
                 flat_targets,
-                ignore_index=-100  # Ignore padding tokens
+                ignore_index=-100,  # Ignore padding tokens
+                label_smoothing=0.1  # Add label smoothing to prevent mode collapse
             )
             
-            # Compute perplexity
-            perplexity = torch.exp(text_loss)
+            # Compute perplexity (clip to prevent inf)
+            perplexity = torch.exp(torch.clamp(text_loss, max=10.0))
             
             # Compute token accuracy
             predictions = flat_logits.argmax(dim=-1)
@@ -530,15 +531,15 @@ class Stage1Trainer:
                     memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                     outputs['memory_kl'] = memory_kl
 
-                    # Compute multi-component loss (BitMar-style: text + contrastive + memory)
+                    # Compute multi-component loss (Balanced: contrastive primary, text secondary)
                     loss, loss_dict = self.model.compute_loss(
                         outputs=outputs,
                         target_ids=input_ids,
                         text_features=text_features,
                         image_features=image_features,
-                        text_loss_weight=1.0,  # Main learning signal
-                        contrastive_loss_weight=self.config.contrastive_weight,  # 0.1
-                        memory_kl_weight=self.config.memory_kl_weight  # 0.05
+                        text_loss_weight=0.1,  # Reduced to prevent decoder collapse
+                        contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
+                        memory_kl_weight=self.config.memory_kl_weight  # 0.01
                     )
 
                     # Extract individual losses for logging
@@ -572,15 +573,15 @@ class Stage1Trainer:
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
 
-                # Compute multi-component loss
+                # Compute multi-component loss (Balanced: contrastive primary, text secondary)
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
                     target_ids=input_ids,
                     text_features=text_features,
                     image_features=image_features,
-                    text_loss_weight=1.0,
-                    contrastive_loss_weight=self.config.contrastive_weight,
-                    memory_kl_weight=self.config.memory_kl_weight
+                    text_loss_weight=0.1,  # Reduced to prevent decoder collapse
+                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
+                    memory_kl_weight=self.config.memory_kl_weight  # 0.01
                 )
 
                 # Extract individual losses for logging
@@ -771,15 +772,15 @@ class Stage1Trainer:
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
 
-                # Compute multi-component loss
+                # Compute multi-component loss (Balanced: contrastive primary, text secondary)
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
                     target_ids=input_ids,
                     text_features=text_features,
                     image_features=image_features,
-                    text_loss_weight=1.0,
-                    contrastive_loss_weight=self.config.contrastive_weight,
-                    memory_kl_weight=self.config.memory_kl_weight
+                    text_loss_weight=0.1,  # Reduced to prevent decoder collapse
+                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
+                    memory_kl_weight=self.config.memory_kl_weight  # 0.01
                 )
 
                 # Extract individual losses for logging
