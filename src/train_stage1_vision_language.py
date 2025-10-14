@@ -722,15 +722,22 @@ class Stage1Trainer:
                 token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0
             num_batches += 1
 
-            # Update progress bar
+            # Update progress bar with all metrics
             current_lr = self.optimizer.param_groups[0]['lr']
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
-                'text': f"{text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0:.4f}",
-                'cont': f"{contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0:.4f}",
-                'ppl': f"{perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0:.2f}",
+                'itc': f"{contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0:.4f}",
+                'itm': f"{itm_loss if isinstance(itm_loss, float) else itm_loss.item() if hasattr(itm_loss, 'item') else 0.0:.4f}",
+                'txt': f"{text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0:.4f}",
+                't2i': f"{acc_t2i if isinstance(acc_t2i, float) else acc_t2i.item() if hasattr(acc_t2i, 'item') else 0.0:.2f}",
+                'i2t': f"{acc_i2t if isinstance(acc_i2t, float) else acc_i2t.item() if hasattr(acc_i2t, 'item') else 0.0:.2f}",
                 'lr': f"{current_lr:.2e}"
             })
+            
+            # Push to HuggingFace Hub at intervals (BitMar-style)
+            if self.global_step > 0 and self.global_step % self.config.push_to_hub_interval == 0:
+                print(f"\n📤 Pushing checkpoint at step {self.global_step} to HuggingFace Hub...")
+                self._push_checkpoint_to_hub(self.global_step)
 
             # Log to wandb every 10 steps
             if self.global_step % 10 == 0:
@@ -848,19 +855,20 @@ class Stage1Trainer:
                 memory_kl = self.model.episodic_memory.get_memory_kl_loss()
                 outputs['memory_kl'] = memory_kl
 
-                # Compute multi-component loss (Balanced: contrastive primary, text secondary)
+                # Compute multi-component loss with proper alignment learning
                 loss, loss_dict = self.model.compute_loss(
                     outputs=outputs,
                     target_ids=input_ids,
-                    text_features=text_features,
-                    image_features=image_features,
-                    text_loss_weight=0.1,  # Reduced to prevent decoder collapse
-                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY signal
-                    memory_kl_weight=self.config.memory_kl_weight  # 0.01
+                    contrastive_dict=contrastive_dict,  # Pass full dict with queues
+                    text_loss_weight=self.config.text_loss_weight,  # 0.5 - AUXILIARY
+                    contrastive_loss_weight=self.config.contrastive_weight,  # 1.0 - PRIMARY
+                    memory_kl_weight=self.config.memory_kl_weight,  # 0.1
+                    itm_weight=self.config.itm_weight  # 0.5 - Hard negative mining
                 )
 
                 # Extract individual losses for logging
                 contrastive_loss = loss_dict.get('contrastive_loss', 0.0)
+                itm_loss = loss_dict.get('itm_loss', 0.0)
                 memory_kl_loss = loss_dict.get('memory_kl_loss', 0.0)
                 text_loss = loss_dict.get('text_loss', 0.0)
                 perplexity = loss_dict.get('perplexity', 0.0)
@@ -922,6 +930,58 @@ class Stage1Trainer:
                 'config': self.config
             }, best_path)
             print(f"✅ New best model saved: {best_path}")
+    
+    def _push_checkpoint_to_hub(self, step: int):
+        """Push checkpoint to HuggingFace Hub at specific iteration (BitMar-style)"""
+        try:
+            # Create checkpoint folder name
+            checkpoint_name = f"checkpoint-{step}"
+            checkpoint_path = os.path.join(self.config.checkpoint_dir, f"{checkpoint_name}.pt")
+            
+            # Save checkpoint
+            torch.save({
+                'global_step': step,
+                'epoch': self.epoch,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict(),
+                'config': self.config
+            }, checkpoint_path)
+            
+            # Push to hub
+            self.hf_integration.push_checkpoint(
+                checkpoint_path=checkpoint_path,
+                checkpoint_name=checkpoint_name,
+                metrics={
+                    'step': step,
+                    'epoch': self.epoch
+                }
+            )
+            
+            # Keep only last N checkpoints to save space
+            self._cleanup_old_checkpoints(keep_last=self.config.max_checkpoints_to_keep)
+            
+            print(f"✅ Pushed {checkpoint_name} to HuggingFace Hub")
+        except Exception as e:
+            print(f"⚠️ Failed to push checkpoint: {e}")
+    
+    def _cleanup_old_checkpoints(self, keep_last: int = 5):
+        """Keep only last N checkpoints to save disk space (BitMar-style)"""
+        try:
+            checkpoint_dir = Path(self.config.checkpoint_dir)
+            # Get all checkpoint files (excluding best model)
+            checkpoints = sorted(
+                [f for f in checkpoint_dir.glob("checkpoint-*.pt")],
+                key=lambda x: int(x.stem.split('-')[1])  # Sort by step number
+            )
+            
+            # Remove old checkpoints
+            if len(checkpoints) > keep_last:
+                for old_checkpoint in checkpoints[:-keep_last]:
+                    old_checkpoint.unlink()
+                    print(f"🗑️ Removed old checkpoint: {old_checkpoint.name}")
+        except Exception as e:
+            print(f"⚠️ Cleanup failed: {e}")
 
     def train(self, train_loader: DataLoader, val_loader: DataLoader):
         """Full training loop with validation and early stopping"""
