@@ -429,8 +429,9 @@ class Stage1Trainer:
         total_loss = 0.0
         total_contrastive_loss = 0.0
         total_memory_kl_loss = 0.0
-        total_acc_t2i = 0.0
-        total_acc_i2t = 0.0
+        total_text_loss = 0.0
+        total_perplexity = 0.0
+        total_token_accuracy = 0.0
         num_batches = 0
         
         # Log current learning rate at start of epoch
@@ -562,6 +563,9 @@ class Stage1Trainer:
             total_loss += loss.item()
             total_contrastive_loss += contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0
             total_memory_kl_loss += memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
+            total_text_loss += text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0
+            total_perplexity += perplexity if isinstance(perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0
+            total_token_accuracy += token_accuracy if isinstance(token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0
             num_batches += 1
             
             # Update progress bar
@@ -638,8 +642,9 @@ class Stage1Trainer:
             'loss': total_loss / num_batches,
             'contrastive_loss': total_contrastive_loss / num_batches,
             'memory_kl_loss': total_memory_kl_loss / num_batches,
-            'acc_t2i': total_acc_t2i / num_batches,
-            'acc_i2t': total_acc_i2t / num_batches
+            'text_loss': total_text_loss / num_batches,
+            'perplexity': total_perplexity / num_batches,
+            'token_accuracy': total_token_accuracy / num_batches
         }
         
         return avg_metrics
@@ -795,16 +800,22 @@ class Stage1Trainer:
             print(f"{'='*60}")
             print(f"Training Metrics:")
             print(f"  Loss: {train_metrics['loss']:.4f}")
+            print(f"  Text Loss: {train_metrics.get('text_loss', 0.0):.4f}")
             print(f"  Contrastive Loss: {train_metrics['contrastive_loss']:.4f}")
             print(f"  Memory KL Loss: {train_metrics['memory_kl_loss']:.4f}")
-            print(f"  Acc T2I: {train_metrics['acc_t2i']:.3f}")
-            print(f"  Acc I2T: {train_metrics['acc_i2t']:.3f}")
+            if 'perplexity' in train_metrics:
+                print(f"  Perplexity: {train_metrics['perplexity']:.2f}")
+            if 'token_accuracy' in train_metrics:
+                print(f"  Token Accuracy: {train_metrics['token_accuracy']:.3f}")
             print(f"\nValidation Metrics:")
             print(f"  Val Loss: {val_metrics['val_loss']:.4f}")
+            print(f"  Val Text Loss: {val_metrics.get('val_text_loss', 0.0):.4f}")
             print(f"  Val Contrastive Loss: {val_metrics['val_contrastive_loss']:.4f}")
             print(f"  Val Memory KL Loss: {val_metrics['val_memory_kl_loss']:.4f}")
-            print(f"  Val Acc T2I: {val_metrics['val_acc_t2i']:.3f}")
-            print(f"  Val Acc I2T: {val_metrics['val_acc_i2t']:.3f}")
+            if 'val_perplexity' in val_metrics:
+                print(f"  Val Perplexity: {val_metrics['val_perplexity']:.2f}")
+            if 'val_token_accuracy' in val_metrics:
+                print(f"  Val Token Accuracy: {val_metrics['val_token_accuracy']:.3f}")
             
             # Log all metrics to WandB
             combined_metrics = {**train_metrics, **val_metrics}
@@ -813,22 +824,30 @@ class Stage1Trainer:
             self.wandb.log_stage1_metrics(
                 epoch=epoch,
                 loss=train_metrics['loss'],
+                text_loss=train_metrics.get('text_loss', 0.0),
                 contrastive_loss=train_metrics['contrastive_loss'],
                 memory_kl_loss=train_metrics['memory_kl_loss'],
-                acc_t2i=train_metrics['acc_t2i'],
-                acc_i2t=train_metrics['acc_i2t'],
+                perplexity=train_metrics.get('perplexity', 0.0),
+                token_accuracy=train_metrics.get('token_accuracy', 0.0),
                 lr=combined_metrics['learning_rate']
             )
             
             # Log validation metrics in organized sections
-            self.wandb.log({
+            log_dict = {
                 'validation/loss_total': val_metrics['val_loss'],
                 'validation/loss_contrastive': val_metrics['val_contrastive_loss'],
                 'validation/loss_memory_kl': val_metrics['val_memory_kl_loss'],
-                'validation/acc_text_to_image': val_metrics['val_acc_t2i'],
-                'validation/acc_image_to_text': val_metrics['val_acc_i2t'],
-                'validation/acc_average': (val_metrics['val_acc_t2i'] + val_metrics['val_acc_i2t']) / 2.0
-            }, step=self.global_step)
+            }
+            
+            # Add text-specific metrics if available
+            if 'val_text_loss' in val_metrics:
+                log_dict['validation/loss_text'] = val_metrics['val_text_loss']
+            if 'val_perplexity' in val_metrics:
+                log_dict['validation/perplexity'] = val_metrics['val_perplexity']
+            if 'val_token_accuracy' in val_metrics:
+                log_dict['validation/token_accuracy'] = val_metrics['val_token_accuracy']
+            
+            self.wandb.log(log_dict, step=self.global_step)
             
             # Epoch-level visualizations (using validation data for clean vis)
             print(f"📊 Generating epoch visualizations...")
