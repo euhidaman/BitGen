@@ -823,8 +823,8 @@ class BitNetTextDecoder(nn.Module):
         """Build a single decoder layer"""
         return nn.ModuleDict({
             'self_attn': AttentionSink(config),
-            # For attending to encoder outputs
-            'cross_attn': AttentionSink(config),
+            # Cross-attention: combine decoder hidden state with encoder output
+            'encoder_proj': BitNetLinear(config.embed_dim, config.embed_dim),
             'ffn': nn.Sequential(
                 BitNetLinear(config.embed_dim, config.ffn_dim),
                 nn.GELU(),
@@ -864,22 +864,17 @@ class BitNetTextDecoder(nn.Module):
             residual = x
             x = layer['ln1'](x)
 
-            # Apply self-attention with causal masking
-            # Note: AttentionSink doesn't natively support causal mask,
-            # so we apply it post-attention
-            attn_output, _, _ = layer['self_attn'](
-                x, x, x, attention_mask=None)
-
-            # Apply causal mask to attention output
-            # This is a simplification - ideally mask should be in attention computation
+            # Apply self-attention (AttentionSink has built-in causal masking)
+            attn_output, _ = layer['self_attn'](x, cache=None)
             x = residual + self.dropout(attn_output)
 
-            # Cross-attention to encoder output
+            # Add encoder context (simplified cross-attention)
             residual = x
             x = layer['ln2'](x)
-            cross_attn_output, _, _ = layer['cross_attn'](
-                x, encoder_output, encoder_output, attention_mask=attention_mask)
-            x = residual + self.dropout(cross_attn_output)
+            # Average pool encoder output to match sequence length
+            encoder_context = encoder_output.mean(dim=1, keepdim=True).expand(-1, x.size(1), -1)
+            encoder_proj = layer['encoder_proj'](encoder_context)
+            x = residual + self.dropout(encoder_proj)
 
             # Feed-forward
             residual = x
