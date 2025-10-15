@@ -136,6 +136,10 @@ class WandBIntegration:
 
     def log_model_architecture(self, model, config):
         """Log model architecture and complexity"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         # Calculate model statistics
         total_params = sum(p.numel() for p in model.parameters())
@@ -166,6 +170,10 @@ class WandBIntegration:
 
     def log_system_metrics(self):
         """Log system performance metrics"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         # CPU and memory usage
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -197,6 +205,10 @@ class WandBIntegration:
 
     def log_flops_metrics(self, flops_info: Dict):
         """Log FLOPS-related metrics"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         flops_metrics = {
             "performance/model_flops": flops_info.get('flops', 0),
@@ -216,6 +228,10 @@ class WandBIntegration:
 
     def log_energy_metrics(self, energy_info: Dict):
         """Log energy consumption and carbon footprint metrics"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         energy_metrics = {
             "sustainability/energy_consumed_kwh": energy_info.get('energy_consumed_kwh', 0),
@@ -234,6 +250,10 @@ class WandBIntegration:
 
     def log_inference_metrics(self, inference_results: List[Dict]):
         """Log inference performance metrics"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         if not inference_results:
             return
@@ -293,6 +313,10 @@ class WandBIntegration:
 
     def log_epoch_summary(self, epoch: int, epoch_metrics: Dict, model_url: str = None):
         """Log comprehensive epoch summary"""
+        
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         self.epoch = epoch
 
@@ -830,6 +854,10 @@ class WandBIntegration:
             epoch: Current epoch
             step: Current step
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         memory_np = memory_mean.detach().cpu().numpy()
         counts_np = retrieval_counts.detach().cpu().numpy()
 
@@ -881,6 +909,10 @@ class WandBIntegration:
             step: Current step
             sample_size: Number of samples (default: 32)
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         batch_size = min(current_text_features.shape[0], sample_size)
         queue_sample_size = min(text_queue.shape[1], 100)
 
@@ -934,6 +966,10 @@ class WandBIntegration:
             epoch: Current epoch
             step: Current step
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         # Log individual components in separate section (new multi-component loss)
         log_dict = {
             "components/loss_text_reconstruction": text_loss,
@@ -967,6 +1003,9 @@ class WandBIntegration:
             step: Current step
             k_values: List of K values to compute (default: [1, 5, 10])
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
         batch_size = text_features.shape[0]
 
         # Compute similarity matrix
@@ -1007,6 +1046,10 @@ class WandBIntegration:
             epoch: Current epoch
             step: Current step
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         # Collect gradient norms per layer
         layer_names = []
         grad_norms = []
@@ -1063,6 +1106,9 @@ class WandBIntegration:
             accuracy: Robot selection accuracy
             lr: Learning rate
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         metrics = {
             "stage2/epoch": epoch,
@@ -1094,6 +1140,9 @@ class WandBIntegration:
             image_features: Image embeddings [B, D]
             epoch: Current epoch
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         # Create similarity matrix
         similarity = torch.matmul(text_features, image_features.T)
@@ -1124,6 +1173,9 @@ class WandBIntegration:
             robot_names: List of robot names
             epoch: Current epoch
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         # Convert to binary predictions
         pred_binary = (predictions > 0.5).astype(int)
@@ -1164,6 +1216,9 @@ class WandBIntegration:
             memory_read_count: Read count per memory slot [memory_size]
             epoch: Current epoch
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
 
         memory_np = memory_mean.detach().cpu().numpy()
         read_count_np = memory_read_count.detach().cpu().numpy()
