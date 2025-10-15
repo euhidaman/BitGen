@@ -235,38 +235,49 @@ class RefCOCODataset(BaseVisionLanguageDataset):
             return
         
         with open(ann_file, 'r') as f:
-            refcoco_data = json.load(f)
+            mdetr_data = json.load(f)
         
-        # Create samples
-        for item in refcoco_data:
-            image_id = item['image_id']
-            # COCO 2014 format: COCO_train2014_000000123456.jpg
-            image_path = image_dir / f"COCO_train2014_{image_id:012d}.jpg"
+        # MDETR format: dict with 'images' and 'annotations' keys (COCO-style)
+        images_dict = {img['id']: img for img in mdetr_data['images']}
+        annotations_dict = {}
+        
+        # Group annotations by image_id
+        for ann in mdetr_data['annotations']:
+            img_id = ann['image_id']
+            if img_id not in annotations_dict:
+                annotations_dict[img_id] = []
+            annotations_dict[img_id].append(ann)
+        
+        # Create samples (one per image with all its annotations)
+        for img_id, img_info in images_dict.items():
+            file_name = img_info['file_name']
+            image_path = image_dir / file_name
             
             if not image_path.exists():
                 continue
             
-            # Referring expression
-            caption = item['caption']
+            # Caption from image info
+            caption = img_info.get('caption', '')
+            if not caption:
+                continue
             
-            # Bounding boxes for grounding
+            # Get all bounding boxes for this image
             boxes = []
-            tokens_positive = item.get('tokens_positive', [])
-            
-            if 'bbox' in item and item['bbox']:
-                # Format: [x, y, width, height] → normalize to [0, 1]
-                for bbox, token_span in zip(item['bbox'], tokens_positive):
-                    x, y, w, h = bbox
-                    boxes.append({
-                        'bbox': [x, y, w, h],
-                        'token_span': token_span  # Which tokens refer to this box
-                    })
+            if img_id in annotations_dict:
+                for ann in annotations_dict[img_id]:
+                    if 'bbox' in ann and ann['bbox']:
+                        bbox = ann['bbox']  # [x, y, width, height]
+                        tokens_positive = ann.get('tokens_positive', [])
+                        boxes.append({
+                            'bbox': bbox,
+                            'token_span': tokens_positive  # Which tokens refer to this box
+                        })
             
             self.data.append({
                 'image_path': str(image_path),
                 'caption': caption,
                 'boxes': boxes,
-                'image_id': image_id,
+                'image_id': img_info.get('original_id', img_id),
                 'dataset': dataset_name
             })
         
