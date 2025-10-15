@@ -417,48 +417,49 @@ def compute_contrastive_loss(
     temperature: torch.Tensor
 ) -> Dict[str, torch.Tensor]:
     """
-    Compute queue-based contrastive loss (FIBER approach - exact implementation)
+    Compute queue-based contrastive loss (EXACT FIBER/ALBEF implementation)
 
     Args:
-        text_features: [batch_size, embed_dim] - normalized
-        image_features: [batch_size, embed_dim] - normalized
-        text_queue: [embed_dim, queue_size] - normalized
-        image_queue: [embed_dim, queue_size] - normalized
-        temperature: Scalar temperature parameter
+        text_features: [batch_size, embed_dim] - NOT normalized (raw pooler output)
+        image_features: [batch_size, embed_dim] - NOT normalized (raw pooler output)
+        text_queue: [embed_dim, queue_size] - stored features
+        image_queue: [embed_dim, queue_size] - stored features
+        temperature: Scalar temperature parameter (clamped 0.001-1.0)
 
     Returns:
         loss_dict: Dictionary with contrastive losses
     """
     batch_size = text_features.shape[0]
-
-    # Text-to-image similarity (with queue negatives) - FIBER style
-    sim_t2i_batch = torch.matmul(
-        text_features, image_features.T) / temperature  # [B, B]
-    sim_t2i_queue = torch.matmul(
-        text_features, image_queue) / temperature  # [B, Q]
-    sim_t2i = torch.cat([sim_t2i_batch, sim_t2i_queue], dim=1)  # [B, B+Q]
-
-    # Image-to-text similarity (with queue negatives) - FIBER style
-    sim_i2t_batch = torch.matmul(
-        image_features, text_features.T) / temperature  # [B, B]
-    sim_i2t_queue = torch.matmul(
-        image_features, text_queue) / temperature  # [B, Q]
-    sim_i2t = torch.cat([sim_i2t_batch, sim_i2t_queue], dim=1)  # [B, B+Q]
-
-    # Labels (diagonal is positive)
-    labels = torch.arange(batch_size, device=text_features.device)
-
-    # Cross-entropy loss
-    loss_t2i = F.cross_entropy(sim_t2i, labels)
-    loss_i2t = F.cross_entropy(sim_i2t, labels)
-
-    # Total contrastive loss
-    contrastive_loss = (loss_t2i + loss_i2t) / 2.0
-
-    # Compute accuracy (for monitoring)
+    
+    # FIBER: Clamp temperature to prevent numerical issues
     with torch.no_grad():
-        acc_t2i = (sim_t2i_batch.argmax(dim=1) == labels).float().mean()
-        acc_i2t = (sim_i2t_batch.argmax(dim=1) == labels).float().mean()
+        temperature.clamp_(0.001, 1.0)
+    
+    # FIBER: Concatenate current batch + queue (NOTE: features are transposed in queue!)
+    # Current batch: [B, D], Queue: [D, Q] → concat on dim=1 → [D, B+Q]
+    image_feat_all = torch.cat([image_features.t(), image_queue], dim=1)  # [D, B+Q]
+    text_feat_all = torch.cat([text_features.t(), text_queue], dim=1)  # [D, B+Q]
+    
+    # FIBER: Compute similarities (features @ features.T / temp)
+    sim_i2t = image_features @ text_feat_all / temperature  # [B, B+Q]
+    sim_t2i = text_features @ image_feat_all / temperature  # [B, B+Q]
+    
+    # FIBER: Create soft targets (diagonal = 1, rest = 0)
+    sim_targets = torch.zeros_like(sim_i2t)
+    sim_targets.fill_diagonal_(1)
+    
+    # FIBER: Loss = -sum(log_softmax * targets) - EXACT formula from ALBEF
+    loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1) * sim_targets, dim=1).mean()
+    loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1) * sim_targets, dim=1).mean()
+    
+    # Total contrastive loss
+    contrastive_loss = (loss_i2t + loss_t2i) / 2.0
+
+    # Compute accuracy (for monitoring) - only on batch, not queue
+    with torch.no_grad():
+        labels = torch.arange(batch_size, device=text_features.device)
+        acc_t2i = (sim_t2i[:, :batch_size].argmax(dim=1) == labels).float().mean()
+        acc_i2t = (sim_i2t[:, :batch_size].argmax(dim=1) == labels).float().mean()
 
     return {
         'contrastive_loss': contrastive_loss,

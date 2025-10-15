@@ -557,50 +557,25 @@ class CrossModalFusion(nn.Module):
 
         # Generate contrastive features if requested (for ITC loss)
         if return_contrastive_features:
-            # Text features for contrastive learning
-            text_itc = self.cross_modal_text_transform_itc(text_embeddings)
+            # Text features for contrastive learning (FIBER: NO normalization!)
+            text_itc = self.cross_modal_text_pooler_itc(
+                self.cross_modal_text_transform_itc(text_embeddings)[:, 0:1]
+            ).squeeze(1)  # [B, D]
 
-            # STABILITY: Check for NaN before pooling
-            if torch.isnan(text_itc).any() or torch.isinf(text_itc).any():
-                # Return safe default features
-                text_cls = torch.zeros(
-                    batch_size, self.config.embed_dim, device=text_embeddings.device)
-                image_cls = torch.zeros(
-                    batch_size, self.config.embed_dim, device=text_embeddings.device)
-            else:
-                text_cls = self.cross_modal_text_pooler_itc(
-                    text_itc[:, 0:1])  # Use first token as CLS
-                text_cls = F.normalize(
-                    text_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
+            # Image features for contrastive learning (FIBER: NO normalization!)
+            image_itc = self.cross_modal_image_transform_itc(original_image_embeds)
+            image_avg = self.avgpool(image_itc.transpose(1, 2)).view(batch_size, 1, -1)
+            image_cls = self.cross_modal_image_pooler_itc(image_avg).squeeze(1)  # [B, D]
 
-                # Image features for contrastive learning - USE ORIGINAL EMBEDDINGS
-                image_itc = self.cross_modal_image_transform_itc(
-                    original_image_embeds)
-
-                # STABILITY: Check for NaN in image features
-                if torch.isnan(image_itc).any() or torch.isinf(image_itc).any():
-                    image_cls = torch.zeros(
-                        batch_size, self.config.embed_dim, device=text_embeddings.device)
-                else:
-                    image_avg = self.avgpool(
-                        image_itc.transpose(1, 2)).view(batch_size, 1, -1)
-                    image_cls = self.cross_modal_image_pooler_itc(image_avg)
-                    image_cls = F.normalize(
-                        image_cls.squeeze(1), p=2, dim=-1, eps=1e-8)
-
-                # STABILITY: Final check - clamp extreme values
-                text_cls = torch.clamp(text_cls, min=-10.0, max=10.0)
-                image_cls = torch.clamp(image_cls, min=-10.0, max=10.0)
-
-            # Update queues (momentum-based, no gradients)
+            # Update queues (momentum-based, no gradients) - FIBER style
             if self.training:
-                self._dequeue_and_enqueue(text_cls.detach(), image_cls.detach())
+                self._dequeue_and_enqueue(image_cls.clone().detach(), text_itc.clone().detach())
 
             return fused_output, {
-                'text_features': text_cls,
-                'image_features': image_cls,
-                'text_queue': self.text_queue.clone(),  # [embed_dim, queue_size]
-                'image_queue': self.image_queue.clone(),  # [embed_dim, queue_size]
+                'text_features': text_itc,  # [B, D] - raw pooler output, NOT normalized
+                'image_features': image_cls,  # [B, D] - raw pooler output, NOT normalized
+                'text_queue': self.text_queue.clone(),  # [D, Q]
+                'image_queue': self.image_queue.clone(),  # [D, Q]
                 'temperature': self.temperature
             }
 
