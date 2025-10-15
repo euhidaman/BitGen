@@ -260,6 +260,23 @@ class FIBERDatasetDownloader:
                 # Fallback to tar command
                 subprocess.run(["tar", "-xzf", str(dest), "-C", str(mdetr_dir)], check=False)
 
+            # Move files from OpenSource subdirectory to mdetr_annotations root
+            opensource_dir = mdetr_dir / "OpenSource"
+            if opensource_dir.exists():
+                self.logger.info("🔧 Moving annotations from OpenSource/ to mdetr_annotations/...")
+                import shutil
+                for json_file in opensource_dir.glob("*.json"):
+                    dest_file = mdetr_dir / json_file.name
+                    if not dest_file.exists():
+                        shutil.move(str(json_file), str(dest_file))
+                        self.logger.info(f"✓ Moved {json_file.name}")
+                
+                # Remove empty OpenSource directory
+                try:
+                    opensource_dir.rmdir()
+                except:
+                    pass
+
             self.logger.info("✅ RefCOCO annotations downloaded")
             self.logger.info("⚠️  Note: RefCOCO uses COCO 2014 images (downloaded above)")
             return True
