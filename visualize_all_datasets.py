@@ -360,6 +360,6 @@ if __name__ == "__main__":
     import sys
     
     data_root = sys.argv[1] if len(sys.argv) > 1 else "data"
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "."
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else "dataset-visualization"
     
     visualize_all_datasets(data_root, output_dir)
