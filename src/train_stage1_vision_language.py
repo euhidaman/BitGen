@@ -934,9 +934,16 @@ class Stage1Trainer:
                 # Check gradient norm BEFORE checking for NaN (handle inf/nan)
                 if torch.isnan(grad_norm) or torch.isinf(grad_norm) or grad_norm > 100.0:
                     if self.rank == 0:
-                        print(f"\n⚠️  Step {self.global_step + 1}: Gradient norm critical ({grad_norm}), emergency LR reduction")
+                        old_temp = self.config.temperature
+                        print(f"\n⚠️  Step {self.global_step + 1}: Gradient norm critical ({grad_norm})")
                         print(f"   Current LR: {self.optimizer.param_groups[0]['lr']:.2e}")
-                        print(f"   Temperature: {self.config.temperature}")
+                        print(f"   Current Temperature: {old_temp}")
+                        
+                        # Adaptive temperature increase (prevents future explosions)
+                        if self.config.temperature < 0.5:
+                            self.config.temperature = min(self.config.temperature * 1.5, 0.5)
+                            print(f"   🔥 Increasing temperature: {old_temp:.3f} → {self.config.temperature:.3f}")
+                        
                     # Emergency LR reduction (stronger)
                     for param_group in self.optimizer.param_groups:
                         param_group['lr'] *= 0.1  # Reduce by 90% (was 50%)
@@ -1041,9 +1048,10 @@ class Stage1Trainer:
                 'itc': f"{contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0:.4f}",
                 'itm': f"{itm_loss if isinstance(itm_loss, float) else itm_loss.item() if hasattr(itm_loss, 'item') else 0.0:.4f}",
                 'txt': f"{text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0:.4f}",
-                't2i': f"{acc_t2i if isinstance(acc_t2i, float) else acc_t2i.item() if hasattr(acc_t2i, 'item') else 0.0:.2f}",
+                't2i': f"{acc_t2i if isinstance(acc_t2i, float) else acc_t2i.item() if hasattr(acc_i2t, 'item') else 0.0:.2f}",
                 'i2t': f"{acc_i2t if isinstance(acc_i2t, float) else acc_i2t.item() if hasattr(acc_i2t, 'item') else 0.0:.2f}",
-                'lr': f"{current_lr:.2e}"
+                'lr': f"{current_lr:.2e}",
+                'temp': f"{self.config.temperature:.2f}"
             })
 
             # Log to wandb every 10 steps (only rank 0)
@@ -1069,7 +1077,9 @@ class Stage1Trainer:
                     'loss_components/text_reconstruction': text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
                     'loss_components/itc_contrastive': contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
                     'loss_components/itm_matching': itm_loss if isinstance(itm_loss, float) else itm_loss.item() if hasattr(itm_loss, 'item') else 0.0,
-                    'loss_components/memory_kl': memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
+                    'loss_components/memory_kl': memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0,
+                    'hyperparameters/temperature': self.config.temperature,
+                    'hyperparameters/learning_rate': current_lr
                 }, step=self.global_step)
 
                 self.wandb.step = self.global_step
