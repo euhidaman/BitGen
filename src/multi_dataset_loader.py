@@ -412,7 +412,8 @@ def create_multidataset_loader(
     vocab_size: int = 50257,
     num_workers: int = 4,
     shuffle: bool = True,
-    max_vg_samples: Optional[int] = 100000  # Limit VG to avoid memory issues
+    max_vg_samples: Optional[int] = 100000,  # Limit VG to avoid memory issues
+    use_ddp: bool = False  # Enable DistributedDataParallel sampling
 ) -> DataLoader:
     """
     Create multi-dataset dataloader for BitGen Stage 1
@@ -420,12 +421,13 @@ def create_multidataset_loader(
     Args:
         data_root: Root directory containing all datasets
         stage: "coarse" (image-text), "fine" (region-level), or "both"
-        batch_size: Batch size
+        batch_size: Batch size per GPU
         max_seq_len: Max sequence length for text
         vocab_size: Vocabulary size
         num_workers: Number of data loading workers
-        shuffle: Whether to shuffle data
+        shuffle: Whether to shuffle data (ignored if use_ddp=True)
         max_vg_samples: Max samples from VG (it's huge)
+        use_ddp: Enable DistributedDataParallel sampling
     
     Returns:
         DataLoader combining requested datasets
@@ -504,11 +506,23 @@ def create_multidataset_loader(
         is_fine = "fine-grained" if ds.is_fine_grained else "coarse-grained"
         print(f"    {i+1}. {dataset_name}: {len(ds):,} samples ({is_fine})")
     
+    # Setup sampler for DDP
+    sampler = None
+    if use_ddp:
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = DistributedSampler(
+            combined_dataset,
+            shuffle=shuffle,
+            drop_last=True  # Drop incomplete batches for DDP consistency
+        )
+        shuffle = False  # Sampler handles shuffling
+    
     # Create dataloader
     dataloader = DataLoader(
         combined_dataset,
         batch_size=batch_size,
         shuffle=shuffle,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=True,
         collate_fn=multi_dataset_collate_fn

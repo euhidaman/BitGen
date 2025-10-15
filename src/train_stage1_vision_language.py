@@ -79,12 +79,17 @@ class Stage1Config:
     fusion_layers: int = 2
 
     # Training config (BitMar-style - KISS!)
-    batch_size: int = 128  # Balanced for memory with 2-layer decoder
-    grad_accum_steps: int = 2  # Effective batch: 256 (close to original 320)
+    batch_size: int = 128  # Per GPU batch size (default for single GPU)
+    grad_accum_steps: int = 2  # Effective batch: 256 per GPU (default)
     learning_rate: float = 2e-4  # Match BitMar exactly
     weight_decay: float = 0.02  # Match BitMar exactly
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
     warmup_steps: int = 1000  # Match BitMar exactly
+    
+    # Multi-GPU config (for 8x A100)
+    use_ddp: bool = False  # Set to True for distributed training
+    num_gpus: int = 1  # Number of GPUs to use
+    a100_mode: bool = False  # Auto-optimize for 8x A100 GPUs
 
     # Early stopping config
     early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
@@ -585,50 +590,79 @@ class Stage1Trainer:
 
     def __init__(self, config: Stage1Config):
         self.config = config
-        self.device = torch.device(
-            'cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Setup DDP if multi-GPU
+        if config.use_ddp:
+            import torch.distributed as dist
+            if not dist.is_initialized():
+                dist.init_process_group(backend='nccl')
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+            self.device = torch.device(f'cuda:{self.rank}')
+            torch.cuda.set_device(self.rank)
+        else:
+            self.rank = 0
+            self.world_size = 1
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # Create directories
-        os.makedirs(config.checkpoint_dir, exist_ok=True)
-        os.makedirs(config.log_dir, exist_ok=True)
+        # Create directories (only on rank 0)
+        if self.rank == 0:
+            os.makedirs(config.checkpoint_dir, exist_ok=True)
+            os.makedirs(config.log_dir, exist_ok=True)
 
         # Initialize model
-        print("Initializing BitGen Vision-Language model...")
+        if self.rank == 0:
+            print("Initializing BitGen Vision-Language model...")
         self.model = BitGenVisionLanguageModel(config).to(self.device)
+        
+        # Wrap with DDP if multi-GPU
+        if config.use_ddp:
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            self.model = DDP(self.model, device_ids=[self.rank], find_unused_parameters=True)
 
-        # Count parameters
-        total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel()
-                               for p in self.model.parameters() if p.requires_grad)
-        print(f"Total parameters: {total_params:,}")
-        print(f"Trainable parameters: {trainable_params:,}")
+        # Count parameters (only on rank 0)
+        if self.rank == 0:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel()
+                                   for p in self.model.parameters() if p.requires_grad)
+            print(f"Total parameters: {total_params:,}")
+            print(f"Trainable parameters: {trainable_params:,}")
 
-        # Initialize WandB
-        config_dict = {
-            'stage': 'stage1',
-            'embed_dim': config.embed_dim,
-            'num_layers': config.num_layers,
-            'batch_size': config.batch_size,
-            'learning_rate': config.learning_rate,
-            'num_epochs': config.num_epochs,
-            'memory_size': config.memory_size,
-            'total_params': total_params,
-            'trainable_params': trainable_params
-        }
-        self.wandb = setup_wandb_integration(
-            project_name="bitgen-training",
-            entity="babylm-ntust",
-            run_name=f"stage1-vision-language-{time.strftime('%Y%m%d-%H%M%S')}",
-            config=config_dict,
-            stage="stage1"
-        )
+        # Initialize WandB (only on rank 0)
+        if self.rank == 0:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel()
+                                   for p in self.model.parameters() if p.requires_grad)
+            config_dict = {
+                'stage': 'stage1',
+                'embed_dim': config.embed_dim,
+                'num_layers': config.num_layers,
+                'batch_size': config.batch_size,
+                'effective_batch_size': config.batch_size * self.world_size,
+                'learning_rate': config.learning_rate,
+                'num_epochs': config.num_epochs,
+                'memory_size': config.memory_size,
+                'num_gpus': self.world_size,
+                'total_params': total_params,
+                'trainable_params': trainable_params
+            }
+            self.wandb = setup_wandb_integration(
+                project_name="bitgen-training",
+                entity="babylm-ntust",
+                run_name=f"stage1-vision-language-{time.strftime('%Y%m%d-%H%M%S')}",
+                config=config_dict,
+                stage="stage1"
+            )
 
-        # Initialize HuggingFace Hub - Stage 1: PreReasoning (Vision-Language)
-        self.hf_integration = HuggingFaceIntegration(
-            repo_name="BitGen-PreReasoning",
-            stage="stage1"
-        )
-        self.hf_integration.create_repo()
+            # Initialize HuggingFace Hub - Stage 1: PreReasoning (Vision-Language)
+            self.hf_integration = HuggingFaceIntegration(
+                repo_name="BitGen-PreReasoning",
+                stage="stage1"
+            )
+            self.hf_integration.create_repo()
+        else:
+            self.wandb = None
+            self.hf_integration = None
 
         # Early stopping tracking
         self.best_val_loss = float('inf')
@@ -1309,8 +1343,48 @@ def main():
     Supports two modes:
     1. Single dataset (COCO only) - Legacy mode
     2. Multi-dataset (FIBER-style) - Coarse + Fine-grained
+    
+    Multi-GPU support:
+    - Use --a100 flag for 8x A100 optimization
     """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='BitGen Stage 1 Training')
+    parser.add_argument('--a100', action='store_true',
+                       help='Enable 8x A100 GPU optimization (larger batches, DDP)')
+    parser.add_argument('--gpus', type=int, default=None,
+                       help='Number of GPUs to use (default: auto-detect)')
+    parser.add_argument('--batch-size', type=int, default=None,
+                       help='Override batch size per GPU')
+    args = parser.parse_args()
+    
     config = Stage1Config()
+    
+    # A100 optimization mode
+    if args.a100:
+        config.a100_mode = True
+        config.use_ddp = True
+        config.num_gpus = args.gpus if args.gpus else torch.cuda.device_count()
+        
+        # Optimize for 8x A100 (80GB each)
+        config.batch_size = args.batch_size if args.batch_size else 256  # 256 per GPU (was 128)
+        config.grad_accum_steps = 1  # No grad accumulation needed with large batch
+        config.learning_rate = 2e-4 * (config.num_gpus ** 0.5)  # Scale LR with sqrt(GPUs)
+        
+        print("\n" + "="*80)
+        print("🚀 A100 MULTI-GPU MODE ENABLED")
+        print("="*80)
+        print(f"GPUs detected: {config.num_gpus}")
+        print(f"Batch size per GPU: {config.batch_size}")
+        print(f"Effective batch size: {config.batch_size * config.num_gpus}")
+        print(f"Gradient accumulation: {config.grad_accum_steps}")
+        print(f"Learning rate (scaled): {config.learning_rate:.6f}")
+        print("="*80 + "\n")
+    elif args.gpus:
+        config.num_gpus = args.gpus
+        config.use_ddp = config.num_gpus > 1
+        if args.batch_size:
+            config.batch_size = args.batch_size
     
     print("\n" + "="*80)
     print("BitGen Stage 1: Vision-Language Pre-training")
@@ -1319,6 +1393,8 @@ def main():
     print(f"Two-phase training: {'Enabled (Coarse → Fine)' if config.enable_two_phase_training else 'Disabled'}")
     print(f"Larimar Memory: Enabled (size={config.memory_size})")
     print(f"BitNet Quantization: Enabled (for encoders/decoders)")
+    if config.use_ddp:
+        print(f"Multi-GPU: {config.num_gpus} GPUs (DistributedDataParallel)")
     print("="*80 + "\n")
     
     if config.use_multi_datasets:
@@ -1350,7 +1426,8 @@ def main():
                 vocab_size=config.vocab_size,
                 num_workers=4,
                 shuffle=True,
-                max_vg_samples=config.max_vg_samples
+                max_vg_samples=config.max_vg_samples,
+                use_ddp=config.use_ddp
             )
             
             val_loader_coarse = create_multidataset_loader(
@@ -1361,7 +1438,8 @@ def main():
                 vocab_size=config.vocab_size,
                 num_workers=4,
                 shuffle=False,
-                max_vg_samples=config.max_vg_samples // 10  # Smaller val set
+                max_vg_samples=config.max_vg_samples // 10,  # Smaller val set
+                use_ddp=config.use_ddp
             )
             
             # Phase 2: Fine-Grained (region-level)
@@ -1381,7 +1459,8 @@ def main():
                 vocab_size=config.vocab_size,
                 num_workers=4,
                 shuffle=True,
-                max_vg_samples=config.max_vg_samples
+                max_vg_samples=config.max_vg_samples,
+                use_ddp=config.use_ddp
             )
             
             val_loader_fine = create_multidataset_loader(
@@ -1392,7 +1471,8 @@ def main():
                 vocab_size=config.vocab_size,
                 num_workers=4,
                 shuffle=False,
-                max_vg_samples=config.max_vg_samples // 10
+                max_vg_samples=config.max_vg_samples // 10,
+                use_ddp=config.use_ddp
             )
             
             # Train Phase 1
