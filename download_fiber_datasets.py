@@ -60,9 +60,20 @@ class FIBERDatasetDownloader:
                     else:
                         self.logger.info(f"⚠️  {folder_name} exists but only has {image_count:,} images (expected ~{min_images:,})")
                 
-                # Check if zip file exists
+                # Check if zip file exists and is valid
                 if dest.exists():
-                    self.logger.info(f"✓ {filename} already downloaded - extracting...")
+                    # Verify it's a valid zip file
+                    try:
+                        import zipfile
+                        with zipfile.ZipFile(dest, 'r') as zip_test:
+                            zip_test.testzip()
+                        self.logger.info(f"✓ {filename} already downloaded and valid - extracting...")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️  {filename} exists but is corrupted - re-downloading...")
+                        dest.unlink()  # Delete corrupted file
+                        self.logger.info(f"📥 Downloading {filename}...")
+                        subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                        self.logger.info(f"✓ Downloaded {filename}")
                 else:
                     self.logger.info(f"📥 Downloading {filename}...")
                     subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
