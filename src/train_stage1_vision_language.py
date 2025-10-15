@@ -727,7 +727,6 @@ class Stage1Trainer:
         if self.rank == 0:
             try:
                 from codecarbon import EmissionsTracker
-                import os
                 
                 # Clean up corrupted emissions file if exists
                 emissions_file = os.path.join(config.log_dir, "emissions.csv")
