@@ -1348,6 +1348,10 @@ def main():
     - Use --a100 flag for 8x A100 optimization
     """
     import argparse
+    import os
+    
+    # Enable memory optimization for CUDA
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     
     parser = argparse.ArgumentParser(description='BitGen Stage 1 Training')
     parser.add_argument('--a100', action='store_true',
@@ -1366,9 +1370,9 @@ def main():
         config.use_ddp = True
         config.num_gpus = args.gpus if args.gpus else torch.cuda.device_count()
         
-        # Optimize for 8x A100 (80GB each)
-        config.batch_size = args.batch_size if args.batch_size else 256  # 256 per GPU (was 128)
-        config.grad_accum_steps = 1  # No grad accumulation needed with large batch
+        # Optimize for 8x A100 (80GB each) - reduced batch size to fit in memory
+        config.batch_size = args.batch_size if args.batch_size else 64  # 64 per GPU (was 256, OOM)
+        config.grad_accum_steps = 2  # Accumulate to effective batch of 128/GPU = 1024 total
         config.learning_rate = 2e-4 * (config.num_gpus ** 0.5)  # Scale LR with sqrt(GPUs)
         
         print("\n" + "="*80)
@@ -1376,8 +1380,9 @@ def main():
         print("="*80)
         print(f"GPUs detected: {config.num_gpus}")
         print(f"Batch size per GPU: {config.batch_size}")
-        print(f"Effective batch size: {config.batch_size * config.num_gpus}")
-        print(f"Gradient accumulation: {config.grad_accum_steps}")
+        print(f"Gradient accumulation steps: {config.grad_accum_steps}")
+        print(f"Effective batch per GPU: {config.batch_size * config.grad_accum_steps}")
+        print(f"Total effective batch: {config.batch_size * config.grad_accum_steps * config.num_gpus}")
         print(f"Learning rate (scaled): {config.learning_rate:.6f}")
         print("="*80 + "\n")
     elif args.gpus:
@@ -1386,47 +1391,61 @@ def main():
         if args.batch_size:
             config.batch_size = args.batch_size
     
-    print("\n" + "="*80)
-    print("BitGen Stage 1: Vision-Language Pre-training")
-    print("="*80)
-    print(f"Training mode: {'FIBER-style Multi-Dataset' if config.use_multi_datasets else 'Single COCO Dataset'}")
-    print(f"Two-phase training: {'Enabled (Coarse → Fine)' if config.enable_two_phase_training else 'Disabled'}")
-    print(f"Larimar Memory: Enabled (size={config.memory_size})")
-    print(f"BitNet Quantization: Enabled (for encoders/decoders)")
-    if config.use_ddp:
-        print(f"Multi-GPU: {config.num_gpus} GPUs (DistributedDataParallel)")
-    print("="*80 + "\n")
-    
     # Initialize distributed training BEFORE creating dataloaders
+    rank = 0
+    world_size = 1
     if config.use_ddp:
         import torch.distributed as dist
         if not dist.is_initialized():
-            dist.init_process_group(backend='nccl')
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-            torch.cuda.set_device(rank)
-            print(f"🔧 Initialized DDP: rank={rank}/{world_size}, device=cuda:{rank}")
+            try:
+                dist.init_process_group(backend='nccl')
+                rank = dist.get_rank()
+                world_size = dist.get_world_size()
+                torch.cuda.set_device(rank)
+                if rank == 0:
+                    print(f"✅ DDP initialized: {world_size} processes")
+            except Exception as e:
+                print(f"❌ [Rank {rank}] Failed to initialize DDP: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+    
+    # Print configuration (only on rank 0)
+    if rank == 0:
+        print("\n" + "="*80)
+        print("BitGen Stage 1: Vision-Language Pre-training")
+        print("="*80)
+        print(f"Training mode: {'FIBER-style Multi-Dataset' if config.use_multi_datasets else 'Single COCO Dataset'}")
+        print(f"Two-phase training: {'Enabled (Coarse → Fine)' if config.enable_two_phase_training else 'Disabled'}")
+        print(f"Larimar Memory: Enabled (size={config.memory_size})")
+        print(f"BitNet Quantization: Enabled (for encoders/decoders)")
+        if config.use_ddp:
+            print(f"Multi-GPU: {config.num_gpus} GPUs (DistributedDataParallel)")
+        print("="*80 + "\n")
     
     if config.use_multi_datasets:
         # ===== FIBER-Style Multi-Dataset Mode =====
-        print("📦 Loading multiple datasets (FIBER-style)...")
+        if rank == 0:
+            print("📦 Loading multiple datasets (FIBER-style)...")
         
         try:
             from multi_dataset_loader import create_multidataset_loader
         except ImportError:
-            print("ERROR: multi_dataset_loader.py not found!")
-            print("Please ensure multi_dataset_loader.py is in src/ directory")
+            if rank == 0:
+                print("ERROR: multi_dataset_loader.py not found!")
+                print("Please ensure multi_dataset_loader.py is in src/ directory")
             sys.exit(1)
         
         if config.enable_two_phase_training:
             # Phase 1: Coarse-Grained (image-text pairs)
-            print("\n" + "="*60)
-            print("PHASE 1: Coarse-Grained Pre-training")
-            print("="*60)
-            print(f"Datasets: COCO, Visual Genome (captions)")
-            print(f"Tasks: ITC (contrastive), ITM (matching)")
-            print(f"Epochs: {config.coarse_epochs}")
-            print("="*60 + "\n")
+            if rank == 0:
+                print("\n" + "="*60)
+                print("PHASE 1: Coarse-Grained Pre-training")
+                print("="*60)
+                print(f"Datasets: COCO, Visual Genome (captions)")
+                print(f"Tasks: ITC (contrastive), ITM (matching)")
+                print(f"Epochs: {config.coarse_epochs}")
+                print("="*60 + "\n")
             
             train_loader_coarse = create_multidataset_loader(
                 data_root=config.data_root,
