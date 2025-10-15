@@ -48,6 +48,12 @@ class WandBIntegration:
         self.project_name = project_name
         self.stage = stage
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize tracking variables BEFORE early return (needed by all ranks)
+        self.step = 0
+        self.epoch = 0
+        self.best_metrics = {}
+        self.metric_history = {}
 
         # Stage-specific tags
         stage_tags = {
@@ -78,12 +84,6 @@ class WandBIntegration:
             job_type="training",
             settings=wandb.Settings(start_method="thread")  # Use thread instead of fork for DDP
         )
-
-        # Tracking variables
-        self.step = 0
-        self.epoch = 0
-        self.best_metrics = {}
-        self.metric_history = {}
 
         self.logger.info(
             f"Initialized WandB run: {self.run.name} in {entity}/{project_name} ({stage})")
