@@ -167,6 +167,27 @@ def verify_datasets(data_root: str = "data") -> Dict:
     print("📦 RefCOCO/+/g Annotations (MDETR)")
     print("-" * 70)
     
+    # Debug: Show what files actually exist
+    mdetr_dir = data_root / "mdetr_annotations"
+    if mdetr_dir.exists():
+        print(f"   📁 Looking in: {mdetr_dir}")
+        json_files = list(mdetr_dir.glob("*.json"))
+        if json_files:
+            print(f"   📄 Found {len(json_files)} JSON files:")
+            for f in json_files:
+                size_mb = f.stat().st_size / (1024 * 1024)
+                print(f"      - {f.name} ({size_mb:.1f} MB)")
+        else:
+            print(f"   ⚠️  No JSON files found in {mdetr_dir}")
+            # Check OpenSource subdirectory
+            opensource_dir = mdetr_dir / "OpenSource"
+            if opensource_dir.exists():
+                print(f"   ⚠️  Found OpenSource/ subdirectory - files may need to be moved")
+                print(f"      Run: python fix_refcoco_paths.py")
+    else:
+        print(f"   ❌ Directory does not exist: {mdetr_dir}")
+    print()
+    
     refcoco = check_file(
         data_root / "mdetr_annotations" / "final_refcoco_train.json",
         "final_refcoco_train.json"
