@@ -108,7 +108,7 @@ class Stage1Config:
     memory_kl_weight: float = 0.1  # Episodic memory regularization (BitGen innovation)
     itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives from ITC queue)
     queue_size: int = 4096
-    temperature: float = 0.1  # Increased from 0.07 to prevent numerical instability (NaN at step 716)
+    temperature: float = 0.2  # Increased from 0.07→0.1→0.2 to prevent gradient explosion (grad_norm=inf)
     use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
     # FIBER-style two-phase training
@@ -931,14 +931,15 @@ class Stage1Trainer:
                     self.config.max_grad_norm
                 )
                 
-                # Check gradient norm BEFORE checking for NaN
-                # If norm is too high, it's a warning sign
-                if grad_norm > 100.0:
+                # Check gradient norm BEFORE checking for NaN (handle inf/nan)
+                if torch.isnan(grad_norm) or torch.isinf(grad_norm) or grad_norm > 100.0:
                     if self.rank == 0:
-                        print(f"\n⚠️  Step {self.global_step + 1}: Gradient norm very high ({grad_norm:.2f}), reducing LR")
-                    # Emergency LR reduction
+                        print(f"\n⚠️  Step {self.global_step + 1}: Gradient norm critical ({grad_norm}), emergency LR reduction")
+                        print(f"   Current LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                        print(f"   Temperature: {self.config.temperature}")
+                    # Emergency LR reduction (stronger)
                     for param_group in self.optimizer.param_groups:
-                        param_group['lr'] *= 0.5
+                        param_group['lr'] *= 0.1  # Reduce by 90% (was 50%)
                 
                 # Check for NaN/inf gradients AFTER clipping
                 has_nan = False
@@ -951,20 +952,23 @@ class Stage1Trainer:
                 
                 if has_nan:
                     if self.rank == 0:
-                        print(f"\n❌ Step {self.global_step + 1}: NaN/Inf in {nan_param_count} parameters! Grad norm: {grad_norm:.2f}")
-                        print(f"   This usually means model collapse. Consider:")
-                        print(f"   1. Increasing temperature from {self.config.temperature} to 0.1")
-                        print(f"   2. Reducing learning rate")
-                        print(f"   3. Checking if features are normalized")
+                        print(f"\n❌ Step {self.global_step + 1}: NaN/Inf in {nan_param_count} parameters! Grad norm: {grad_norm}")
+                        print(f"   Current loss: {loss.item():.4f}")
+                        print(f"   Current LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                        print(f"   Temperature: {self.config.temperature}")
                         
-                        # Check if NaN is persistent (more than 10 consecutive)
+                        # Check if NaN is persistent (more than 5 consecutive = model collapse)
                         if not hasattr(self, 'nan_counter'):
                             self.nan_counter = 0
                         self.nan_counter += 1
                         
-                        if self.nan_counter > 10:
+                        if self.nan_counter >= 5:  # Reduced from 10 to 5
                             print(f"\n💥 CRITICAL: {self.nan_counter} consecutive NaN gradients!")
                             print(f"   Model has collapsed. Stopping training.")
+                            print(f"   Suggestions:")
+                            print(f"   1. Increase temperature to 0.5+ (current: {self.config.temperature})")
+                            print(f"   2. Reduce batch size from {self.config.batch_size} to {self.config.batch_size // 2}")
+                            print(f"   3. Reduce learning rate by 10x")
                             raise RuntimeError("Model collapsed with persistent NaN gradients")
                     
                     self.optimizer.zero_grad()
@@ -1060,17 +1064,13 @@ class Stage1Trainer:
                     lr=current_lr
                 )
 
-                # Log loss components (new multi-component loss)
-                self.wandb.log_loss_components_stacked(
-                    text_loss=text_loss if isinstance(
-                        text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
-                    contrastive_loss=contrastive_loss if isinstance(
-                        contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
-                    memory_kl=memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item(
-                    ) if hasattr(memory_kl_loss, 'item') else 0.0,
-                    epoch=self.epoch,
-                    step=self.global_step
-                )
+                # Log loss components (ITM loss is the main component now)
+                self.wandb.log_training_metrics({
+                    'loss_components/text_reconstruction': text_loss if isinstance(text_loss, float) else text_loss.item() if hasattr(text_loss, 'item') else 0.0,
+                    'loss_components/itc_contrastive': contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0,
+                    'loss_components/itm_matching': itm_loss if isinstance(itm_loss, float) else itm_loss.item() if hasattr(itm_loss, 'item') else 0.0,
+                    'loss_components/memory_kl': memory_kl_loss if isinstance(memory_kl_loss, float) else memory_kl_loss.item() if hasattr(memory_kl_loss, 'item') else 0.0
+                }, step=self.global_step)
 
                 self.wandb.step = self.global_step
             
@@ -1084,8 +1084,8 @@ class Stage1Trainer:
                         print(f"   Energy consumed: {emissions_data * 1000:.2f} Wh")
                         if self.wandb is not None:
                             self.wandb.log_training_metrics({
-                                'carbon/co2_kg': emissions_data,
-                                'carbon/energy_wh': emissions_data * 1000
+                                'sustainability/carbon/co2_kg': emissions_data,
+                                'sustainability/carbon/energy_wh': emissions_data * 1000
                             }, step=self.global_step)
                     self.tracker.start()  # Restart tracking
                 except Exception as e:
