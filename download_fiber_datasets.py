@@ -57,11 +57,18 @@ class FIBERDatasetDownloader:
                 subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
                 self.logger.info(f"✓ Downloaded {filename}")
 
-                # Extract
+                # Extract using Python's zipfile (cross-platform)
                 if dest.suffix == '.zip':
                     self.logger.info(f"📦 Extracting {filename}...")
-                    subprocess.run(["unzip", "-q", str(dest), "-d", str(vg_dir)], check=False)
-                    self.logger.info(f"✓ Extracted {filename}")
+                    try:
+                        import zipfile
+                        with zipfile.ZipFile(dest, 'r') as zip_ref:
+                            zip_ref.extractall(vg_dir)
+                        self.logger.info(f"✓ Extracted {filename}")
+                    except Exception as e:
+                        self.logger.error(f"❌ Extraction failed: {e}")
+                        # Fallback to unzip command
+                        subprocess.run(["unzip", "-q", str(dest), "-d", str(vg_dir)], check=False)
 
             # Download annotations
             ann_urls = [
@@ -79,8 +86,14 @@ class FIBERDatasetDownloader:
                 subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
                 self.logger.info(f"✓ Downloaded {filename}")
 
-                # Extract JSON
-                subprocess.run(["unzip", "-q", str(dest), "-d", str(vg_dir)], check=False)
+                # Extract JSON using Python's zipfile
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(dest, 'r') as zip_ref:
+                        zip_ref.extractall(vg_dir)
+                except Exception as e:
+                    self.logger.error(f"❌ Extraction failed: {e}")
+                    subprocess.run(["unzip", "-q", str(dest), "-d", str(vg_dir)], check=False)
 
             self.logger.info("✅ Visual Genome downloaded successfully")
             return True
@@ -120,9 +133,17 @@ class FIBERDatasetDownloader:
             for url, filename in all_urls:
                 dest = coco_dir / filename
                 
-                # Check if already extracted
+                # Check if already extracted (check for images not just folder)
                 extracted_name = filename.replace('.zip', '')
-                if (coco_dir / extracted_name).exists():
+                extracted_path = coco_dir / extracted_name
+                
+                # For image folders, check if they have images
+                if extracted_name in ['train2014', 'val2014', 'train2017', 'val2017']:
+                    if extracted_path.exists() and len(list(extracted_path.glob("*.jpg"))) > 1000:
+                        self.logger.info(f"✓ {extracted_name} already exists with images")
+                        continue
+                # For annotation folders, just check if folder exists
+                elif extracted_path.exists():
                     self.logger.info(f"✓ {extracted_name} already exists")
                     continue
                 
@@ -133,10 +154,32 @@ class FIBERDatasetDownloader:
                     subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
                     self.logger.info(f"✓ Downloaded {filename}")
                 
-                # Extract
+                # Extract using Python's zipfile (cross-platform)
                 self.logger.info(f"📦 Extracting {filename}...")
-                subprocess.run(["unzip", "-q", str(dest), "-d", str(coco_dir)], check=False)
-                self.logger.info(f"✓ Extracted {filename}")
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(dest, 'r') as zip_ref:
+                        zip_ref.extractall(coco_dir)
+                    self.logger.info(f"✓ Extracted {filename}")
+                except Exception as e:
+                    self.logger.error(f"❌ Extraction failed: {e}")
+                    # Fallback to unzip command
+                    subprocess.run(["unzip", "-q", str(dest), "-d", str(coco_dir)], check=False)
+            
+            # Fix annotation paths - move from annotations_trainval20XX to annotations/
+            self.logger.info("🔧 Fixing annotation folder structure...")
+            ann_dir = coco_dir / "annotations"
+            ann_dir.mkdir(exist_ok=True)
+            
+            for ann_folder in ["annotations_trainval2014", "annotations_trainval2017"]:
+                ann_source = coco_dir / ann_folder / "annotations"
+                if ann_source.exists():
+                    for json_file in ann_source.glob("*.json"):
+                        dest_file = ann_dir / json_file.name
+                        if not dest_file.exists():
+                            import shutil
+                            shutil.copy2(json_file, dest_file)
+                            self.logger.info(f"✓ Copied {json_file.name} to annotations/")
             
             self.logger.info("✅ COCO dataset downloaded from official source")
             return True
@@ -164,10 +207,17 @@ class FIBERDatasetDownloader:
             subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
             self.logger.info("✓ Downloaded MDETR annotations")
 
-            # Extract
+            # Extract using Python's tarfile (cross-platform)
             self.logger.info("📦 Extracting annotations...")
-            subprocess.run(["tar", "-xzf", str(dest), "-C", str(mdetr_dir)], check=False)
-            self.logger.info("✓ Extracted annotations")
+            try:
+                import tarfile
+                with tarfile.open(dest, 'r:gz') as tar_ref:
+                    tar_ref.extractall(mdetr_dir)
+                self.logger.info("✓ Extracted annotations")
+            except Exception as e:
+                self.logger.error(f"❌ Extraction failed: {e}")
+                # Fallback to tar command
+                subprocess.run(["tar", "-xzf", str(dest), "-C", str(mdetr_dir)], check=False)
 
             self.logger.info("✅ RefCOCO annotations downloaded")
             self.logger.info("⚠️  Note: RefCOCO uses COCO 2014 images (downloaded above)")

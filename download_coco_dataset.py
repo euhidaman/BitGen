@@ -51,10 +51,17 @@ class COCODownloader:
                     subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
                     self.logger.info(f"✓ Downloaded {filename}")
                 
-                # Extract
+                # Extract using Python's zipfile (cross-platform)
                 self.logger.info(f"📦 Extracting {filename}...")
-                subprocess.run(["unzip", "-q", str(dest), "-d", str(self.output_dir)], check=False)
-                self.logger.info(f"✓ Extracted {filename}")
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(dest, 'r') as zip_ref:
+                        zip_ref.extractall(self.output_dir)
+                    self.logger.info(f"✓ Extracted {filename}")
+                except Exception as e:
+                    self.logger.error(f"❌ Extraction failed: {e}")
+                    # Fallback to unzip command
+                    subprocess.run(["unzip", "-q", str(dest), "-d", str(self.output_dir)], check=False)
             
             self.logger.info("✅ COCO dataset downloaded from official source")
             return True
