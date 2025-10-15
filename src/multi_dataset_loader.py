@@ -225,8 +225,8 @@ class RefCOCODataset(BaseVisionLanguageDataset):
         super().__init__(data_root, is_fine_grained=True, **kwargs)
         self.dataset_name = dataset_name
         
-        # Load MDETR annotations
-        ann_file = self.data_root / "mdetr_annotations" / f"final_{dataset_name}_train.json"
+        # Load MDETR annotations (use finetune_ prefix, not final_)
+        ann_file = self.data_root / "mdetr_annotations" / f"finetune_{dataset_name}_train.json"
         image_dir = self.data_root / "coco" / "train2014"
         
         if not ann_file.exists():

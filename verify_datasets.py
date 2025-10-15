@@ -188,23 +188,24 @@ def verify_datasets(data_root: str = "data") -> Dict:
         print(f"   ❌ Directory does not exist: {mdetr_dir}")
     print()
     
+    # Check for finetune_ prefix (actual MDETR format)
     refcoco = check_file(
-        data_root / "mdetr_annotations" / "final_refcoco_train.json",
-        "final_refcoco_train.json"
+        data_root / "mdetr_annotations" / "finetune_refcoco_train.json",
+        "finetune_refcoco_train.json"
     )
-    print(f"   {'✅' if refcoco else '❌'} final_refcoco_train.json")
+    print(f"   {'✅' if refcoco else '❌'} finetune_refcoco_train.json")
     
     refcoco_plus = check_file(
-        data_root / "mdetr_annotations" / "final_refcoco+_train.json",
-        "final_refcoco+_train.json"
+        data_root / "mdetr_annotations" / "finetune_refcoco+_train.json",
+        "finetune_refcoco+_train.json"
     )
-    print(f"   {'✅' if refcoco_plus else '❌'} final_refcoco+_train.json")
+    print(f"   {'✅' if refcoco_plus else '❌'} finetune_refcoco+_train.json")
     
     refcocog = check_file(
-        data_root / "mdetr_annotations" / "final_refcocog_train.json",
-        "final_refcocog_train.json"
+        data_root / "mdetr_annotations" / "finetune_refcocog_train.json",
+        "finetune_refcocog_train.json"
     )
-    print(f"   {'✅' if refcocog else '❌'} final_refcocog_train.json")
+    print(f"   {'✅' if refcocog else '❌'} finetune_refcocog_train.json")
     
     results['details']['refcoco_annotations'] = {
         'refcoco': refcoco,

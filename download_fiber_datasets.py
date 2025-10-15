@@ -226,11 +226,11 @@ class FIBERDatasetDownloader:
             mdetr_dir = self.output_dir / "mdetr_annotations"
             mdetr_dir.mkdir(parents=True, exist_ok=True)
 
-            # Check if annotations already extracted
+            # Check if annotations already extracted (use finetune_ prefix)
             required_files = [
-                "final_refcoco_train.json",
-                "final_refcoco+_train.json", 
-                "final_refcocog_train.json"
+                "finetune_refcoco_train.json",
+                "finetune_refcoco+_train.json", 
+                "finetune_refcocog_train.json"
             ]
             
             all_exist = all((mdetr_dir / f).exists() for f in required_files)

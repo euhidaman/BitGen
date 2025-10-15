@@ -43,9 +43,9 @@ def fix_refcoco_paths(data_root: str = "data"):
     # Verify files are now in correct location
     print("\n📋 Verifying RefCOCO annotations:")
     required_files = [
-        "final_refcoco_train.json",
-        "final_refcoco+_train.json",
-        "final_refcocog_train.json"
+        "finetune_refcoco_train.json",
+        "finetune_refcoco+_train.json",
+        "finetune_refcocog_train.json"
     ]
     
     all_ok = True
