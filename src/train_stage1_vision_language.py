@@ -336,38 +336,83 @@ class BitGenVisionLanguageModel(nn.Module):
             loss_dict['acc_t2i'] = 0.0
             loss_dict['acc_i2t'] = 0.0
 
-        # 2. Image-Text Matching (ITM) Loss - Hard negative mining
+        # 2. Image-Text Matching (ITM) Loss - FIBER-style hard negative mining
+        # FIBER approach: Sample hard negatives from ITC queue using multinomial distribution
         if contrastive_dict is not None:
             text_features = contrastive_dict['text_features']
             image_features = contrastive_dict['image_features']
+            text_queue = contrastive_dict['text_queue']  # [D, Q]
+            image_queue = contrastive_dict['image_queue']  # [D, Q]
             batch_size = text_features.shape[0]
             
-            # Create hard negatives by shuffling within batch
-            # Positive pairs: (text[i], image[i]) → label = 1
-            # Negative pairs: (text[i], image[j where j≠i]) → label = 0
+            # FIBER: Use ITC similarity scores to sample hard negatives probabilistically
+            with torch.no_grad():
+                # Concatenate current batch + queue features
+                # text_features: [B, D], text_queue: [D, Q] → concat gives [B, B+Q]
+                text_feat_all = torch.cat([text_features.T, text_queue], dim=1)  # [D, B+Q]
+                image_feat_all = torch.cat([image_features.T, image_queue], dim=1)  # [D, B+Q]
+                
+                # Compute similarity with queue (normalized by temperature)
+                temperature = contrastive_dict['temperature']
+                sim_i2t = image_features @ text_feat_all / temperature  # [B, B+Q]
+                sim_t2i = text_features @ image_feat_all / temperature  # [B, B+Q]
+                
+                # Convert to probabilities (softmax) - higher similarity = harder negative
+                weights_i2t = F.softmax(sim_i2t, dim=1)  # [B, B+Q]
+                weights_t2i = F.softmax(sim_t2i, dim=1)  # [B, B+Q]
+                
+                # Zero out diagonal (don't sample self as negative)
+                weights_i2t[:, :batch_size].fill_diagonal_(0)
+                weights_t2i[:, :batch_size].fill_diagonal_(0)
+                
+                # FIBER: Sample hard negatives using multinomial (probabilistic sampling)
+                # This gives diversity - not always the hardest, but hard samples
+                hard_neg_text_idx = []
+                hard_neg_image_idx = []
+                for b in range(batch_size):
+                    # Sample text negative for image[b]
+                    neg_idx_t = torch.multinomial(weights_i2t[b] + 1e-9, 1).item()
+                    hard_neg_text_idx.append(neg_idx_t)
+                    
+                    # Sample image negative for text[b]
+                    neg_idx_i = torch.multinomial(weights_t2i[b] + 1e-9, 1).item()
+                    hard_neg_image_idx.append(neg_idx_i)
+                
+                # Extract hard negative features from batch or queue
+                hard_neg_text_features = []
+                hard_neg_image_features = []
+                for idx_t, idx_i in zip(hard_neg_text_idx, hard_neg_image_idx):
+                    # Text negative
+                    if idx_t < batch_size:
+                        hard_neg_text_features.append(text_features[idx_t])
+                    else:
+                        # From queue: text_queue is [D, Q], get column idx_t - batch_size
+                        hard_neg_text_features.append(text_queue[:, idx_t - batch_size])
+                    
+                    # Image negative
+                    if idx_i < batch_size:
+                        hard_neg_image_features.append(image_features[idx_i])
+                    else:
+                        # From queue
+                        hard_neg_image_features.append(image_queue[:, idx_i - batch_size])
+                
+                hard_neg_text_features = torch.stack(hard_neg_text_features)  # [B, D]
+                hard_neg_image_features = torch.stack(hard_neg_image_features)  # [B, D]
             
-            # Positive pairs
+            # Positive pairs: (text[i], image[i]) → label = 1
             pos_similarity = (text_features * image_features).sum(dim=-1)  # [B]
             pos_labels = torch.ones(batch_size, device=text_features.device)
             
-            # Hard negative pairs (use most confusing negatives)
-            with torch.no_grad():
-                sim_matrix = text_features @ image_features.T  # [B, B]
-                # Mask diagonal (positive pairs)
-                mask = torch.eye(batch_size, device=sim_matrix.device).bool()
-                sim_matrix.masked_fill_(mask, float('-inf'))
-                # Get hardest negative for each sample
-                hard_neg_idx = sim_matrix.argmax(dim=1)  # [B]
-            
-            neg_image_features = image_features[hard_neg_idx]
-            neg_similarity = (text_features * neg_image_features).sum(dim=-1)  # [B]
-            neg_labels = torch.zeros(batch_size, device=text_features.device)
+            # Hard negative pairs from ITC queue: (text[i], hard_image[j]) + (hard_text[k], image[i])
+            neg_similarity_t2i = (text_features * hard_neg_image_features).sum(dim=-1)  # [B]
+            neg_similarity_i2t = (hard_neg_text_features * image_features).sum(dim=-1)  # [B]
+            neg_labels = torch.zeros(batch_size * 2, device=text_features.device)
             
             # Combine positive and negative pairs
-            all_similarities = torch.cat([pos_similarity, neg_similarity], dim=0)
+            all_similarities = torch.cat([pos_similarity, neg_similarity_t2i, neg_similarity_i2t], dim=0)
             all_labels = torch.cat([pos_labels, neg_labels], dim=0)
             
-            # Binary classification loss
+            # Binary classification loss (FIBER style)
             itm_loss = F.binary_cross_entropy_with_logits(
                 all_similarities, all_labels
             )
