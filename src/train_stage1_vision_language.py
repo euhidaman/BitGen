@@ -25,6 +25,11 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, message='.*pynvml.*')
 warnings.filterwarnings('ignore', category=UserWarning, message='.*UnsupportedFieldAttributeWarning.*')
 
+# Set WandB to only run on rank 0 in DDP mode
+import os
+os.environ['WANDB_CONSOLE'] = 'off'  # Reduce console spam
+os.environ['WANDB_SILENT'] = 'true'  # Silence WandB warnings
+
 from huggingface_integration import HuggingFaceIntegration
 from wandb_integration import setup_wandb_integration
 from data_loader import COCODataset
@@ -722,14 +727,34 @@ class Stage1Trainer:
         if self.rank == 0:
             try:
                 from codecarbon import EmissionsTracker
+                import os
+                
+                # Clean up corrupted emissions file if exists
+                emissions_file = os.path.join(config.log_dir, "emissions.csv")
+                if os.path.exists(emissions_file):
+                    try:
+                        # Check if file is empty or corrupted
+                        with open(emissions_file, 'r') as f:
+                            content = f.read().strip()
+                            if not content or len(content) < 10:  # File is empty or too small
+                                os.remove(emissions_file)
+                                print("🗑️  Removed corrupted emissions.csv")
+                    except:
+                        pass
+                
                 self.tracker = EmissionsTracker(
                     project_name="BitGen-Stage1-VisionLanguage",
                     output_dir=config.log_dir,
-                    log_level="warning"
+                    log_level="error",  # Reduce noise
+                    save_to_file=True,
+                    save_to_api=False,
+                    tracking_mode="machine"  # Track whole machine
                 )
                 print("✅ CodeCarbon tracking enabled")
             except ImportError:
                 print("⚠️  CodeCarbon not installed. Install with: pip install codecarbon")
+            except Exception as e:
+                print(f"⚠️  CodeCarbon initialization failed: {e}")
 
         # Optimizer - start with target LR (scheduler will handle warmup)
         self.optimizer = optim.AdamW(
@@ -886,7 +911,14 @@ class Stage1Trainer:
                 if self.config.use_amp:
                     self.scaler.unscale_(self.optimizer)
                 
-                # Check for NaN/inf gradients and skip update if found
+                # Clip gradients FIRST to prevent NaN (FIBER style)
+                # This can help prevent NaN from exploding gradients
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.max_grad_norm
+                )
+                
+                # Check for NaN/inf gradients AFTER clipping
                 has_nan = False
                 for p in self.model.parameters():
                     if p.grad is not None:
@@ -896,30 +928,23 @@ class Stage1Trainer:
                 
                 if has_nan:
                     if self.rank == 0:
-                        print(f"\n⚠️  Step {self.global_step + 1}: NaN/Inf detected in gradients, skipping optimizer step")
+                        print(f"\n⚠️  Step {self.global_step + 1}: NaN/Inf detected in gradients (even after clipping), skipping optimizer step")
                     self.optimizer.zero_grad()
                     if self.config.use_amp:
                         self.scaler.update()  # Update scaler state even when skipping
-                    continue  # Skip this update
-                
-                # Clip gradients (after unscaling, before stepping) - FIBER style
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.max_grad_norm
-                )
-                
-                # Optimizer step
-                if self.config.use_amp:
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
                 else:
-                    self.optimizer.step()
+                    # Optimizer step (gradients already clipped above)
+                    if self.config.use_amp:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
 
-                self.optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                 
-                # Step scheduler every iteration (BitMar-style - KISS!)
+                # ALWAYS step scheduler and increment counter (even on NaN skip)
+                # This prevents getting stuck and maintains LR schedule
                 self.scheduler.step()
-                
                 self.global_step += 1
                 
                 # Clear CUDA cache periodically to avoid fragmentation
@@ -986,17 +1011,22 @@ class Stage1Trainer:
             
             # Log carbon emissions every 10000 steps (only rank 0)
             if self.global_step % 10000 == 0 and self.tracker is not None:
-                emissions_data = self.tracker.stop()
-                if emissions_data is not None:
-                    print(f"\n🌍 Carbon Emissions Report (Step {self.global_step}):")
-                    print(f"   CO2 emissions: {emissions_data:.6f} kg")
-                    print(f"   Energy consumed: {emissions_data * 1000:.2f} Wh")
-                    if self.wandb is not None:
-                        self.wandb.log_training_metrics({
-                            'carbon/co2_kg': emissions_data,
-                            'carbon/energy_wh': emissions_data * 1000
-                        }, step=self.global_step)
-                self.tracker.start()  # Restart tracking
+                try:
+                    emissions_data = self.tracker.stop()
+                    if emissions_data is not None:
+                        print(f"\n🌍 Carbon Emissions Report (Step {self.global_step}):")
+                        print(f"   CO2 emissions: {emissions_data:.6f} kg")
+                        print(f"   Energy consumed: {emissions_data * 1000:.2f} Wh")
+                        if self.wandb is not None:
+                            self.wandb.log_training_metrics({
+                                'carbon/co2_kg': emissions_data,
+                                'carbon/energy_wh': emissions_data * 1000
+                            }, step=self.global_step)
+                    self.tracker.start()  # Restart tracking
+                except Exception as e:
+                    print(f"⚠️  CodeCarbon tracking error (non-fatal): {e}")
+                    # Continue training without carbon tracking
+                    self.tracker = None
 
             # Comprehensive visualizations every 50 steps (only rank 0)
             if self.global_step % 50 == 0 and contrastive_dict and self.wandb is not None:
@@ -1222,8 +1252,12 @@ class Stage1Trainer:
         
         # Start CodeCarbon tracking
         if self.tracker is not None:
-            self.tracker.start()
-            print("🌍 Carbon tracking started")
+            try:
+                self.tracker.start()
+                print("🌍 Carbon tracking started")
+            except Exception as e:
+                print(f"⚠️  CodeCarbon start failed: {e}")
+                self.tracker = None
 
         # Calculate total training steps and setup scheduler
         steps_per_epoch = len(train_loader) // self.config.grad_accum_steps

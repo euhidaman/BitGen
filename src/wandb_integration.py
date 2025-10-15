@@ -55,7 +55,17 @@ class WandBIntegration:
             "stage2": ["reasoning", "tiny-r1", "robot-selection", "grpo"]
         }
 
-        # Initialize WandB run
+        # Initialize WandB run (with DDP-safe settings)
+        # Check if we're in a distributed setting
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            rank = dist.get_rank()
+            if rank != 0:
+                # Non-rank-0 processes should not initialize wandb
+                self.logger.warning(f"WandB init called on rank {rank}, but should only run on rank 0!")
+                self.run = None
+                return
+        
         self.run = wandb.init(
             project=project_name,
             entity=entity,
@@ -63,7 +73,10 @@ class WandBIntegration:
             config=config or {},
             tags=(tags or []) + ["bitgen", "2-stage",
                                  stage] + stage_tags.get(stage, []),
-            reinit=True
+            mode="online",  # Ensure online mode
+            group=f"bitgen-{stage}",  # Group runs by stage
+            job_type="training",
+            settings=wandb.Settings(start_method="thread")  # Use thread instead of fork for DDP
         )
 
         # Tracking variables
