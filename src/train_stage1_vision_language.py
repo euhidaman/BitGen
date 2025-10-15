@@ -1397,6 +1397,16 @@ def main():
         print(f"Multi-GPU: {config.num_gpus} GPUs (DistributedDataParallel)")
     print("="*80 + "\n")
     
+    # Initialize distributed training BEFORE creating dataloaders
+    if config.use_ddp:
+        import torch.distributed as dist
+        if not dist.is_initialized():
+            dist.init_process_group(backend='nccl')
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+            torch.cuda.set_device(rank)
+            print(f"🔧 Initialized DDP: rank={rank}/{world_size}, device=cuda:{rank}")
+    
     if config.use_multi_datasets:
         # ===== FIBER-Style Multi-Dataset Mode =====
         print("📦 Loading multiple datasets (FIBER-style)...")
