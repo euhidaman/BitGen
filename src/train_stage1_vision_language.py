@@ -97,13 +97,14 @@ class Stage1Config:
     validation_split: float = 0.05  # 5% for validation
     max_loss_threshold: float = 100.0  # Stop if loss explodes above this
 
-    # Contrastive learning config
+    # Contrastive learning config (FIBER-aligned)
     contrastive_weight: float = 1.0
-    text_loss_weight: float = 0.5  # Auxiliary loss for text reconstruction
-    memory_kl_weight: float = 0.1  # Episodic memory regularization
-    itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives)
+    text_loss_weight: float = 0.0  # DISABLED in coarse-grained (FIBER: no text reconstruction)
+    memory_kl_weight: float = 0.1  # Episodic memory regularization (BitGen innovation)
+    itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives from ITC queue)
     queue_size: int = 4096
     temperature: float = 0.07  # FIBER default
+    use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
     # FIBER-style two-phase training
     enable_two_phase_training: bool = True  # True = coarse → fine, False = coarse only
@@ -257,7 +258,8 @@ class BitGenVisionLanguageModel(nn.Module):
         # Layer norm
         x = self.layer_norm(x)
 
-        # Text decoder for reconstruction loss (BitMar-style)
+        # Text decoder for reconstruction loss (DISABLED by default - FIBER style)
+        # Only used in fine-tuning tasks (caption generation, etc.)
         decoder_logits = None
         if use_decoder and target_ids is not None:
             # Get target embeddings
@@ -745,12 +747,13 @@ class Stage1Trainer:
             # Forward pass with AMP
             if self.config.use_amp:
                 with autocast('cuda'):
-                    # Forward pass with decoder (BitMar-style)
+                    # Forward pass WITHOUT decoder (FIBER coarse-grained style)
+                    # Text reconstruction disabled to match FIBER's approach
                     outputs = self.model(
                         input_ids=input_ids,
                         images=images,
-                        target_ids=input_ids,  # Use same sequence as target for reconstruction
-                        use_decoder=True,
+                        target_ids=input_ids if self.config.use_text_reconstruction else None,
+                        use_decoder=self.config.use_text_reconstruction,  # FALSE for coarse-grained
                         return_contrastive_features=True
                     )
 
@@ -791,12 +794,13 @@ class Stage1Trainer:
                 self.scaler.scale(
                     loss / self.config.grad_accum_steps).backward()
             else:
-                # Forward pass with decoder (BitMar-style, no AMP)
+                # Forward pass WITHOUT decoder (FIBER coarse-grained style, no AMP)
+                # Text reconstruction disabled to match FIBER's coarse-grained stage
                 outputs = self.model(
                     input_ids=input_ids,
                     images=images,
-                    target_ids=input_ids,
-                    use_decoder=True,
+                    target_ids=input_ids if self.config.use_text_reconstruction else None,
+                    use_decoder=self.config.use_text_reconstruction,  # FALSE for coarse-grained
                     return_contrastive_features=True
                 )
 
@@ -1496,10 +1500,11 @@ def main():
             # Phase 1: Coarse-Grained (image-text pairs)
             if rank == 0:
                 print("\n" + "="*60)
-                print("PHASE 1: Coarse-Grained Pre-training")
+                print("PHASE 1: Coarse-Grained Pre-training (FIBER-Aligned)")
                 print("="*60)
                 print(f"Datasets: COCO, Visual Genome (captions)")
                 print(f"Tasks: ITC (contrastive), ITM (matching)")
+                print(f"Text Reconstruction: DISABLED (FIBER style)")
                 print(f"Epochs: {config.coarse_epochs}")
                 print("="*60 + "\n")
             
