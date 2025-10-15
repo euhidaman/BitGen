@@ -108,7 +108,7 @@ class Stage1Config:
     memory_kl_weight: float = 0.1  # Episodic memory regularization (BitGen innovation)
     itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives from ITC queue)
     queue_size: int = 4096
-    temperature: float = 0.07  # FIBER default
+    temperature: float = 0.1  # Increased from 0.07 to prevent numerical instability (NaN at step 716)
     use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
     # FIBER-style two-phase training
@@ -931,21 +931,50 @@ class Stage1Trainer:
                     self.config.max_grad_norm
                 )
                 
+                # Check gradient norm BEFORE checking for NaN
+                # If norm is too high, it's a warning sign
+                if grad_norm > 100.0:
+                    if self.rank == 0:
+                        print(f"\n⚠️  Step {self.global_step + 1}: Gradient norm very high ({grad_norm:.2f}), reducing LR")
+                    # Emergency LR reduction
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] *= 0.5
+                
                 # Check for NaN/inf gradients AFTER clipping
                 has_nan = False
+                nan_param_count = 0
                 for p in self.model.parameters():
                     if p.grad is not None:
                         if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
                             has_nan = True
-                            break
+                            nan_param_count += 1
                 
                 if has_nan:
                     if self.rank == 0:
-                        print(f"\n⚠️  Step {self.global_step + 1}: NaN/Inf detected in gradients (even after clipping), skipping optimizer step")
+                        print(f"\n❌ Step {self.global_step + 1}: NaN/Inf in {nan_param_count} parameters! Grad norm: {grad_norm:.2f}")
+                        print(f"   This usually means model collapse. Consider:")
+                        print(f"   1. Increasing temperature from {self.config.temperature} to 0.1")
+                        print(f"   2. Reducing learning rate")
+                        print(f"   3. Checking if features are normalized")
+                        
+                        # Check if NaN is persistent (more than 10 consecutive)
+                        if not hasattr(self, 'nan_counter'):
+                            self.nan_counter = 0
+                        self.nan_counter += 1
+                        
+                        if self.nan_counter > 10:
+                            print(f"\n💥 CRITICAL: {self.nan_counter} consecutive NaN gradients!")
+                            print(f"   Model has collapsed. Stopping training.")
+                            raise RuntimeError("Model collapsed with persistent NaN gradients")
+                    
                     self.optimizer.zero_grad()
                     if self.config.use_amp:
                         self.scaler.update()  # Update scaler state even when skipping
                 else:
+                    # Reset NaN counter on successful step
+                    if hasattr(self, 'nan_counter'):
+                        self.nan_counter = 0
+                    
                     # Optimizer step (gradients already clipped above)
                     if self.config.use_amp:
                         self.scaler.step(self.optimizer)
