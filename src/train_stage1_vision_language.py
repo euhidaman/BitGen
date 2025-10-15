@@ -108,7 +108,7 @@ class Stage1Config:
     memory_kl_weight: float = 0.1  # Episodic memory regularization (BitGen innovation)
     itm_weight: float = 0.5  # Image-Text Matching loss (hard negatives from ITC queue)
     queue_size: int = 4096
-    temperature: float = 0.2  # Increased from 0.07→0.1→0.2 to prevent gradient explosion (grad_norm=inf)
+    temperature: float = 0.5  # Start high (0.07→0.1→0.2→0.5) to prevent early gradient explosion
     use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
     # FIBER-style two-phase training
@@ -155,6 +155,9 @@ class BitGenVisionLanguageModel(nn.Module):
         # FIBER cross-modal fusion (with DINOv2)
         bitgen_config = self._create_bitgen_config(config)
         self.cross_modal_fusion = FIBERCrossModalFusion(bitgen_config)
+        
+        # Initialize FIBER temperature from config (override the default 0.07)
+        self.cross_modal_fusion.temperature.data.fill_(config.temperature)
 
         # Larimar GPM episodic memory
         self.episodic_memory = BitGenMemory(bitgen_config)
@@ -940,8 +943,10 @@ class Stage1Trainer:
                         print(f"   Current Temperature: {old_temp}")
                         
                         # Adaptive temperature increase (prevents future explosions)
-                        if self.config.temperature < 0.5:
-                            self.config.temperature = min(self.config.temperature * 1.5, 0.5)
+                        if self.config.temperature < 1.0:  # Increased cap from 0.5 to 1.0
+                            self.config.temperature = min(self.config.temperature * 1.5, 1.0)
+                            # Update FIBER module's temperature parameter
+                            self.model.cross_modal_fusion.temperature.data.fill_(self.config.temperature)
                             print(f"   🔥 Increasing temperature: {old_temp:.3f} → {self.config.temperature:.3f}")
                         
                     # Emergency LR reduction (stronger)
