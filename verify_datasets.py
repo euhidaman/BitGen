@@ -124,17 +124,17 @@ def verify_datasets(data_root: str = "data") -> Dict:
     vg_100k_ok, vg_100k_count = check_directory(
         data_root / "visual_genome" / "VG_100K",
         "VG_100K",
-        min_files=100000
+        min_files=60000  # Updated: dataset now has ~64K images (was 108K in older version)
     )
-    print(f"   {'✅' if vg_100k_ok else '❌'} VG_100K/: {vg_100k_count:,} images (expected ~108,077)")
+    print(f"   {'✅' if vg_100k_ok else '❌'} VG_100K/: {vg_100k_count:,} images (expected ~64,346)")
     results['details']['vg_100k'] = {'count': vg_100k_count, 'ok': vg_100k_ok}
     
     vg_100k2_ok, vg_100k2_count = check_directory(
         data_root / "visual_genome" / "VG_100K_2",
         "VG_100K_2",
-        min_files=100000
+        min_files=40000  # Updated: dataset now has ~44K images (was 108K in older version)
     )
-    print(f"   {'✅' if vg_100k2_ok else '❌'} VG_100K_2/: {vg_100k2_count:,} images (expected ~108,249)")
+    print(f"   {'✅' if vg_100k2_ok else '❌'} VG_100K_2/: {vg_100k2_count:,} images (expected ~43,903)")
     results['details']['vg_100k_2'] = {'count': vg_100k2_count, 'ok': vg_100k2_ok}
     
     vg_regions = check_file(

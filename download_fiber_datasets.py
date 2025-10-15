@@ -43,8 +43,8 @@ class FIBERDatasetDownloader:
             vg_dir.mkdir(parents=True, exist_ok=True)
 
             urls = [
-                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip", "VG_100K.zip", "VG_100K", 100000),
-                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip", "VG_100K_2.zip", "VG_100K_2", 100000),
+                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip", "VG_100K.zip", "VG_100K", 60000),  # Dataset now has ~64K images
+                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip", "VG_100K_2.zip", "VG_100K_2", 40000),  # Dataset now has ~44K images
             ]
 
             for url, filename, folder_name, min_images in urls:
