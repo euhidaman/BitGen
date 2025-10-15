@@ -22,6 +22,47 @@ class COCODownloader:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
+    def download_from_official(self) -> bool:
+        """Download COCO dataset from official source (like FIBER)"""
+        try:
+            self.logger.info("🚀 Downloading COCO from official source...")
+            self.logger.info("📦 Source: http://images.cocodataset.org/")
+            
+            # COCO 2017 (standard for training)
+            urls = [
+                ("http://images.cocodataset.org/zips/train2017.zip", "train2017.zip"),
+                ("http://images.cocodataset.org/zips/val2017.zip", "val2017.zip"),
+                ("http://images.cocodataset.org/annotations/annotations_trainval2017.zip", "annotations_trainval2017.zip"),
+            ]
+            
+            for url, filename in urls:
+                dest = self.output_dir / filename
+                
+                # Check if already extracted
+                extracted_name = filename.replace('.zip', '')
+                if (self.output_dir / extracted_name).exists():
+                    self.logger.info(f"✓ {extracted_name} already exists")
+                    continue
+                
+                if dest.exists():
+                    self.logger.info(f"✓ {filename} already downloaded")
+                else:
+                    self.logger.info(f"📥 Downloading {filename} (~6GB for 2017, may take a while)...")
+                    subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                    self.logger.info(f"✓ Downloaded {filename}")
+                
+                # Extract
+                self.logger.info(f"📦 Extracting {filename}...")
+                subprocess.run(["unzip", "-q", str(dest), "-d", str(self.output_dir)], check=False)
+                self.logger.info(f"✓ Extracted {filename}")
+            
+            self.logger.info("✅ COCO dataset downloaded from official source")
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"❌ Official download failed: {e}")
+            return False
+
     def download_from_kaggle(self) -> bool:
         """Download COCO dataset from Kaggle"""
         try:
@@ -461,13 +502,28 @@ def download_and_prepare_coco(output_dir: str = "data/coco") -> bool:
     """Main function to download and prepare COCO dataset"""
     downloader = COCODownloader(output_dir)
 
-    # Try Kaggle download
+    print("\n" + "="*60)
+    print("COCO Dataset Downloader")
+    print("="*60)
+
+    # Try official source first (like FIBER)
+    print("\n🔄 Method 1: Official COCO (http://images.cocodataset.org/)")
+    if downloader.download_from_official():
+        print("✅ Official download successful")
+        downloader.process_dataset()
+        if downloader.validate_dataset():
+            return True
+    
+    # Fallback to Kaggle
+    print("\n🔄 Method 2: Kaggle (fallback)")
     if downloader.download_from_kaggle():
+        print("✅ Kaggle download successful")
         downloader.process_dataset()
         return downloader.validate_dataset()
-    else:
-        # Fallback to sample data
-        return downloader.download_sample_data()
+    
+    # Last resort: sample data
+    print("\n🔄 Method 3: Creating sample data (last resort)")
+    return downloader.download_sample_data()
 
 
 if __name__ == "__main__":

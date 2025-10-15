@@ -89,6 +89,62 @@ class FIBERDatasetDownloader:
             self.logger.error(f"❌ Visual Genome download failed: {e}")
             return False
 
+    def download_coco_official(self) -> bool:
+        """Download COCO 2014 and 2017 from official source (like FIBER)"""
+        try:
+            self.logger.info("🚀 Downloading COCO from official source...")
+            
+            coco_dir = self.output_dir / "coco"
+            coco_dir.mkdir(parents=True, exist_ok=True)
+            
+            # COCO 2014 (needed for RefCOCO)
+            coco_2014_urls = [
+                ("http://images.cocodataset.org/zips/train2014.zip", "train2014.zip"),
+                ("http://images.cocodataset.org/zips/val2014.zip", "val2014.zip"),
+            ]
+            
+            # COCO 2017 (standard for training)
+            coco_2017_urls = [
+                ("http://images.cocodataset.org/zips/train2017.zip", "train2017.zip"),
+                ("http://images.cocodataset.org/zips/val2017.zip", "val2017.zip"),
+            ]
+            
+            # Annotations
+            ann_urls = [
+                ("http://images.cocodataset.org/annotations/annotations_trainval2014.zip", "annotations_trainval2014.zip"),
+                ("http://images.cocodataset.org/annotations/annotations_trainval2017.zip", "annotations_trainval2017.zip"),
+            ]
+            
+            all_urls = coco_2014_urls + coco_2017_urls + ann_urls
+            
+            for url, filename in all_urls:
+                dest = coco_dir / filename
+                
+                # Check if already extracted
+                extracted_name = filename.replace('.zip', '')
+                if (coco_dir / extracted_name).exists():
+                    self.logger.info(f"✓ {extracted_name} already exists")
+                    continue
+                
+                if dest.exists():
+                    self.logger.info(f"✓ {filename} already downloaded")
+                else:
+                    self.logger.info(f"📥 Downloading {filename} (~13GB total, may take a while)...")
+                    subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                    self.logger.info(f"✓ Downloaded {filename}")
+                
+                # Extract
+                self.logger.info(f"📦 Extracting {filename}...")
+                subprocess.run(["unzip", "-q", str(dest), "-d", str(coco_dir)], check=False)
+                self.logger.info(f"✓ Extracted {filename}")
+            
+            self.logger.info("✅ COCO dataset downloaded from official source")
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"❌ COCO official download failed: {e}")
+            return False
+
     def download_refcoco(self) -> bool:
         """Download RefCOCO/+/g annotations (uses COCO 2014 images)"""
         try:
@@ -114,7 +170,7 @@ class FIBERDatasetDownloader:
             self.logger.info("✓ Extracted annotations")
 
             self.logger.info("✅ RefCOCO annotations downloaded")
-            self.logger.info("⚠️  Note: RefCOCO uses COCO 2014 images (download with download_coco_dataset.py)")
+            self.logger.info("⚠️  Note: RefCOCO uses COCO 2014 images (downloaded above)")
             return True
 
         except Exception as e:
@@ -303,16 +359,20 @@ def download_and_prepare_fiber_datasets(output_dir: str = "data") -> bool:
     print("BitGen Multi-Dataset Downloader")
     print("="*60)
 
+    # Download COCO (official source - 2014 + 2017)
+    print("\n1️⃣  COCO 2014 + 2017 (official source, ~13GB)")
+    coco_success = downloader.download_coco_official()
+
     # Download Visual Genome
-    print("\n1️⃣  Visual Genome (images + regions + captions)")
+    print("\n2️⃣  Visual Genome (images + regions + captions)")
     vg_success = downloader.download_visual_genome()
 
     # Download RefCOCO annotations
-    print("\n2️⃣  RefCOCO/+/g (phrase grounding annotations)")
+    print("\n3️⃣  RefCOCO/+/g (phrase grounding annotations)")
     refcoco_success = downloader.download_refcoco()
 
     # Create helper scripts for SBU/CC3M
-    print("\n3️⃣  SBU & CC3M (helper scripts)")
+    print("\n4️⃣  SBU & CC3M (helper scripts)")
     downloader.create_helper_scripts()
 
     # Create summary
@@ -331,11 +391,11 @@ def download_and_prepare_fiber_datasets(output_dir: str = "data") -> bool:
     print("="*60)
 
     print("\n📝 Next Steps:")
-    print("1. For COCO: run `python download_coco_dataset.py`")
-    print("2. For SBU/CC3M: see README.txt files in data/sbu/ and data/conceptual_captions/")
+    print("1. For SBU/CC3M: see README.txt files in data/sbu/ and data/conceptual_captions/")
+    print("2. Alternative COCO: run `python download_coco_dataset.py` for Kaggle version (if official fails)")
     print("3. Start training: `python src/train_stage1_vision_language.py`")
 
-    return vg_success or refcoco_success
+    return coco_success or vg_success or refcoco_success
 
 
 if __name__ == "__main__":
