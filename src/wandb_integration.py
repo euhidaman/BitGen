@@ -22,6 +22,15 @@ import psutil
 import time
 
 
+def requires_wandb(func):
+    """Decorator to check if WandB is initialized before calling method"""
+    def wrapper(self, *args, **kwargs):
+        if self.run is None:
+            return
+        return func(self, *args, **kwargs)
+    return wrapper
+
+
 class WandBIntegration:
     """Enhanced WandB integration for BitGen training and inference monitoring"""
 
@@ -101,6 +110,10 @@ class WandBIntegration:
             epoch: Training epoch (optional)
         """
 
+        # Early return if WandB not initialized (non-rank-0 in DDP)
+        if self.run is None:
+            return
+        
         if step is not None:
             self.step = step
         if epoch is not None:
@@ -676,13 +689,15 @@ class WandBIntegration:
                 "accuracy/average": (acc_t2i + acc_i2t) / 2.0,
             })
 
-        wandb.log(metrics, step=self.step)
+        # Only log if WandB was initialized (rank 0 only in DDP)
+        if self.run is not None:
+            wandb.log(metrics, step=self.step)
 
-        # Update best metrics (use token accuracy as primary metric now)
-        if token_accuracy > self.best_metrics.get('best_stage1_accuracy', 0):
-            self.best_metrics['best_stage1_accuracy'] = token_accuracy
-            self.best_metrics['best_stage1_epoch'] = epoch
-            self.best_metrics['best_perplexity'] = perplexity
+            # Update best metrics (use token accuracy as primary metric now)
+            if token_accuracy > self.best_metrics.get('best_stage1_accuracy', 0):
+                self.best_metrics['best_stage1_accuracy'] = token_accuracy
+                self.best_metrics['best_stage1_epoch'] = epoch
+                self.best_metrics['best_perplexity'] = perplexity
 
     def log_similarity_matrix(self,
                               text_features: torch.Tensor,
@@ -700,6 +715,10 @@ class WandBIntegration:
             step: Current step
             sample_size: Number of samples to visualize (default: 32)
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         # Sample if batch is too large
         batch_size = min(text_features.shape[0], sample_size)
         text_sample = text_features[:batch_size].detach().cpu()
@@ -743,6 +762,10 @@ class WandBIntegration:
             step: Current step
             sample_size: Number of samples for UMAP (default: 500)
         """
+        # Early return if WandB not initialized
+        if self.run is None:
+            return
+        
         try:
             from umap import UMAP
         except ImportError:
