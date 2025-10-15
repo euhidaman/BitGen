@@ -417,7 +417,7 @@ def compute_contrastive_loss(
     temperature: torch.Tensor
 ) -> Dict[str, torch.Tensor]:
     """
-    Compute queue-based contrastive loss (FIBER approach)
+    Compute queue-based contrastive loss (FIBER approach - exact implementation)
 
     Args:
         text_features: [batch_size, embed_dim] - normalized
@@ -430,43 +430,15 @@ def compute_contrastive_loss(
         loss_dict: Dictionary with contrastive losses
     """
     batch_size = text_features.shape[0]
-    
-    # SAFETY: Check for NaN/Inf in inputs
-    if torch.isnan(text_features).any() or torch.isinf(text_features).any():
-        print("⚠️  WARNING: NaN/Inf detected in text_features")
-        text_features = torch.nan_to_num(text_features, nan=0.0, posinf=1.0, neginf=-1.0)
-        text_features = F.normalize(text_features, p=2, dim=-1, eps=1e-8)
-    
-    if torch.isnan(image_features).any() or torch.isinf(image_features).any():
-        print("⚠️  WARNING: NaN/Inf detected in image_features")
-        image_features = torch.nan_to_num(image_features, nan=0.0, posinf=1.0, neginf=-1.0)
-        image_features = F.normalize(image_features, p=2, dim=-1, eps=1e-8)
-    
-    if torch.isnan(text_queue).any() or torch.isinf(text_queue).any():
-        print("⚠️  WARNING: NaN/Inf detected in text_queue")
-        text_queue = torch.nan_to_num(text_queue, nan=0.0, posinf=1.0, neginf=-1.0)
-        text_queue = F.normalize(text_queue, p=2, dim=0, eps=1e-8)
-    
-    if torch.isnan(image_queue).any() or torch.isinf(image_queue).any():
-        print("⚠️  WARNING: NaN/Inf detected in image_queue")
-        image_queue = torch.nan_to_num(image_queue, nan=0.0, posinf=1.0, neginf=-1.0)
-        image_queue = F.normalize(image_queue, p=2, dim=0, eps=1e-8)
 
-    # Image-to-text contrastive
-    # Positives: diagonal (matching pairs)
-    # Negatives: off-diagonal (batch) + queue
-
-    # Clamp temperature to prevent division by zero
-    temperature = torch.clamp(temperature, min=0.01, max=1.0)
-
-    # Text-to-image similarity (with queue negatives)
+    # Text-to-image similarity (with queue negatives) - FIBER style
     sim_t2i_batch = torch.matmul(
         text_features, image_features.T) / temperature  # [B, B]
     sim_t2i_queue = torch.matmul(
         text_features, image_queue) / temperature  # [B, Q]
     sim_t2i = torch.cat([sim_t2i_batch, sim_t2i_queue], dim=1)  # [B, B+Q]
 
-    # Image-to-text similarity (with queue negatives)
+    # Image-to-text similarity (with queue negatives) - FIBER style
     sim_i2t_batch = torch.matmul(
         image_features, text_features.T) / temperature  # [B, B]
     sim_i2t_queue = torch.matmul(
@@ -704,17 +676,6 @@ class Stage1Trainer:
                 # Unscale gradients ONCE before any operations (AMP)
                 if self.config.use_amp:
                     self.scaler.unscale_(self.optimizer)
-                
-                # SAFETY: Check for NaN/Inf in gradients and zero them out
-                nan_detected = False
-                for p in self.model.parameters():
-                    if p.grad is not None:
-                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
-                            nan_detected = True
-                            p.grad = torch.nan_to_num(p.grad, nan=0.0, posinf=0.0, neginf=0.0)
-                
-                if nan_detected:
-                    print("⚠️  WARNING: NaN/Inf detected in gradients - replaced with zeros")
                 
                 # Log gradient statistics BEFORE clipping (every 100 steps)
                 if (self.global_step + 1) % 100 == 0:
