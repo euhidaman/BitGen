@@ -91,10 +91,11 @@ class Stage1Config:
     num_gpus: int = 1  # Number of GPUs to use
     a100_mode: bool = False  # Auto-optimize for 8x A100 GPUs
 
-    # Early stopping config
-    early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
-    min_delta: float = 0.001  # Minimum improvement to consider
+    # Early stopping config - ONLY stop if model is NOT learning at all
+    early_stopping_patience: int = 5  # Stop if NO CHANGE (NaN/inf loss) for 5 epochs
+    min_delta: float = 0.0  # Any improvement counts (even 0.0001)
     validation_split: float = 0.05  # 5% for validation
+    max_loss_threshold: float = 100.0  # Stop if loss explodes above this
 
     # Contrastive learning config
     contrastive_weight: float = 1.0
@@ -669,6 +670,20 @@ class Stage1Trainer:
         self.patience_counter = 0
         self.best_epoch = 0
 
+        # CodeCarbon tracking (only rank 0)
+        self.tracker = None
+        if self.rank == 0:
+            try:
+                from codecarbon import EmissionsTracker
+                self.tracker = EmissionsTracker(
+                    project_name="BitGen-Stage1-VisionLanguage",
+                    output_dir=config.log_dir,
+                    log_level="warning"
+                )
+                print("✅ CodeCarbon tracking enabled")
+            except ImportError:
+                print("⚠️  CodeCarbon not installed. Install with: pip install codecarbon")
+
         # Optimizer - start with target LR (scheduler will handle warmup)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
@@ -822,19 +837,24 @@ class Stage1Trainer:
                 if self.config.use_amp:
                     self.scaler.unscale_(self.optimizer)
                 
-                # Log gradient statistics BEFORE clipping (every 100 steps)
-                if (self.global_step + 1) % 100 == 0:
-                    total_norm = 0.0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                    total_norm = total_norm ** 0.5
-                    print(
-                        f"\n🔍 Step {self.global_step + 1}: Gradient norm = {total_norm:.6f} (before clip), LR = {self.optimizer.param_groups[0]['lr']:.2e}")
+                # Check for NaN/inf gradients and skip update if found
+                has_nan = False
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                            has_nan = True
+                            break
                 
-                # Clip gradients (after unscaling, before stepping)
-                torch.nn.utils.clip_grad_norm_(
+                if has_nan:
+                    if self.rank == 0:
+                        print(f"\n⚠️  Step {self.global_step + 1}: NaN/Inf detected in gradients, skipping optimizer step")
+                    self.optimizer.zero_grad()
+                    if self.config.use_amp:
+                        self.scaler.update()  # Update scaler state even when skipping
+                    continue  # Skip this update
+                
+                # Clip gradients (after unscaling, before stepping) - FIBER style
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config.max_grad_norm
                 )
@@ -883,8 +903,8 @@ class Stage1Trainer:
                 'lr': f"{current_lr:.2e}"
             })
 
-            # Log to wandb every 10 steps
-            if self.global_step % 10 == 0:
+            # Log to wandb every 10 steps (only rank 0)
+            if self.global_step % 10 == 0 and self.wandb is not None:
                 self.wandb.log_stage1_metrics(
                     epoch=self.epoch,
                     loss=loss.item(),
@@ -914,9 +934,23 @@ class Stage1Trainer:
                 )
 
                 self.wandb.step = self.global_step
+            
+            # Log carbon emissions every 10000 steps (only rank 0)
+            if self.global_step % 10000 == 0 and self.tracker is not None:
+                emissions_data = self.tracker.stop()
+                if emissions_data is not None:
+                    print(f"\n🌍 Carbon Emissions Report (Step {self.global_step}):")
+                    print(f"   CO2 emissions: {emissions_data:.6f} kg")
+                    print(f"   Energy consumed: {emissions_data * 1000:.2f} Wh")
+                    if self.wandb is not None:
+                        self.wandb.log({
+                            'carbon/co2_kg': emissions_data,
+                            'carbon/energy_wh': emissions_data * 1000
+                        }, step=self.global_step)
+                self.tracker.start()  # Restart tracking
 
-            # Comprehensive visualizations every 50 steps
-            if self.global_step % 50 == 0 and contrastive_dict:
+            # Comprehensive visualizations every 50 steps (only rank 0)
+            if self.global_step % 50 == 0 and contrastive_dict and self.wandb is not None:
                 # Similarity matrix heatmap
                 self.wandb.log_similarity_matrix(
                     text_features=contrastive_dict['text_features'],
@@ -1135,7 +1169,12 @@ class Stage1Trainer:
             f"Batch size: {self.config.batch_size} (effective: {self.config.batch_size * self.config.grad_accum_steps})")
         print(f"Max epochs: {self.config.num_epochs}")
         print(
-            f"Early stopping patience: {self.config.early_stopping_patience} epochs")
+            f"Early stopping: ONLY if model stops learning (NaN/inf/exploded loss for {self.config.early_stopping_patience} epochs)")
+        
+        # Start CodeCarbon tracking
+        if self.tracker is not None:
+            self.tracker.start()
+            print("🌍 Carbon tracking started")
 
         # Calculate total training steps and setup scheduler
         steps_per_epoch = len(train_loader) // self.config.grad_accum_steps
@@ -1151,33 +1190,34 @@ class Stage1Trainer:
         # Setup scheduler with warmup
         self._setup_scheduler(total_training_steps)
         
-        # Create and push model card to HuggingFace Hub
-        print("\n📝 Creating model card on HuggingFace Hub...")
-        config_dict = {
-            'embed_dim': self.config.embed_dim,
-            'num_layers': self.config.num_layers,
-            'num_heads': self.config.num_heads,
-            'ffn_dim': self.config.ffn_dim,
-            'vocab_size': self.config.vocab_size,
-            'memory_size': self.config.memory_size,
-            'max_seq_len': self.config.max_seq_len
-        }
-        training_args = {
-            'batch_size': self.config.batch_size,
-            'grad_accum_steps': self.config.grad_accum_steps,
-            'learning_rate': self.config.learning_rate,
-            'weight_decay': self.config.weight_decay,
-            'warmup_steps': self.config.warmup_steps,
-            'max_grad_norm': self.config.max_grad_norm,
-            'contrastive_weight': self.config.contrastive_weight,
-            'text_loss_weight': self.config.text_loss_weight,
-            'memory_kl_weight': self.config.memory_kl_weight,
-            'itm_weight': self.config.itm_weight,
-            'temperature': self.config.temperature,
-            'queue_size': self.config.queue_size,
-            'early_stopping_patience': self.config.early_stopping_patience
-        }
-        self.hf_integration.create_model_card(config_dict, training_args)
+        # Create and push model card to HuggingFace Hub (only rank 0)
+        if self.rank == 0:
+            print("\n📝 Creating model card on HuggingFace Hub...")
+            config_dict = {
+                'embed_dim': self.config.embed_dim,
+                'num_layers': self.config.num_layers,
+                'num_heads': self.config.num_heads,
+                'ffn_dim': self.config.ffn_dim,
+                'vocab_size': self.config.vocab_size,
+                'memory_size': self.config.memory_size,
+                'max_seq_len': self.config.max_seq_len
+            }
+            training_args = {
+                'batch_size': self.config.batch_size,
+                'grad_accum_steps': self.config.grad_accum_steps,
+                'learning_rate': self.config.learning_rate,
+                'weight_decay': self.config.weight_decay,
+                'warmup_steps': self.config.warmup_steps,
+                'max_grad_norm': self.config.max_grad_norm,
+                'contrastive_weight': self.config.contrastive_weight,
+                'text_loss_weight': self.config.text_loss_weight,
+                'memory_kl_weight': self.config.memory_kl_weight,
+                'itm_weight': self.config.itm_weight,
+                'temperature': self.config.temperature,
+                'queue_size': self.config.queue_size,
+                'early_stopping_patience': self.config.early_stopping_patience
+            }
+            self.hf_integration.create_model_card(config_dict, training_args)
 
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
@@ -1217,110 +1257,126 @@ class Stage1Trainer:
                 print(
                     f"  Val Token Accuracy: {val_metrics['val_token_accuracy']:.3f}")
 
-            # Log all metrics to WandB
+            # Log all metrics to WandB (only rank 0)
             combined_metrics = {**train_metrics, **val_metrics}
             combined_metrics['epoch'] = epoch + 1
             combined_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
-            self.wandb.log_stage1_metrics(
-                epoch=epoch,
-                loss=train_metrics['loss'],
-                text_loss=train_metrics.get('text_loss', 0.0),
-                contrastive_loss=train_metrics['contrastive_loss'],
-                memory_kl_loss=train_metrics['memory_kl_loss'],
-                perplexity=train_metrics.get('perplexity', 0.0),
-                token_accuracy=train_metrics.get('token_accuracy', 0.0),
-                lr=combined_metrics['learning_rate']
-            )
-
-            # Log validation metrics in organized sections
-            log_dict = {
-                'validation/loss_total': val_metrics['val_loss'],
-                'validation/loss_contrastive': val_metrics['val_contrastive_loss'],
-                'validation/loss_memory_kl': val_metrics['val_memory_kl_loss'],
-            }
-
-            # Add text-specific metrics if available
-            if 'val_text_loss' in val_metrics:
-                log_dict['validation/loss_text'] = val_metrics['val_text_loss']
-            if 'val_perplexity' in val_metrics:
-                log_dict['validation/perplexity'] = val_metrics['val_perplexity']
-            if 'val_token_accuracy' in val_metrics:
-                log_dict['validation/token_accuracy'] = val_metrics['val_token_accuracy']
-
-            import wandb
-            wandb.log(log_dict, step=self.global_step)
-
-            # Epoch-level visualizations (using validation data for clean vis)
-            print(f"📊 Generating epoch visualizations...")
-
-            # Get a validation batch for visualizations
-            val_batch = next(iter(val_loader))
-            val_input_ids = val_batch['input_ids'].to(self.device)
-            val_images = val_batch['images'].to(self.device)
-
-            with torch.no_grad():
-                val_outputs = self.model(
-                    input_ids=val_input_ids,
-                    images=val_images,
-                    return_contrastive_features=True
-                )
-                val_contrastive_dict = val_outputs['contrastive_features']
-
-            if val_contrastive_dict:
-                # UMAP embedding space visualization
-                self.wandb.log_embedding_space_umap(
-                    text_embeddings=val_contrastive_dict['text_features'],
-                    image_embeddings=val_contrastive_dict['image_features'],
+            
+            if self.wandb is not None:
+                self.wandb.log_stage1_metrics(
                     epoch=epoch,
-                    step=self.global_step,
-                    sample_size=200
+                    loss=train_metrics['loss'],
+                    text_loss=train_metrics.get('text_loss', 0.0),
+                    contrastive_loss=train_metrics['contrastive_loss'],
+                    memory_kl_loss=train_metrics['memory_kl_loss'],
+                    perplexity=train_metrics.get('perplexity', 0.0),
+                    token_accuracy=train_metrics.get('token_accuracy', 0.0),
+                    lr=combined_metrics['learning_rate']
                 )
 
-            # Memory activation heatmap
-            memory_mean = self.model.episodic_memory.gpm.memory_mean
-            # Approximate retrieval counts (would need tracking in actual training)
-            retrieval_counts = torch.ones(
-                memory_mean.shape[0], device=memory_mean.device)
+                # Log validation metrics in organized sections
+                log_dict = {
+                    'validation/loss_total': val_metrics['val_loss'],
+                    'validation/loss_contrastive': val_metrics['val_contrastive_loss'],
+                    'validation/loss_memory_kl': val_metrics['val_memory_kl_loss'],
+                }
 
-            self.wandb.log_memory_activation_heatmap(
-                memory_mean=memory_mean,
-                retrieval_counts=retrieval_counts,
-                epoch=epoch,
-                step=self.global_step
-            )
+                # Add text-specific metrics if available
+                if 'val_text_loss' in val_metrics:
+                    log_dict['validation/loss_text'] = val_metrics['val_text_loss']
+                if 'val_perplexity' in val_metrics:
+                    log_dict['validation/perplexity'] = val_metrics['val_perplexity']
+                if 'val_token_accuracy' in val_metrics:
+                    log_dict['validation/token_accuracy'] = val_metrics['val_token_accuracy']
 
-            print(f"✅ Visualizations complete")
+                import wandb
+                wandb.log(log_dict, step=self.global_step)
+
+            # Epoch-level visualizations (using validation data for clean vis) - only rank 0
+            if self.rank == 0:
+                print(f"📊 Generating epoch visualizations...")
+
+                # Get a validation batch for visualizations
+                val_batch = next(iter(val_loader))
+                val_input_ids = val_batch['input_ids'].to(self.device)
+                val_images = val_batch['images'].to(self.device)
+
+                with torch.no_grad():
+                    val_outputs = self.model(
+                        input_ids=val_input_ids,
+                        images=val_images,
+                        return_contrastive_features=True
+                    )
+                    val_contrastive_dict = val_outputs['contrastive_features']
+
+                if val_contrastive_dict and self.wandb is not None:
+                    # UMAP embedding space visualization
+                    self.wandb.log_embedding_space_umap(
+                        text_embeddings=val_contrastive_dict['text_features'],
+                        image_embeddings=val_contrastive_dict['image_features'],
+                        epoch=epoch,
+                        step=self.global_step,
+                        sample_size=200
+                    )
+
+                # Memory activation heatmap
+                if self.wandb is not None:
+                    memory_mean = self.model.episodic_memory.gpm.memory_mean
+                    # Approximate retrieval counts (would need tracking in actual training)
+                    retrieval_counts = torch.ones(
+                        memory_mean.shape[0], device=memory_mean.device)
+
+                    self.wandb.log_memory_activation_heatmap(
+                        memory_mean=memory_mean,
+                        retrieval_counts=retrieval_counts,
+                        epoch=epoch,
+                        step=self.global_step
+                    )
+
+                print(f"✅ Visualizations complete")
 
             # Cosine scheduler handles LR automatically (BitMar-style - KISS!)
             # No manual LR reduction needed
 
-            # Early stopping check
+            # Early stopping check - ONLY stop if model is NOT learning at all
             val_loss = val_metrics['val_loss']
             is_best = False
 
-            if val_loss < self.best_val_loss - self.config.min_delta:
+            # Check if loss is valid (not NaN/inf)
+            if torch.isnan(torch.tensor(val_loss)) or torch.isinf(torch.tensor(val_loss)):
+                self.patience_counter += 1
+                print(f"\n⚠️  Invalid loss detected (NaN/inf). Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
+            # Check if loss exploded
+            elif val_loss > self.config.max_loss_threshold:
+                self.patience_counter += 1
+                print(f"\n⚠️  Loss exploded: {val_loss:.4f}. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
+            # Any valid improvement (even tiny) counts!
+            elif val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.patience_counter = 0
                 self.best_epoch = epoch
                 is_best = True
-                print(f"\n✅ New best validation loss: {val_loss:.4f}")
+                improvement = self.best_val_loss - val_loss if epoch > 0 else 0
+                print(f"\n✅ New best validation loss: {val_loss:.4f} (↓ {improvement:.4f})")
+            # Loss went up but still learning (continue training)
             else:
-                self.patience_counter += 1
+                # Reset patience counter - we're still learning, just not improving
+                # ONLY stop if model completely stops learning (NaN/inf/exploded)
+                print(f"\n📊 Validation loss: {val_loss:.4f} (best: {self.best_val_loss:.4f}) - continuing training")
+
+            # Save checkpoint (only rank 0)
+            if self.rank == 0:
+                self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
+
+                # Push to HuggingFace Hub after every epoch
                 print(
-                    f"\n⏸️  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
-
-            # Save checkpoint
-            self.save_checkpoint(epoch, combined_metrics, is_best=is_best)
-
-            # Push to HuggingFace Hub after every epoch
-            print(
-                f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
-            self.hf_integration.push_model_checkpoint(
-                model=self.model,
-                config=self.config,
-                epoch=epoch,
-                metrics=combined_metrics
-            )
+                    f"📤 Pushing Stage 1 checkpoint to HuggingFace Hub (BitGen-PreReasoning)...")
+                self.hf_integration.push_model_checkpoint(
+                    model=self.model,
+                    config=self.config,
+                    epoch=epoch,
+                    metrics=combined_metrics
+                )
 
             # Early stopping
             if self.patience_counter >= self.config.early_stopping_patience:
