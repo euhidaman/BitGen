@@ -1,0 +1,138 @@
+BitGen Training - Quick Start Commands
+======================================
+
+STEP 1: Download All Datasets (~50GB total, takes 1-2 hours)
+-------------------------------------------------------------
+cd D:\BabyLM\BitGen
+python download_fiber_datasets.py
+
+This will download:
+✓ COCO 2014 (train2014/, val2014/) - ~13GB - needed for RefCOCO
+✓ COCO 2017 (train2017/, val2017/) - ~20GB - standard training
+✓ COCO Annotations (2014 + 2017)
+✓ Visual Genome (VG_100K + VG_100K_2) - ~10GB
+✓ Visual Genome Annotations (region_descriptions.json, objects.json)
+✓ RefCOCO/+/g Annotations (MDETR format)
+
+Expected folder structure after download:
+data/
+├── coco/
+│   ├── train2014/              ← 82,783 images (RefCOCO needs this!)
+│   ├── val2014/                ← 40,504 images
+│   ├── train2017/              ← 118,287 images (main training)
+│   ├── val2017/                ← 5,000 images
+│   └── annotations/            ← COCO JSON files
+│       ├── instances_train2014.json
+│       ├── captions_train2014.json
+│       ├── instances_train2017.json
+│       └── captions_train2017.json
+├── visual_genome/
+│   ├── VG_100K/                ← 108,077 images
+│   ├── VG_100K_2/              ← 108,249 images
+│   ├── region_descriptions.json
+│   └── objects.json
+└── mdetr_annotations/
+    ├── final_refcoco_train.json
+    ├── final_refcoco+_train.json
+    └── final_refcocog_train.json
+
+
+STEP 2: Verify Downloads
+-------------------------
+# Check COCO 2014 (needed for RefCOCO Phase 2)
+dir data\coco\train2014\*.jpg | measure
+
+# Check COCO 2017 (main training)
+dir data\coco\train2017\*.jpg | measure
+
+# Check Visual Genome
+dir data\visual_genome\VG_100K\*.jpg | measure
+
+# All should show thousands of images!
+
+
+STEP 3: Start Training (Two-Phase FIBER-Style)
+-----------------------------------------------
+cd D:\BabyLM\BitGen
+python src\train_stage1_vision_language.py
+
+Training will automatically:
+1. Phase 1 (25 epochs): Coarse-grained training
+   - COCO captions (train2017)
+   - Visual Genome captions
+   - ITC + ITM losses
+   
+2. Phase 2 (25 epochs): Fine-grained training
+   - RefCOCO/+/g (uses train2014 images!)
+   - Visual Genome regions
+   - Phrase grounding loss
+
+Default config (already set in code):
+- use_multi_datasets = True
+- enable_two_phase_training = True
+- data_root = "data"
+- batch_size = 128
+- learning_rate = 2e-4
+
+
+PATH VERIFICATION
+=================
+
+Training code expects these EXACT paths:
+
+1. COCOCaptionDataset:
+   data/coco/annotations/captions_train2017.json
+   data/coco/train2017/*.jpg
+   ✓ Created by: download_fiber_datasets.py
+
+2. RefCOCODataset:
+   data/mdetr_annotations/final_refcoco_train.json
+   data/coco/train2014/*.jpg  ← CRITICAL! Must have 2014!
+   ✓ Created by: download_fiber_datasets.py
+
+3. VisualGenomeCaptionDataset:
+   data/visual_genome/region_descriptions.json
+   data/visual_genome/VG_100K/*.jpg
+   data/visual_genome/VG_100K_2/*.jpg
+   ✓ Created by: download_fiber_datasets.py
+
+4. VisualGenomeRegionDataset:
+   data/visual_genome/objects.json
+   data/visual_genome/VG_100K/*.jpg
+   ✓ Created by: download_fiber_datasets.py
+
+ALL PATHS MATCH! ✓
+
+
+TROUBLESHOOTING
+===============
+
+If download fails:
+- Make sure you have curl and unzip installed
+- Windows: use Git Bash or install with winget
+- Check internet connection (downloads are large!)
+
+If training fails with "file not found":
+- Run STEP 2 verification commands above
+- Make sure train2014/ exists (needed for RefCOCO!)
+- Check that annotations/ folder has JSON files
+
+If out of memory:
+- Reduce batch_size in Stage1Config (line 74 of train_stage1_vision_language.py)
+- Default is 128, try 64 or 32
+
+Alternative: COCO-Only Training (Quick Test)
+============================================
+If you just want to test with COCO only (no Visual Genome, no RefCOCO):
+
+1. Download COCO only:
+   python download_coco_dataset.py
+
+2. Edit src/train_stage1_vision_language.py:
+   Line 109: use_multi_datasets = False
+   Line 108: enable_two_phase_training = False
+
+3. Train:
+   python src\train_stage1_vision_language.py
+
+But this WON'T include FIBER-style multi-dataset training!
