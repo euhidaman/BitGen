@@ -992,7 +992,7 @@ class Stage1Trainer:
                     print(f"   CO2 emissions: {emissions_data:.6f} kg")
                     print(f"   Energy consumed: {emissions_data * 1000:.2f} Wh")
                     if self.wandb is not None:
-                        self.wandb.log({
+                        self.wandb.log_training_metrics({
                             'carbon/co2_kg': emissions_data,
                             'carbon/energy_wh': emissions_data * 1000
                         }, step=self.global_step)
