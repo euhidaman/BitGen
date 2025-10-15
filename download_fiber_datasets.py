@@ -522,7 +522,59 @@ def download_and_prepare_fiber_datasets(output_dir: str = "data") -> bool:
 
 
 if __name__ == "__main__":
-    success = download_and_prepare_fiber_datasets()
+    import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Download FIBER datasets for BitGen')
+    parser.add_argument('--a100', action='store_true', 
+                       help='A100 server mode: Move data to /data partition (for servers with small root partition)')
+    parser.add_argument('--output-dir', type=str, default='data',
+                       help='Output directory for datasets (default: data)')
+    
+    args = parser.parse_args()
+    
+    # A100 server mode: handle /data partition setup
+    if args.a100:
+        print("\n🖥️  A100 Server Mode Detected")
+        print("="*60)
+        
+        from pathlib import Path
+        import subprocess
+        
+        data_symlink = Path(args.output_dir)
+        data_target = Path("/data/BitGen-data")
+        
+        # Check if data is already a symlink to /data
+        if data_symlink.is_symlink() and data_symlink.resolve() == data_target:
+            print(f"✓ {args.output_dir} is already symlinked to /data/BitGen-data")
+        else:
+            # If data folder exists, move it
+            if data_symlink.exists() and not data_symlink.is_symlink():
+                print(f"📦 Moving existing {args.output_dir}/ to /data/BitGen-data...")
+                subprocess.run(["mv", str(data_symlink), str(data_target)], check=True)
+                print("✓ Moved successfully")
+            else:
+                # Create target directory if it doesn't exist
+                data_target.mkdir(parents=True, exist_ok=True)
+                print(f"✓ Created /data/BitGen-data")
+            
+            # Create symlink
+            if data_symlink.exists():
+                data_symlink.unlink()  # Remove if it's a broken symlink
+            
+            print(f"🔗 Creating symlink: {args.output_dir} -> /data/BitGen-data")
+            data_symlink.symlink_to(data_target)
+            print("✓ Symlink created")
+        
+        # Verify disk space
+        result = subprocess.run(["df", "-h", "/data"], capture_output=True, text=True)
+        print("\n💾 /data partition space:")
+        print(result.stdout)
+        
+        print("="*60)
+        print()
+    
+    success = download_and_prepare_fiber_datasets(args.output_dir)
     if success:
         print("\n✅ Datasets ready for training")
     else:
