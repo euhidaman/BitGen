@@ -344,13 +344,11 @@ class CrossModalFusion(nn.Module):
         
         # FIBER-style queue for contrastive learning (momentum-based)
         self.queue_size = getattr(config, 'queue_size', 8192)  # Default 8192
-        self.register_buffer('text_queue', torch.randn(config.embed_dim, self.queue_size))
-        self.register_buffer('image_queue', torch.randn(config.embed_dim, self.queue_size))
+        # Initialize queues with small values (will be filled during training)
+        self.register_buffer('text_queue', torch.randn(config.embed_dim, self.queue_size) * 0.02)
+        self.register_buffer('image_queue', torch.randn(config.embed_dim, self.queue_size) * 0.02)
         self.register_buffer('queue_ptr', torch.zeros(1, dtype=torch.long))
-        
-        # Normalize queues
-        self.text_queue = F.normalize(self.text_queue, p=2, dim=0)
-        self.image_queue = F.normalize(self.image_queue, p=2, dim=0)
+        # Note: No normalization - queues will naturally match feature distribution as they're filled
 
         # MANDATORY: DINOv2 Vision Encoder - no fallback allowed
         try:
