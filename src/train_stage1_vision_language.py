@@ -1371,8 +1371,9 @@ class Stage1Trainer:
                 if 'val_token_accuracy' in val_metrics:
                     log_dict['validation/token_accuracy'] = val_metrics['val_token_accuracy']
 
-                import wandb
-                wandb.log(log_dict, step=self.global_step)
+                # Use WandB integration method (DDP-safe)
+                if self.wandb is not None:
+                    self.wandb.log_training_metrics(log_dict, step=self.global_step, epoch=epoch)
 
             # Epoch-level visualizations (using validation data for clean vis) - only rank 0
             if self.rank == 0:
