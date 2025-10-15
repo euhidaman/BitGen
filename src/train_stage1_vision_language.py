@@ -769,6 +769,20 @@ class Stage1Trainer:
         # AMP scaler (using new API)
         self.scaler = GradScaler('cuda') if config.use_amp else None
 
+        # Loss Stabilizer (BitMar-style sliding window) - only on rank 0
+        self.loss_stabilizer = None
+        if self.rank == 0:
+            from loss_stabilizer import LossStabilizer
+            self.loss_stabilizer = LossStabilizer(
+                window_size=50,              # Track last 50 steps
+                increase_threshold=0.10,     # Trigger if loss increases by 10%
+                smoothing_alpha=0.1,         # EMA smoothing
+                min_steps_between_checks=10, # Check every 10 steps
+                lr_reduction_factor=0.7,     # Reduce LR by 30% on increase
+                min_lr=1e-6                  # Minimum LR
+            )
+            print("✅ Loss Stabilizer enabled (BitMar-style sliding window)")
+
         # Training state
         self.global_step = 0
         self.epoch = 0
@@ -946,6 +960,29 @@ class Stage1Trainer:
                 self.scheduler.step()
                 self.global_step += 1
                 
+                # Loss Stabilizer: Monitor and prevent loss increases (BitMar-style)
+                if self.loss_stabilizer is not None:
+                    stabilizer_info = self.loss_stabilizer.update_loss(
+                        loss=loss.item(),
+                        step=self.global_step,
+                        optimizer=self.optimizer
+                    )
+                    
+                    # Log intervention if applied
+                    if stabilizer_info['intervention_applied']:
+                        print(f"\n🔧 Loss Stabilizer: {stabilizer_info['intervention_reason']}")
+                        if self.wandb is not None:
+                            self.wandb.log_training_metrics({
+                                'loss_stabilizer/intervention': 1.0,
+                                'loss_stabilizer/loss_ema': stabilizer_info['loss_ema'],
+                                'loss_stabilizer/lr_after': stabilizer_info['current_lr']
+                            }, step=self.global_step)
+                    
+                    # Check if training should continue
+                    if not self.loss_stabilizer.should_continue_training():
+                        print("\n❌ Loss Stabilizer: Training terminated due to unstable loss")
+                        break
+                
                 # Clear CUDA cache periodically to avoid fragmentation
                 if self.global_step % 50 == 0:
                     torch.cuda.empty_cache()
@@ -1071,6 +1108,23 @@ class Stage1Trainer:
             'perplexity': total_perplexity / num_batches,
             'token_accuracy': total_token_accuracy / num_batches
         }
+        
+        # Log Loss Stabilizer summary at end of epoch
+        if self.loss_stabilizer is not None and self.rank == 0:
+            stabilizer_summary = self.loss_stabilizer.get_summary()
+            print(f"\n📊 Loss Stabilizer Summary:")
+            print(f"   Total interventions: {stabilizer_summary['total_interventions']}")
+            print(f"   Loss EMA: {stabilizer_summary['loss_ema']:.4f}")
+            print(f"   Trend: {stabilizer_summary['loss_stats']['trend']}")
+            
+            if self.wandb is not None:
+                self.wandb.log_training_metrics({
+                    'loss_stabilizer/total_interventions': stabilizer_summary['total_interventions'],
+                    'loss_stabilizer/loss_ema': stabilizer_summary['loss_ema'],
+                    'loss_stabilizer/loss_min': stabilizer_summary['loss_stats']['min'],
+                    'loss_stabilizer/loss_max': stabilizer_summary['loss_stats']['max'],
+                    'loss_stabilizer/loss_mean': stabilizer_summary['loss_stats']['mean']
+                }, step=self.global_step)
 
         return avg_metrics
 
