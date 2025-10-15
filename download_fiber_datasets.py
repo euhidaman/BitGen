@@ -37,25 +37,36 @@ class FIBERDatasetDownloader:
     def download_visual_genome(self) -> bool:
         """Download Visual Genome dataset"""
         try:
-            self.logger.info("🚀 Downloading Visual Genome dataset...")
+            self.logger.info("🚀 Checking Visual Genome dataset...")
             
             vg_dir = self.output_dir / "visual_genome"
             vg_dir.mkdir(parents=True, exist_ok=True)
 
             urls = [
-                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip", "VG_100K.zip"),
-                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip", "VG_100K_2.zip"),
+                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip", "VG_100K.zip", "VG_100K", 100000),
+                ("https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip", "VG_100K_2.zip", "VG_100K_2", 100000),
             ]
 
-            for url, filename in urls:
+            for url, filename, folder_name, min_images in urls:
                 dest = vg_dir / filename
+                extracted_folder = vg_dir / folder_name
+                
+                # Check if already extracted with images
+                if extracted_folder.exists():
+                    image_count = len(list(extracted_folder.glob("*.jpg")))
+                    if image_count >= min_images:
+                        self.logger.info(f"✓ {folder_name} already exists with {image_count:,} images - skipping")
+                        continue
+                    else:
+                        self.logger.info(f"⚠️  {folder_name} exists but only has {image_count:,} images (expected ~{min_images:,})")
+                
+                # Check if zip file exists
                 if dest.exists():
-                    self.logger.info(f"✓ {filename} already exists")
-                    continue
-
-                self.logger.info(f"📥 Downloading {filename}...")
-                subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
-                self.logger.info(f"✓ Downloaded {filename}")
+                    self.logger.info(f"✓ {filename} already downloaded - extracting...")
+                else:
+                    self.logger.info(f"📥 Downloading {filename}...")
+                    subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                    self.logger.info(f"✓ Downloaded {filename}")
 
                 # Extract using Python's zipfile (cross-platform)
                 if dest.suffix == '.zip':
@@ -72,19 +83,27 @@ class FIBERDatasetDownloader:
 
             # Download annotations
             ann_urls = [
-                ("https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/region_descriptions.json.zip", "region_descriptions.json.zip"),
-                ("https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/objects.json.zip", "objects.json.zip"),
+                ("https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/region_descriptions.json.zip", "region_descriptions.json.zip", "region_descriptions.json"),
+                ("https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/objects.json.zip", "objects.json.zip", "objects.json"),
             ]
 
-            for url, filename in ann_urls:
+            for url, filename, json_name in ann_urls:
                 dest = vg_dir / filename
-                if dest.exists():
-                    self.logger.info(f"✓ {filename} already exists")
+                json_file = vg_dir / json_name
+                
+                # Check if JSON already extracted
+                if json_file.exists():
+                    file_size = json_file.stat().st_size / (1024 * 1024)  # MB
+                    self.logger.info(f"✓ {json_name} already exists ({file_size:.1f} MB) - skipping")
                     continue
-
-                self.logger.info(f"📥 Downloading {filename}...")
-                subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
-                self.logger.info(f"✓ Downloaded {filename}")
+                
+                # Check if zip exists
+                if dest.exists():
+                    self.logger.info(f"✓ {filename} already downloaded - extracting...")
+                else:
+                    self.logger.info(f"📥 Downloading {filename}...")
+                    subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                    self.logger.info(f"✓ Downloaded {filename}")
 
                 # Extract JSON using Python's zipfile
                 try:
@@ -191,21 +210,32 @@ class FIBERDatasetDownloader:
     def download_refcoco(self) -> bool:
         """Download RefCOCO/+/g annotations (uses COCO 2014 images)"""
         try:
-            self.logger.info("🚀 Downloading RefCOCO annotations...")
+            self.logger.info("🚀 Checking RefCOCO annotations...")
             
             mdetr_dir = self.output_dir / "mdetr_annotations"
             mdetr_dir.mkdir(parents=True, exist_ok=True)
+
+            # Check if annotations already extracted
+            required_files = [
+                "final_refcoco_train.json",
+                "final_refcoco+_train.json", 
+                "final_refcocog_train.json"
+            ]
+            
+            all_exist = all((mdetr_dir / f).exists() for f in required_files)
+            if all_exist:
+                self.logger.info("✓ RefCOCO annotations already extracted - skipping")
+                return True
 
             url = "https://zenodo.org/record/4729015/files/mdetr_annotations.tar.gz"
             dest = mdetr_dir / "mdetr_annotations.tar.gz"
 
             if dest.exists():
-                self.logger.info("✓ MDETR annotations already exist")
-                return True
-
-            self.logger.info("📥 Downloading MDETR annotations (RefCOCO/+/g)...")
-            subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
-            self.logger.info("✓ Downloaded MDETR annotations")
+                self.logger.info("✓ MDETR annotations tar.gz already downloaded - extracting...")
+            else:
+                self.logger.info("📥 Downloading MDETR annotations (RefCOCO/+/g)...")
+                subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+                self.logger.info("✓ Downloaded MDETR annotations")
 
             # Extract using Python's tarfile (cross-platform)
             self.logger.info("📦 Extracting annotations...")
@@ -408,6 +438,38 @@ def download_and_prepare_fiber_datasets(output_dir: str = "data") -> bool:
     print("\n" + "="*60)
     print("BitGen Multi-Dataset Downloader")
     print("="*60)
+    
+    # Quick check of what's already available
+    print("\n🔍 Checking existing datasets...")
+    data_root = Path(output_dir)
+    
+    existing = []
+    if (data_root / "coco" / "train2014").exists():
+        count = len(list((data_root / "coco" / "train2014").glob("*.jpg")))
+        if count > 1000:
+            existing.append(f"COCO train2014 ({count:,} images)")
+    if (data_root / "coco" / "train2017").exists():
+        count = len(list((data_root / "coco" / "train2017").glob("*.jpg")))
+        if count > 1000:
+            existing.append(f"COCO train2017 ({count:,} images)")
+    if (data_root / "visual_genome" / "VG_100K").exists():
+        count = len(list((data_root / "visual_genome" / "VG_100K").glob("*.jpg")))
+        if count > 1000:
+            existing.append(f"Visual Genome VG_100K ({count:,} images)")
+    if (data_root / "visual_genome" / "VG_100K_2").exists():
+        count = len(list((data_root / "visual_genome" / "VG_100K_2").glob("*.jpg")))
+        if count > 1000:
+            existing.append(f"Visual Genome VG_100K_2 ({count:,} images)")
+    if (data_root / "mdetr_annotations" / "final_refcoco_train.json").exists():
+        existing.append("RefCOCO annotations")
+    
+    if existing:
+        print("✓ Already downloaded:")
+        for item in existing:
+            print(f"  - {item}")
+        print("  (Will skip these during download)")
+    else:
+        print("  No datasets found - will download all")
 
     # Download COCO (official source - 2014 + 2017)
     print("\n1️⃣  COCO 2014 + 2017 (official source, ~13GB)")
