@@ -67,13 +67,27 @@ class RefCOCODataset(Dataset):
         
         # Paths
         self.image_dir = self.data_root / "coco" / "train2014"
-        self.annotation_file = self.data_root / "mdetr_annotations" / f"final_{dataset_type}_{split}.json"
+        
+        # Try multiple annotation file naming conventions (MDETR has different formats)
+        possible_annotation_files = [
+            self.data_root / "mdetr_annotations" / f"finetune_{dataset_type}_{split}.json",  # MDETR finetune format
+            self.data_root / "mdetr_annotations" / f"final_{dataset_type}_{split}.json",     # MDETR final format
+        ]
+        
+        self.annotation_file = None
+        for annot_path in possible_annotation_files:
+            if annot_path.exists():
+                self.annotation_file = annot_path
+                break
         
         # Check if files exist
         if not self.image_dir.exists():
             raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
-        if not self.annotation_file.exists():
-            raise FileNotFoundError(f"Annotation file not found: {self.annotation_file}")
+        if self.annotation_file is None:
+            raise FileNotFoundError(
+                f"Annotation file not found. Tried:\n" + 
+                "\n".join(f"  - {p}" for p in possible_annotation_files)
+            )
         
         # Load annotations
         print(f"📦 Loading {dataset_type} {split} annotations...")
@@ -242,14 +256,30 @@ class MixedGroundingDataset(Dataset):
         self.vocab_size = vocab_size
         self.image_size = image_size
         
-        # Annotation file
+        # Annotation file - try multiple naming conventions
+        possible_annotation_files = []
         if use_coco:
-            annotation_file = self.data_root / "mdetr_annotations" / "final_mixed_train.json"
+            possible_annotation_files = [
+                self.data_root / "mdetr_annotations" / "final_mixed_train.json",
+                self.data_root / "mdetr_annotations" / "finetune_mixed_train.json",
+            ]
         else:
-            annotation_file = self.data_root / "mdetr_annotations" / "final_mixed_train_no_coco.json"
+            possible_annotation_files = [
+                self.data_root / "mdetr_annotations" / "final_mixed_train_no_coco.json",
+                self.data_root / "mdetr_annotations" / "finetune_mixed_train_no_coco.json",
+            ]
         
-        if not annotation_file.exists():
-            raise FileNotFoundError(f"Annotation file not found: {annotation_file}")
+        annotation_file = None
+        for annot_path in possible_annotation_files:
+            if annot_path.exists():
+                annotation_file = annot_path
+                break
+        
+        if annotation_file is None:
+            raise FileNotFoundError(
+                f"Mixed Grounding annotation file not found. Tried:\n" + 
+                "\n".join(f"  - {p}" for p in possible_annotation_files)
+            )
         
         print(f"📦 Loading Mixed Grounding annotations...")
         with open(annotation_file, 'r') as f:
