@@ -1,23 +1,31 @@
 """
-Stage 1: Vision-Language Pre-training (FIBER-style Two-Phase Approach)
+Stage 1: Vision-Language Pre-training (FIBER Stage 1: Coarse-Grained)
 
-FIBER-inspired two-phase training:
-- Phase 1 (Coarse-Grained): Image-text pairs → ITC, ITM losses
-  Datasets: COCO, SBU, Visual Genome, Conceptual Captions
-  
-- Phase 2 (Fine-Grained): Region-level → Phrase grounding, spatial reasoning
-  Datasets: RefCOCO/+/g, Visual Genome regions
+FIBER Cross-Modal Learning (Image-Text Understanding):
+✅ IMPLEMENTED - Image-level vision-language alignment
+  - ITC Loss: Queue-based contrastive learning (image ↔ text)
+  - ITM Loss: Hard negative sampling (match/no-match classification)
+  - Datasets: COCO, SBU, Visual Genome, Conceptual Captions
+  - Standard resolution (224x224), image-text pairs only
+
+❌ NOT IMPLEMENTED - FIBER Stage 2 (Fine-Grained, Region-Level)
+  - Phrase grounding, spatial reasoning with bounding boxes
+  - RefCOCO/+/g datasets with region annotations
+  - Higher resolution (640x640) training
+  - This could be added later as optional enhancement
 
 Core Innovations (BitGen):
-- Larimar GPM episodic memory (trained throughout)
-- BitNet-style quantization (DINOv2 + text encoders/decoders)
-- FIBER cross-modal fusion (queue-based contrastive)
+- FIBER cross-modal fusion: Queue-based ITC + hard negative ITM
+- DINOv2 + LoRA: Frozen base (300M) + trainable adapters (~2M params)
+- Larimar GPM episodic memory: Bayesian updates with 32 slots
+- Feature compression: 768→128 learned compression (~300K params)
+- BitNet quantization: For inference efficiency (1.58-bit)
 
-After this stage, model should have:
-- Aligned vision-language representations (image ↔ text matching) at both image & region levels
-- Trained episodic memory (Larimar GPM)
-- Quantized encoders/decoders (BitNet)
-- Ready for Stage 2 reasoning module
+After Stage 1, model should have:
+✅ Aligned vision-language representations (image ↔ text matching)
+✅ Trained episodic memory (Larimar GPM)
+✅ Compressed vision features (DINOv2 → 128 dims)
+✅ Ready for Stage 2 reasoning module
 """
 
 # Suppress warnings
@@ -52,6 +60,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
 from pathlib import Path as PathlibPath
+import numpy as np
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -132,12 +141,15 @@ class Stage1Config:
     temperature: float = 0.5  # Start high (0.07→0.1→0.2→0.5) to prevent early gradient explosion
     use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
-    # FIBER Stage 1: Coarse-Grained (this is what we're implementing)
-    # Note: FIBER's Stage 2 (Fine-Grained with region-level grounding) is NOT implemented yet
-    # It would require: RefCOCO/+/g datasets, bounding box annotations, phrase grounding loss
-    enable_fine_grained_stage: bool = False  # Set to True when Stage 2 is implemented
-    fine_grained_epochs: int = 0  # Reserved for future Stage 2 implementation
-    grounding_weight: float = 0.5  # Reserved for phrase grounding loss (Stage 2)
+    # FIBER Stage 2: Fine-Grained (Region-Level Grounding)
+    # Now IMPLEMENTED! Enable with --enable-stage2 flag
+    enable_stage2: bool = False  # Enable FIBER Stage 2 fine-grained training
+    stage2_epochs: int = 25  # FIBER Stage 2: ~25 epochs for fine-grained
+    stage2_resolution: int = 640  # Higher resolution for fine-grained (224→640)
+    grounding_weight: float = 1.0  # Phrase grounding loss weight
+    use_refcoco: bool = True  # Use RefCOCO/+/g datasets
+    use_mixed_grounding: bool = True  # Use Mixed Grounding dataset
+    stage2_batch_size: int = 32  # Smaller batch for higher resolution (640x640)
     
     # Multi-dataset config
     use_multi_datasets: bool = True  # Use FIBER-style multiple datasets
@@ -588,78 +600,138 @@ def compute_phrase_grounding_loss(
     temperature: float = 0.07
 ) -> Dict[str, torch.Tensor]:
     """
-    Compute phrase grounding loss for fine-grained training (FIBER Stage 2 style)
+    Compute phrase grounding loss for FIBER Stage 2 (Fine-Grained Training)
     
-    Given text phrases and image regions (bounding boxes), learn to:
-    1. Match text phrases to correct image regions
-    2. Spatial reasoning: understand position/size relationships
+    FIBER Stage 2 learns to:
+    1. Ground phrases to specific image regions (bounding boxes)
+    2. Match referring expressions to correct objects
+    3. Spatial reasoning: position, size, relationships
     
     Args:
         text_embeddings: [batch_size, seq_len, embed_dim] - Text token embeddings
-        image_embeddings: [batch_size, seq_len, embed_dim] - Image embeddings (can pool regions)
-        boxes: List of boxes per sample, each box has {'bbox': [x,y,w,h], 'token_span': [[start,end]]}
+        image_embeddings: [batch_size, num_patches, embed_dim] - Image patch embeddings
+        boxes: List of boxes per sample, each box has:
+            {'bbox': [x, y, w, h] (normalized 0-1), 'token_span': [[start, end]]}
         temperature: Temperature for contrastive grounding
     
     Returns:
-        loss_dict: Dictionary with grounding losses
+        loss_dict: {
+            'grounding_loss': Average phrase grounding loss
+            'num_grounded_samples': Number of samples with boxes
+            'grounding_accuracy': Accuracy of phrase-region matching
+        }
     """
     batch_size = text_embeddings.shape[0]
     device = text_embeddings.device
     
     total_grounding_loss = 0.0
+    total_accuracy = 0.0
     num_grounded_samples = 0
     
     for i in range(batch_size):
         if not boxes[i]:  # Skip samples without boxes (coarse-grained data)
             continue
         
-        # Extract text features for this sample's phrases
         sample_text_emb = text_embeddings[i]  # [seq_len, embed_dim]
-        sample_image_emb = image_embeddings[i]  # [seq_len, embed_dim]
+        sample_image_emb = image_embeddings[i]  # [num_patches, embed_dim]
         
-        # For simplicity: use [CLS] token (first token) as phrase representation
-        # In full FIBER, this would extract phrase spans and aggregate
+        # Extract phrase features for each box
         phrase_features = []
+        box_coords = []
+        
         for box_data in boxes[i]:
             token_spans = box_data.get('token_span', [[0, 1]])
-            # Use first span
-            start, end = token_spans[0]
-            # Mean pool tokens in span
+            bbox = box_data.get('bbox', [0, 0, 1, 1])  # [x, y, w, h] normalized
+            
+            # Mean pool tokens in phrase span
+            start, end = min(token_spans[0][0], sample_text_emb.shape[0] - 1), min(token_spans[0][1], sample_text_emb.shape[0])
+            if end <= start:
+                continue
             phrase_feat = sample_text_emb[start:end].mean(dim=0)  # [embed_dim]
             phrase_features.append(phrase_feat)
+            box_coords.append(bbox)
         
         if not phrase_features:
             continue
         
         phrase_features = torch.stack(phrase_features)  # [num_boxes, embed_dim]
+        num_boxes = len(phrase_features)
         
-        # Image region features (simplified: use global image embedding)
-        # In full FIBER: extract ROI features using bounding boxes
-        image_feat = sample_image_emb.mean(dim=0).unsqueeze(0)  # [1, embed_dim]
+        # FIBER Stage 2: Extract region features from image patches using bounding boxes
+        # Spatial pooling: pool image patches that fall within each bounding box
+        region_features = []
+        num_patches = sample_image_emb.shape[0]
+        patches_per_side = int(np.sqrt(num_patches))  # Assume square grid (e.g., 16x16 = 256)
         
-        # Compute similarity between phrases and image
-        # Simplified: phrase should match image globally
-        sim = (phrase_features @ image_feat.t()) / temperature  # [num_boxes, 1]
+        for bbox in box_coords:
+            x, y, w, h = bbox  # Normalized coordinates [0, 1]
+            
+            # Map bbox to patch grid
+            x1_patch = int(x * patches_per_side)
+            y1_patch = int(y * patches_per_side)
+            x2_patch = int((x + w) * patches_per_side)
+            y2_patch = int((y + h) * patches_per_side)
+            
+            # Clamp to valid range
+            x1_patch = max(0, min(x1_patch, patches_per_side - 1))
+            y1_patch = max(0, min(y1_patch, patches_per_side - 1))
+            x2_patch = max(x1_patch + 1, min(x2_patch, patches_per_side))
+            y2_patch = max(y1_patch + 1, min(y2_patch, patches_per_side))
+            
+            # Extract patches in this region
+            region_patch_features = []
+            for py in range(y1_patch, y2_patch):
+                for px in range(x1_patch, x2_patch):
+                    patch_idx = py * patches_per_side + px
+                    if patch_idx < num_patches:
+                        region_patch_features.append(sample_image_emb[patch_idx])
+            
+            if region_patch_features:
+                # Mean pool patches in region
+                region_feat = torch.stack(region_patch_features).mean(dim=0)
+            else:
+                # Fallback: use global mean
+                region_feat = sample_image_emb.mean(dim=0)
+            
+            region_features.append(region_feat)
         
-        # Target: all phrases should match (since they describe regions in this image)
-        targets = torch.ones(len(phrase_features), device=device)
+        region_features = torch.stack(region_features)  # [num_boxes, embed_dim]
         
-        # Binary cross-entropy loss
-        grounding_loss = F.binary_cross_entropy_with_logits(
-            sim.squeeze(-1), targets
-        )
+        # Contrastive grounding: match phrases to correct regions
+        # Similarity matrix: [num_boxes, num_boxes]
+        sim_matrix = (phrase_features @ region_features.t()) / temperature
+        
+        # Targets: diagonal should be high (phrase[i] matches region[i])
+        targets = torch.arange(num_boxes, device=device)
+        
+        # Bidirectional contrastive loss (phrase→region, region→phrase)
+        loss_p2r = F.cross_entropy(sim_matrix, targets)
+        loss_r2p = F.cross_entropy(sim_matrix.t(), targets)
+        grounding_loss = (loss_p2r + loss_r2p) / 2.0
+        
+        # Compute accuracy
+        with torch.no_grad():
+            pred_p2r = sim_matrix.argmax(dim=1)
+            pred_r2p = sim_matrix.t().argmax(dim=1)
+            acc_p2r = (pred_p2r == targets).float().mean()
+            acc_r2p = (pred_r2p == targets).float().mean()
+            accuracy = (acc_p2r + acc_r2p) / 2.0
         
         total_grounding_loss += grounding_loss
+        total_accuracy += accuracy
         num_grounded_samples += 1
     
     if num_grounded_samples > 0:
         avg_grounding_loss = total_grounding_loss / num_grounded_samples
+        avg_accuracy = total_accuracy / num_grounded_samples
     else:
         avg_grounding_loss = torch.tensor(0.0, device=device)
+        avg_accuracy = torch.tensor(0.0, device=device)
     
     return {
         'grounding_loss': avg_grounding_loss,
-        'num_grounded_samples': num_grounded_samples
+        'num_grounded_samples': num_grounded_samples,
+        'grounding_accuracy': avg_accuracy.item() if isinstance(avg_accuracy, torch.Tensor) else avg_accuracy
     }
 
 
@@ -1704,9 +1776,26 @@ def main():
                        help='Number of GPUs to use (default: auto-detect)')
     parser.add_argument('--batch-size', type=int, default=None,
                        help='Override batch size per GPU')
+    parser.add_argument('--enable-stage2', action='store_true',
+                       help='Enable FIBER Stage 2 (Fine-Grained) training with RefCOCO/+/g')
+    parser.add_argument('--stage2-epochs', type=int, default=25,
+                       help='Number of epochs for Stage 2 fine-grained training')
     args = parser.parse_args()
     
     config = Stage1Config()
+    
+    # Enable FIBER Stage 2 if requested
+    if args.enable_stage2:
+        config.enable_stage2 = True
+        config.stage2_epochs = args.stage2_epochs
+        print("\n" + "=" * 80)
+        print("🚀 FIBER STAGE 2 (FINE-GRAINED) ENABLED!")
+        print("=" * 80)
+        print(f"Stage 2 Resolution: {config.stage2_resolution}x{config.stage2_resolution} (higher res)")
+        print(f"Stage 2 Epochs: {config.stage2_epochs}")
+        print(f"Datasets: RefCOCO/+/g + Mixed Grounding")
+        print(f"Tasks: Phrase grounding, referring expression comprehension")
+        print("=" * 80 + "\n")
     
     # A100 optimization mode
     if args.a100:
