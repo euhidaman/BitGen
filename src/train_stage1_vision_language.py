@@ -669,13 +669,33 @@ class Stage1Trainer:
         # Initialize model
         if self.rank == 0:
             print("Initializing BitGen Vision-Language model...")
+            print("🔧 Quantization Mode: TRAINING (Full Precision Float32)")
+            print("   ✓ Weights: Float32 (not quantized)")
+            print("   ✓ Gradients: Full precision backprop")
+            print("   ✓ BitNet quantization will ONLY activate during inference (.eval() mode)")
         self.model = BitGenVisionLanguageModel(config).to(self.device)
+        
+        # Ensure model is in training mode (full precision)
+        self.model.train()
         
         # Wrap with DDP if multi-GPU
         if config.use_ddp:
             from torch.nn.parallel import DistributedDataParallel as DDP
             self.model = DDP(self.model, device_ids=[self.rank], find_unused_parameters=True)
 
+        # Verify full precision training (only on rank 0)
+        if self.rank == 0:
+            # Check a sample BitNet layer to confirm float32
+            sample_layer = self.model.text_decoder.output_projection
+            weight_dtype = sample_layer.weight.dtype
+            weight_range = (sample_layer.weight.min().item(), sample_layer.weight.max().item())
+            print(f"   ✓ Sample weight dtype: {weight_dtype}")
+            print(f"   ✓ Sample weight range: [{weight_range[0]:.4f}, {weight_range[1]:.4f}]")
+            if weight_dtype != torch.float32:
+                print(f"   ⚠️  WARNING: Weights are {weight_dtype}, expected float32!")
+            if abs(weight_range[0]) < 1.1 and abs(weight_range[1]) < 1.1:
+                print(f"   ⚠️  WARNING: Weights may be quantized (range too narrow)!")
+        
         # Count parameters (only on rank 0)
         if self.rank == 0:
             total_params = sum(p.numel() for p in self.model.parameters())

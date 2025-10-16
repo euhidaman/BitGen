@@ -29,9 +29,10 @@ class BitGenConfig:
     memory_dim: int = 128
     direct_writing: bool = True
 
-    # BitNet Quantization
+    # BitNet Quantization (Inference Only - Training uses full precision)
     quantization_bits: float = 1.58
     use_int8_inference: bool = True
+    quantize_during_training: bool = False  # MUST be False for proper learning
 
     # FIBER Cross-Modal
     vision_embed_dim: int = 128
@@ -112,16 +113,19 @@ class BitNetLinear(nn.Module):
         return quantized, scale
 
     def forward(self, x):
-        # FIXED: Always use full precision during training for proper gradient flow
+        # CRITICAL: Full precision during training for proper learning
+        # Quantization ONLY happens during inference (.eval() mode)
         if self.training:
-            # Full precision during training - NO QUANTIZATION
+            # Full precision training - weights remain float32
+            # Gradients flow normally through full precision weights
             return F.linear(x, self.weight, self.bias)
         else:
             # Quantized inference for embedded deployment
+            # Weights quantized to {-1, 0, +1} for 1.58-bit storage
             q_weight, w_scale = self.quantize_weights(self.weight)
             q_input, i_scale = self.quantize_activations(x)
 
-            # Efficient integer arithmetic
+            # Efficient integer arithmetic on embedded devices
             output = F.linear(q_input, q_weight) * w_scale * i_scale
 
             if self.bias is not None:
