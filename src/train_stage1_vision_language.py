@@ -992,6 +992,9 @@ class Stage1Trainer:
         total_text_loss = 0.0
         total_perplexity = 0.0
         total_token_accuracy = 0.0
+        total_grounding_loss = 0.0
+        total_grounding_acc = 0.0
+        total_grounded_samples = 0
         num_batches = 0
 
         # Log current learning rate at start of epoch
@@ -1052,6 +1055,33 @@ class Stage1Trainer:
                     perplexity = loss_dict.get('perplexity', 0.0)
                     token_accuracy = loss_dict.get('token_accuracy', 0.0)
 
+                    # FIBER Stage 2: Phrase grounding loss (fine-grained)
+                    grounding_loss = 0.0
+                    grounding_acc = 0.0
+                    num_grounded = 0
+                    if 'boxes' in batch and batch['boxes'] is not None and len(batch['boxes']) > 0:
+                        # Get text embeddings from contrastive features
+                        text_embeddings = contrastive_dict.get('text_features')
+                        # Get image patch embeddings from vision encoder
+                        image_embeddings = contrastive_dict.get('image_features')
+                        
+                        if text_embeddings is not None and image_embeddings is not None:
+                            # Compute phrase grounding loss
+                            grounding_results = compute_phrase_grounding_loss(
+                                text_embeddings=text_embeddings,
+                                image_embeddings=image_embeddings,
+                                boxes=batch['boxes'],
+                                temperature=self.config.temperature
+                            )
+                            
+                            grounding_loss = grounding_results['grounding_loss']
+                            grounding_acc = grounding_results['grounding_accuracy']
+                            num_grounded = grounding_results['num_grounded_samples']
+                            
+                            # Add grounding loss to total loss with weight
+                            if grounding_loss > 0:
+                                loss = loss + self.config.grounding_weight * grounding_loss
+
                 # Backward pass with gradient scaling
                 self.scaler.scale(
                     loss / self.config.grad_accum_steps).backward()
@@ -1094,6 +1124,33 @@ class Stage1Trainer:
                 text_loss = loss_dict.get('text_loss', 0.0)
                 perplexity = loss_dict.get('perplexity', 0.0)
                 token_accuracy = loss_dict.get('token_accuracy', 0.0)
+
+                # FIBER Stage 2: Phrase grounding loss (fine-grained) [NO AMP]
+                grounding_loss = 0.0
+                grounding_acc = 0.0
+                num_grounded = 0
+                if 'boxes' in batch and batch['boxes'] is not None and len(batch['boxes']) > 0:
+                    # Get text embeddings from contrastive features
+                    text_embeddings = contrastive_dict.get('text_features')
+                    # Get image patch embeddings from vision encoder
+                    image_embeddings = contrastive_dict.get('image_features')
+                    
+                    if text_embeddings is not None and image_embeddings is not None:
+                        # Compute phrase grounding loss
+                        grounding_results = compute_phrase_grounding_loss(
+                            text_embeddings=text_embeddings,
+                            image_embeddings=image_embeddings,
+                            boxes=batch['boxes'],
+                            temperature=self.config.temperature
+                        )
+                        
+                        grounding_loss = grounding_results['grounding_loss']
+                        grounding_acc = grounding_results['grounding_accuracy']
+                        num_grounded = grounding_results['num_grounded_samples']
+                        
+                        # Add grounding loss to total loss with weight
+                        if grounding_loss > 0:
+                            loss = loss + self.config.grounding_weight * grounding_loss
 
                 (loss / self.config.grad_accum_steps).backward()
 
@@ -1220,11 +1277,19 @@ class Stage1Trainer:
                 perplexity, float) else perplexity.item() if hasattr(perplexity, 'item') else 0.0
             total_token_accuracy += token_accuracy if isinstance(
                 token_accuracy, float) else token_accuracy.item() if hasattr(token_accuracy, 'item') else 0.0
+            
+            # Accumulate grounding metrics (Stage 2)
+            if grounding_loss > 0:
+                total_grounding_loss += grounding_loss if isinstance(
+                    grounding_loss, float) else grounding_loss.item() if hasattr(grounding_loss, 'item') else 0.0
+                total_grounding_acc += grounding_acc
+                total_grounded_samples += num_grounded
+            
             num_batches += 1
 
             # Update progress bar with all metrics
             current_lr = self.optimizer.param_groups[0]['lr']
-            progress_bar.set_postfix({
+            postfix_dict = {
                 'loss': f"{loss.item():.4f}",
                 'itc': f"{contrastive_loss if isinstance(contrastive_loss, float) else contrastive_loss.item() if hasattr(contrastive_loss, 'item') else 0.0:.4f}",
                 'itm': f"{itm_loss if isinstance(itm_loss, float) else itm_loss.item() if hasattr(itm_loss, 'item') else 0.0:.4f}",
@@ -1233,7 +1298,12 @@ class Stage1Trainer:
                 'i2t': f"{acc_i2t if isinstance(acc_i2t, float) else acc_i2t.item() if hasattr(acc_i2t, 'item') else 0.0:.2f}",
                 'lr': f"{current_lr:.2e}",
                 'temp': f"{self.config.temperature:.2f}"
-            })
+            }
+            # Add grounding metrics if available (Stage 2)
+            if grounding_loss > 0:
+                postfix_dict['gnd'] = f"{grounding_loss if isinstance(grounding_loss, float) else grounding_loss.item() if hasattr(grounding_loss, 'item') else 0.0:.4f}"
+                postfix_dict['gnd_acc'] = f"{grounding_acc:.2f}"
+            progress_bar.set_postfix(postfix_dict)
 
             # Log to wandb every 10 steps (only rank 0)
             if self.global_step % 10 == 0 and self.wandb is not None:
@@ -1328,6 +1398,12 @@ class Stage1Trainer:
             'perplexity': total_perplexity / num_batches,
             'token_accuracy': total_token_accuracy / num_batches
         }
+        
+        # Add grounding metrics if Stage 2 was used
+        if total_grounded_samples > 0:
+            avg_metrics['grounding_loss'] = total_grounding_loss / num_batches
+            avg_metrics['grounding_accuracy'] = total_grounding_acc / num_batches
+            avg_metrics['grounded_samples'] = total_grounded_samples
         
         # Log Loss Stabilizer summary at end of epoch
         if self.loss_stabilizer is not None and self.rank == 0:
@@ -1879,7 +1955,7 @@ def main():
                 print(f"Tasks: ITC (contrastive), ITM (matching)")
                 print(f"Resolution: 224x224")
                 print(f"Text Reconstruction: DISABLED (FIBER style)")
-                print(f"Epochs: {config.coarse_epochs}")
+                print(f"Epochs: {config.num_epochs}")
                 print("="*60 + "\n")
             
             train_loader_coarse = create_multidataset_loader(
@@ -1906,54 +1982,155 @@ def main():
                 use_ddp=config.use_ddp
             )
             
-            # FIBER Stage 2: Fine-Grained (region-level)
+            # FIBER Stage 2: Fine-Grained (region-level with RefCOCO)
             print("\n" + "="*60)
             print("FIBER STAGE 2: Fine-Grained Pre-training")
             print("="*60)
-            print(f"Datasets: RefCOCO/+/g, Visual Genome (regions)")
+            print(f"Datasets: RefCOCO/+/g, Mixed Grounding")
             print(f"Tasks: Phrase grounding, spatial reasoning")
             print(f"Resolution: 640x640 (higher!)")
             print(f"Epochs: {config.stage2_epochs}")
             print("="*60 + "\n")
             
-            train_loader_fine = create_multidataset_loader(
-                data_root=config.data_root,
-                stage="fine",
-                batch_size=config.batch_size,
-                max_seq_len=config.max_seq_len,
-                vocab_size=config.vocab_size,
-                num_workers=4,
-                shuffle=True,
-                max_vg_samples=config.max_vg_samples,
-                use_ddp=config.use_ddp
-            )
+            # Import RefCOCO dataset loaders
+            from refcoco_dataset import RefCOCODataset, MixedGroundingDataset, collate_fn_with_boxes
+            from torch.utils.data import ConcatDataset, DataLoader
             
-            val_loader_fine = create_multidataset_loader(
-                data_root=config.data_root,
-                stage="fine",
-                batch_size=config.batch_size,
-                max_seq_len=config.max_seq_len,
-                vocab_size=config.vocab_size,
-                num_workers=4,
-                shuffle=False,
-                max_vg_samples=config.max_vg_samples // 10,
-                use_ddp=config.use_ddp
-            )
+            # Create Stage 2 datasets with RefCOCO/+/g
+            stage2_train_datasets = []
+            stage2_val_datasets = []
             
-            # Train Phase 1
-            print("\n🚀 Starting Phase 1: Coarse-Grained Training...")
+            if config.use_refcoco:
+                # RefCOCO variants (train splits)
+                for dataset_type in ["refcoco", "refcoco+", "refcocog"]:
+                    try:
+                        train_dataset = RefCOCODataset(
+                            data_root=config.data_root,
+                            split="train",
+                            dataset_type=dataset_type,
+                            image_size=config.stage2_resolution,
+                            max_seq_len=config.max_seq_len,
+                            vocab_size=config.vocab_size
+                        )
+                        stage2_train_datasets.append(train_dataset)
+                        
+                        val_dataset = RefCOCODataset(
+                            data_root=config.data_root,
+                            split="val",
+                            dataset_type=dataset_type,
+                            image_size=config.stage2_resolution,
+                            max_seq_len=config.max_seq_len,
+                            vocab_size=config.vocab_size
+                        )
+                        stage2_val_datasets.append(val_dataset)
+                        
+                        if rank == 0:
+                            print(f"✓ Loaded {dataset_type}: {len(train_dataset)} train, {len(val_dataset)} val")
+                    except Exception as e:
+                        if rank == 0:
+                            print(f"⚠️  Failed to load {dataset_type}: {e}")
+            
+            if config.use_mixed_grounding:
+                # Mixed Grounding dataset
+                try:
+                    mixed_dataset = MixedGroundingDataset(
+                        data_root=config.data_root,
+                        image_size=config.stage2_resolution,
+                        max_seq_len=config.max_seq_len,
+                        vocab_size=config.vocab_size,
+                        use_coco=False  # Avoid duplicates with RefCOCO
+                    )
+                    # Split 95/5 for train/val
+                    mixed_train_size = int(0.95 * len(mixed_dataset))
+                    mixed_val_size = len(mixed_dataset) - mixed_train_size
+                    mixed_train, mixed_val = torch.utils.data.random_split(
+                        mixed_dataset,
+                        [mixed_train_size, mixed_val_size],
+                        generator=torch.Generator().manual_seed(42)
+                    )
+                    stage2_train_datasets.append(mixed_train)
+                    stage2_val_datasets.append(mixed_val)
+                    
+                    if rank == 0:
+                        print(f"✓ Loaded Mixed Grounding: {mixed_train_size} train, {mixed_val_size} val")
+                except Exception as e:
+                    if rank == 0:
+                        print(f"⚠️  Failed to load Mixed Grounding: {e}")
+            
+            # Combine all Stage 2 datasets
+            if stage2_train_datasets:
+                combined_train_stage2 = ConcatDataset(stage2_train_datasets)
+                combined_val_stage2 = ConcatDataset(stage2_val_datasets)
+                
+                if rank == 0:
+                    print(f"\n✓ Total Stage 2 Training: {len(combined_train_stage2)} samples")
+                    print(f"✓ Total Stage 2 Validation: {len(combined_val_stage2)} samples\n")
+                
+                # Create DataLoaders with custom collate for boxes
+                train_loader_fine = DataLoader(
+                    combined_train_stage2,
+                    batch_size=config.stage2_batch_size,
+                    shuffle=True,
+                    num_workers=4,
+                    pin_memory=True,
+                    collate_fn=collate_fn_with_boxes
+                )
+                
+                val_loader_fine = DataLoader(
+                    combined_val_stage2,
+                    batch_size=config.stage2_batch_size,
+                    shuffle=False,
+                    num_workers=4,
+                    pin_memory=True,
+                    collate_fn=collate_fn_with_boxes
+                )
+            else:
+                # CRASH if Stage 2 is enabled but no datasets loaded
+                if rank == 0:
+                    print("\n" + "="*80)
+                    print("❌ ERROR: FIBER Stage 2 enabled but NO datasets loaded!")
+                    print("="*80)
+                    print("Stage 2 requires RefCOCO/+/g or Mixed Grounding datasets.")
+                    print("\nTo fix this:")
+                    print("1. Download datasets: python download_fiber_datasets.py")
+                    print("2. Verify structure:")
+                    print("   data/mdetr_annotations/final_refcoco_train.json")
+                    print("   data/coco/train2014/ (images)")
+                    print("\n3. Or disable Stage 2: Remove --enable-stage2 flag")
+                    print("="*80)
+                raise RuntimeError(
+                    "FIBER Stage 2 enabled but no datasets available. "
+                    "Download RefCOCO/+/g datasets with: python download_fiber_datasets.py"
+                )
+            
+            # Train FIBER Stage 1 (Coarse-Grained)
+            if rank == 0:
+                print("\n🚀 Starting FIBER Stage 1: Coarse-Grained Training...")
             config_phase1 = Stage1Config()
-            config_phase1.num_epochs = config.coarse_epochs
+            config_phase1.num_epochs = config.num_epochs  # Use main config's num_epochs
             trainer_phase1 = Stage1Trainer(config_phase1)
             trainer_phase1.train(train_loader_coarse, val_loader_coarse)
             
             # Train FIBER Stage 2 (load Stage 1 weights)
-            print("\n🚀 Starting FIBER Stage 2: Fine-Grained Training...")
+            if rank == 0:
+                print("\n🚀 Starting FIBER Stage 2: Fine-Grained Training...")
+                print(f"Stage 2 batch size: {config.stage2_batch_size} (640x640 resolution)")
+                print(f"Stage 2 epochs: {config.stage2_epochs}")
+            
+            # ASSERT that Stage 2 dataloaders exist
+            assert train_loader_fine is not None, "Stage 2 train_loader is None!"
+            assert val_loader_fine is not None, "Stage 2 val_loader is None!"
+            
             config_stage2 = Stage1Config()
             config_stage2.num_epochs = config.stage2_epochs
             config_stage2.batch_size = config.stage2_batch_size  # Smaller batch for 640x640
+            config_stage2.grounding_weight = config.grounding_weight  # Enable grounding loss
             trainer_stage2 = Stage1Trainer(config_stage2)
-            # TODO: Load Stage 1 checkpoint
+            
+            # TODO: Load Stage 1 checkpoint to continue from Stage 1 weights
+            # checkpoint = torch.load('checkpoints/stage1/stage1_best.pt')
+            # trainer_stage2.model.load_state_dict(checkpoint['model_state_dict'])
+            
             trainer_stage2.train(train_loader_fine, val_loader_fine)
             
         else:
