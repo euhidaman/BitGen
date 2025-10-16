@@ -1849,7 +1849,7 @@ def main():
         print("BitGen Stage 1: Vision-Language Pre-training")
         print("="*80)
         print(f"Training mode: {'FIBER-style Multi-Dataset' if config.use_multi_datasets else 'Single COCO Dataset'}")
-        print(f"Two-phase training: {'Enabled (Coarse → Fine)' if config.enable_two_phase_training else 'Disabled'}")
+        print(f"FIBER Stage 2: {'Enabled (Fine-Grained)' if config.enable_stage2 else 'Disabled (Stage 1 Only)'}")
         print(f"Larimar Memory: Enabled (size={config.memory_size})")
         print(f"BitNet Quantization: Enabled (for encoders/decoders)")
         if config.use_ddp:
@@ -1869,14 +1869,15 @@ def main():
                 print("Please ensure multi_dataset_loader.py is in src/ directory")
             sys.exit(1)
         
-        if config.enable_two_phase_training:
-            # Phase 1: Coarse-Grained (image-text pairs)
+        if config.enable_stage2:
+            # Two-Stage Training: Stage 1 (Coarse) → Stage 2 (Fine-Grained)
             if rank == 0:
                 print("\n" + "="*60)
-                print("PHASE 1: Coarse-Grained Pre-training (FIBER-Aligned)")
+                print("FIBER STAGE 1: Coarse-Grained Pre-training")
                 print("="*60)
                 print(f"Datasets: COCO, Visual Genome (captions)")
                 print(f"Tasks: ITC (contrastive), ITM (matching)")
+                print(f"Resolution: 224x224")
                 print(f"Text Reconstruction: DISABLED (FIBER style)")
                 print(f"Epochs: {config.coarse_epochs}")
                 print("="*60 + "\n")
@@ -1905,13 +1906,14 @@ def main():
                 use_ddp=config.use_ddp
             )
             
-            # Phase 2: Fine-Grained (region-level)
+            # FIBER Stage 2: Fine-Grained (region-level)
             print("\n" + "="*60)
-            print("PHASE 2: Fine-Grained Pre-training")
+            print("FIBER STAGE 2: Fine-Grained Pre-training")
             print("="*60)
             print(f"Datasets: RefCOCO/+/g, Visual Genome (regions)")
             print(f"Tasks: Phrase grounding, spatial reasoning")
-            print(f"Epochs: {config.fine_epochs}")
+            print(f"Resolution: 640x640 (higher!)")
+            print(f"Epochs: {config.stage2_epochs}")
             print("="*60 + "\n")
             
             train_loader_fine = create_multidataset_loader(
@@ -1945,13 +1947,14 @@ def main():
             trainer_phase1 = Stage1Trainer(config_phase1)
             trainer_phase1.train(train_loader_coarse, val_loader_coarse)
             
-            # Train Phase 2 (load Phase 1 weights)
-            print("\n🚀 Starting Phase 2: Fine-Grained Training...")
-            config_phase2 = Stage1Config()
-            config_phase2.num_epochs = config.fine_epochs
-            trainer_phase2 = Stage1Trainer(config_phase2)
-            # TODO: Load Phase 1 checkpoint
-            trainer_phase2.train(train_loader_fine, val_loader_fine)
+            # Train FIBER Stage 2 (load Stage 1 weights)
+            print("\n🚀 Starting FIBER Stage 2: Fine-Grained Training...")
+            config_stage2 = Stage1Config()
+            config_stage2.num_epochs = config.stage2_epochs
+            config_stage2.batch_size = config.stage2_batch_size  # Smaller batch for 640x640
+            trainer_stage2 = Stage1Trainer(config_stage2)
+            # TODO: Load Stage 1 checkpoint
+            trainer_stage2.train(train_loader_fine, val_loader_fine)
             
         else:
             # Single-phase: Load both coarse + fine together
