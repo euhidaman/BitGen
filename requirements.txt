@@ -3,6 +3,7 @@ torchvision
 transformers
 accelerate
 datasets
+peft  # For LoRA adapters
 Pillow
 numpy
 scipy

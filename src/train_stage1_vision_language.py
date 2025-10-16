@@ -95,6 +95,12 @@ class Stage1Config:
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
     warmup_steps: int = 1000  # Match BitMar exactly
     
+    # LoRA training config (Two-phase approach)
+    lora_warmup_epochs: int = 5  # Freeze LoRA for first N epochs (warmup phase)
+    lora_rank: int = 16  # LoRA rank (higher = more capacity but more params)
+    lora_alpha: int = 32  # LoRA scaling factor
+    lora_dropout: float = 0.1  # LoRA dropout
+    
     # Multi-GPU config (for 8x A100)
     use_ddp: bool = False  # Set to True for distributed training
     num_gpus: int = 1  # Number of GPUs to use
@@ -748,6 +754,19 @@ class Stage1Trainer:
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.best_epoch = 0
+        
+        # LoRA training phase control
+        self.lora_unfrozen = False
+        if self.rank == 0:
+            print(f"\n🔧 LoRA Training Strategy:")
+            print(f"   Phase 1 (Warmup, {config.lora_warmup_epochs} epochs): LoRA FROZEN")
+            print(f"   ➜ Train: Compression + FIBER + Language Model")
+            print(f"   Phase 2 (Main, {config.num_epochs - config.lora_warmup_epochs} epochs): LoRA TRAINABLE")
+            print(f"   ➜ Train: LoRA + Compression + FIBER + Language Model")
+            print(f"   Total trainable params with LoRA: ~32M (under 50M goal!)")
+        
+        # Start with LoRA frozen (Phase 1: Warmup)
+        self._freeze_lora()
 
         # CodeCarbon tracking (only rank 0)
         self.tracker = None
@@ -815,6 +834,50 @@ class Stage1Trainer:
         self.epoch = 0
         self.total_steps = 0  # Will be set in train()
 
+    def _freeze_lora(self):
+        """Freeze LoRA adapters (Phase 1: Warmup)"""
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        if hasattr(model.cross_modal_fusion, 'dinov2_model'):
+            for name, param in model.cross_modal_fusion.dinov2_model.named_parameters():
+                if 'lora' in name.lower():
+                    param.requires_grad = False
+        
+        if self.rank == 0:
+            trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            print(f"✓ LoRA adapters FROZEN | Trainable params: {trainable:,}")
+    
+    def _unfreeze_lora(self):
+        """Unfreeze LoRA adapters (Phase 2: Main Training)"""
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        if hasattr(model.cross_modal_fusion, 'dinov2_model'):
+            for name, param in model.cross_modal_fusion.dinov2_model.named_parameters():
+                if 'lora' in name.lower():
+                    param.requires_grad = True
+        
+        self.lora_unfrozen = True
+        if self.rank == 0:
+            trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            print(f"\n🔓 LoRA adapters UNFROZEN (Phase 2 started!)")
+            print(f"   Trainable params: {trainable:,}")
+            print(f"   Vision can now adapt to your data!")
+    
+    def _check_and_unfreeze_lora(self):
+        """Check if it's time to unfreeze LoRA (after warmup phase)"""
+        if not self.lora_unfrozen and self.epoch >= self.config.lora_warmup_epochs:
+            self._unfreeze_lora()
+            # Recreate optimizer to include LoRA params
+            if self.rank == 0:
+                print("   Recreating optimizer to include LoRA parameters...")
+            self.optimizer = optim.AdamW(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay
+            )
+            # Recreate scheduler with new optimizer
+            self._setup_scheduler(self.total_steps)
+            if self.rank == 0:
+                print("   ✓ Optimizer and scheduler updated")
+    
     def _setup_scheduler(self, num_training_steps: int):
         """Setup learning rate scheduler with linear warmup then cosine decay"""
         from torch.optim.lr_scheduler import LambdaLR
@@ -1425,6 +1488,9 @@ class Stage1Trainer:
 
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
+            
+            # Check if we should unfreeze LoRA (after warmup phase)
+            self._check_and_unfreeze_lora()
 
             # Train epoch
             train_metrics = self.train_epoch(train_loader)

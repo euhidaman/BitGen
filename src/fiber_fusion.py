@@ -1,6 +1,12 @@
 """
 FIBER-style Cross-Modal Fusion with Queue-Based Contrastive Learning
 Adapted from FIBER for BitGen Stage 1 (Vision-Language Pre-training)
+
+Architecture:
+- DINOv2-base (frozen) + LoRA adapters (trainable)
+- Feature compression (768→128)
+- Queue-based contrastive learning (ITC)
+- Hard negative sampling for ITM
 """
 
 import torch
@@ -8,12 +14,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Dict, Optional, Tuple, Union
+from peft import LoraConfig, get_peft_model
 
 
 class FIBERCrossModalFusion(nn.Module):
     """
     FIBER-inspired cross-modal fusion with queue-based contrastive learning
-    Separate transforms for fusion and contrastive learning
+    
+    Architecture:
+    - DINOv2-base (frozen 300M) + LoRA adapters (trainable ~2M)
+    - Feature compression: 768→384→128 (trainable ~300K)
+    - Queue-based ITC loss (4096 samples)
+    - Hard negative ITM loss
+    
+    Separate transforms for fusion and contrastive learning (FIBER approach)
     """
     
     def __init__(self, config):
@@ -22,40 +36,55 @@ class FIBERCrossModalFusion(nn.Module):
         self.embed_dim = config.embed_dim
         self.vision_embed_dim = config.vision_embed_dim
         
-        # Vision Encoder: Lightweight CNN (BitMar-style) or DINOv2
-        self.use_lightweight = getattr(config, 'use_lightweight_vision', False)
+        # DINOv2 Vision Encoder with LoRA
+        from transformers import Dinov2Model
+        print("🔧 Loading DINOv2-base with LoRA adapters...")
+        print("   - Base model: 300M params (frozen)")
+        print("   - LoRA adapters: ~2M params (trainable)")
         
-        if self.use_lightweight:
-            # Tiny CNN vision encoder (<5M params) - BitMar style
-            print("Using lightweight CNN vision encoder (<5M params)...")
-            self.vision_encoder = nn.Sequential(
-                # Conv block 1: 3→32
-                nn.Conv2d(3, 32, kernel_size=7, stride=2, padding=3),
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-                # Conv block 2: 32→64
-                nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                # Conv block 3: 64→128
-                nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-                nn.BatchNorm2d(128),
-                nn.ReLU(inplace=True),
-                nn.AdaptiveAvgPool2d((7, 7))  # Output: 7x7 spatial grid
-            )
-            self.dinov2_dim = 128  # Output channels
-            self.vision_to_embed = nn.Linear(128, config.vision_embed_dim)
-        else:
-            # DINOv2 Vision Encoder (300M params)
-            from transformers import Dinov2Model
-            print("Loading facebook/dinov2-base for FIBER fusion (300M params)...")
-            self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
-            self.dinov2_model.train()
-            for param in self.dinov2_model.parameters():
-                param.requires_grad = True
-            self.dinov2_dim = 768
-            self.vision_to_embed = nn.Linear(self.dinov2_dim, config.vision_embed_dim)
+        # Load base DINOv2 model
+        self.dinov2_model = Dinov2Model.from_pretrained(
+            'facebook/dinov2-base',
+            cache_dir='./cache'
+        )
+        
+        # Freeze all base parameters
+        for param in self.dinov2_model.parameters():
+            param.requires_grad = False
+        
+        # Add LoRA adapters (only to attention layers)
+        lora_config = LoraConfig(
+            r=16,  # LoRA rank
+            lora_alpha=32,  # LoRA scaling
+            target_modules=["query", "value"],  # Apply to Q,V in attention
+            lora_dropout=0.1,
+            bias="none",
+            modules_to_save=[]  # Don't train any other modules
+        )
+        
+        # Apply LoRA to DINOv2
+        self.dinov2_model = get_peft_model(self.dinov2_model, lora_config)
+        self.dinov2_model.print_trainable_parameters()
+        
+        # Feature Compression: 768 → 384 → 128 (BitMar-style learned compression)
+        print("🔧 Adding feature compression layer (768→128)...")
+        self.dinov2_dim = 768  # DINOv2-base output dimension
+        intermediate_dim = 384
+        
+        self.feature_compressor = nn.Sequential(
+            nn.Linear(self.dinov2_dim, intermediate_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_dim, config.vision_embed_dim),
+            nn.LayerNorm(config.vision_embed_dim)
+        )
+        
+        # Initialize compression with small weights for stability
+        for module in self.feature_compressor.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.02)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
         
         # FIBER-style cross-modal transforms (for fusion)
         self.cross_modal_text_transform = nn.Linear(config.embed_dim, config.embed_dim)
@@ -141,53 +170,50 @@ class FIBERCrossModalFusion(nn.Module):
     
     def encode_vision_dinov2(self, images: torch.Tensor) -> torch.Tensor:
         """
-        Encode images using lightweight CNN or DINOv2
+        Encode images using DINOv2 + LoRA + Compression
         
         Args:
-            images: [batch_size, 3, H, W]
+            images: [batch_size, 3, H, W] - Any size RGB images
         
         Returns:
             vision_features: [batch_size, num_patches, vision_embed_dim]
         """
         batch_size, channels, height, width = images.shape
         
-        if self.use_lightweight:
-            # Lightweight CNN encoder
-            # Resize to 224x224
-            if height != 224 or width != 224:
-                images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
-            
-            # ImageNet normalization
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
-            images_normalized = (images - mean) / std
-            
-            # CNN forward: [B, 3, 224, 224] → [B, 128, 7, 7]
-            features = self.vision_encoder(images_normalized)
-            
-            # Reshape to patches: [B, 128, 7, 7] → [B, 49, 128]
-            features = features.flatten(2).transpose(1, 2)  # [B, 49, 128]
-            
-            # Project to vision_embed_dim
-            vision_features = self.vision_to_embed(features)  # [B, 49, vision_embed_dim]
-        else:
-            # DINOv2 encoder (original)
-            if height != 224 or width != 224:
-                images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
-            
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
-            images_normalized = (images - mean) / std
-            
-            outputs = self.dinov2_model(pixel_values=images_normalized)
-            
-            # Get patch embeddings (exclude CLS token)
-            patch_features = outputs.last_hidden_state[:, 1:, :]  # [B, num_patches, 768]
-            
-            # Project to vision embedding dimension
-            vision_features = self.vision_to_embed(patch_features)  # [B, num_patches, vision_embed_dim]
+        # Resize to 224x224 (DINOv2 standard)
+        if height != 224 or width != 224:
+            images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+        
+        # ImageNet normalization (DINOv2 standard)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
+        images_normalized = (images - mean) / std
+        
+        # DINOv2 forward (base frozen + LoRA trainable)
+        outputs = self.dinov2_model(pixel_values=images_normalized)
+        
+        # Get patch embeddings (exclude CLS token)
+        # DINOv2-base: 256 patches (16x16) for 224x224 image
+        patch_features = outputs.last_hidden_state[:, 1:, :]  # [B, 256, 768]
+        
+        # Compress: 768 → 128 (trainable compression layer)
+        vision_features = self.feature_compressor(patch_features)  # [B, 256, vision_embed_dim]
         
         return vision_features
+    
+    def freeze_dinov2_base(self):
+        """Freeze DINOv2 base (keep LoRA trainable)"""
+        for name, param in self.dinov2_model.named_parameters():
+            if 'lora' not in name.lower():
+                param.requires_grad = False
+        print("✓ DINOv2 base frozen (LoRA adapters remain trainable)")
+    
+    def unfreeze_dinov2_lora(self):
+        """Unfreeze LoRA adapters (for main training phase)"""
+        for name, param in self.dinov2_model.named_parameters():
+            if 'lora' in name.lower():
+                param.requires_grad = True
+        print("✓ LoRA adapters unfrozen for training")
     
     def get_contrastive_features(
         self,
@@ -222,34 +248,74 @@ class FIBERCrossModalFusion(nn.Module):
         
         return text_cls, image_cls
     
+    def sample_hard_negatives(
+        self,
+        image_features: torch.Tensor,
+        text_features: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Sample hard negatives from queue for ITM loss (FIBER approach)
+        
+        Args:
+            image_features: [batch_size, embed_dim] - normalized image features
+            text_features: [batch_size, embed_dim] - normalized text features
+        
+        Returns:
+            hard_neg_images: [batch_size, embed_dim] - hard negative images
+            hard_neg_texts: [batch_size, embed_dim] - hard negative texts
+        """
+        batch_size = image_features.shape[0]
+        
+        # Compute similarities with queue
+        sim_i2t = torch.matmul(image_features, self.text_queue)  # [B, queue_size]
+        sim_t2i = torch.matmul(text_features, self.image_queue)  # [B, queue_size]
+        
+        # Sample hard negatives (highest similarity but wrong match)
+        with torch.no_grad():
+            # Softmax weights for sampling
+            weights_i2t = F.softmax(sim_i2t, dim=1)  # [B, queue_size]
+            weights_t2i = F.softmax(sim_t2i, dim=1)  # [B, queue_size]
+            
+            # Sample indices
+            hard_neg_text_indices = torch.multinomial(weights_i2t, 1).squeeze(1)  # [B]
+            hard_neg_image_indices = torch.multinomial(weights_t2i, 1).squeeze(1)  # [B]
+            
+            # Get hard negatives from queue
+            hard_neg_texts = self.text_queue[:, hard_neg_text_indices].T  # [B, D]
+            hard_neg_images = self.image_queue[:, hard_neg_image_indices].T  # [B, D]
+        
+        return hard_neg_images, hard_neg_texts
+    
     def forward(
         self,
         text_embeddings: torch.Tensor,
         images: Optional[torch.Tensor] = None,
-        return_contrastive_features: bool = False
+        return_contrastive_features: bool = False,
+        return_itm_features: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
-        Forward pass with FIBER-style fusion and optional contrastive features
+        Forward pass with FIBER-style fusion and optional contrastive/ITM features
         
         Args:
             text_embeddings: [batch_size, seq_len, embed_dim]
             images: [batch_size, 3, H, W] or None
-            return_contrastive_features: Whether to return features for contrastive loss
+            return_contrastive_features: Whether to return features for ITC loss
+            return_itm_features: Whether to return features for ITM loss
         
         Returns:
-            If return_contrastive_features=False:
+            If return_contrastive_features=False and return_itm_features=False:
                 fused_output: [batch_size, seq_len, embed_dim]
-            If return_contrastive_features=True:
-                fused_output, contrastive_dict
+            Otherwise:
+                fused_output, features_dict
         """
         if images is None:
-            if return_contrastive_features:
+            if return_contrastive_features or return_itm_features:
                 return text_embeddings, {}
             return text_embeddings
         
         batch_size, seq_len, embed_dim = text_embeddings.shape
         
-        # Encode vision with DINOv2
+        # Encode vision with DINOv2 + LoRA + Compression
         image_embeds = self.encode_vision_dinov2(images)  # [B, num_patches, vision_embed_dim]
         
         # Transform to common embedding space (for fusion)
@@ -264,22 +330,35 @@ class FIBERCrossModalFusion(nn.Module):
         concatenated = torch.cat([text_embeds_common, avg_image_features], dim=-1)
         fused_output = self.fusion_mlp(concatenated)  # [B, L, D]
         
-        # Get contrastive features if requested
-        if return_contrastive_features:
+        # Get contrastive/ITM features if requested
+        if return_contrastive_features or return_itm_features:
             text_cls, image_cls = self.get_contrastive_features(text_embeddings, image_embeds)
+            
+            features_dict = {
+                'text_features': text_cls,  # [B, D]
+                'image_features': image_cls,  # [B, D]
+                'temperature': self.temperature
+            }
+            
+            # Add ITC-specific features
+            if return_contrastive_features:
+                features_dict.update({
+                    'text_queue': self.text_queue.clone(),  # [D, queue_size]
+                    'image_queue': self.image_queue.clone(),  # [D, queue_size]
+                })
+            
+            # Add ITM-specific features (hard negatives)
+            if return_itm_features and self.training:
+                hard_neg_images, hard_neg_texts = self.sample_hard_negatives(image_cls, text_cls)
+                features_dict.update({
+                    'hard_neg_images': hard_neg_images,  # [B, D]
+                    'hard_neg_texts': hard_neg_texts,  # [B, D]
+                })
             
             # Update queues (only during training)
             if self.training:
                 self._dequeue_and_enqueue(image_cls, text_cls)
             
-            contrastive_dict = {
-                'text_features': text_cls,  # [B, D]
-                'image_features': image_cls,  # [B, D]
-                'text_queue': self.text_queue.clone(),  # [D, queue_size]
-                'image_queue': self.image_queue.clone(),  # [D, queue_size]
-                'temperature': self.temperature
-            }
-            
-            return fused_output, contrastive_dict
+            return fused_output, features_dict
         
         return fused_output
