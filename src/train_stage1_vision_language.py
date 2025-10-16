@@ -66,22 +66,26 @@ class Stage1Config:
     
     Core: Tiny model with Larimar episodic memory + BitNet quantization
     """
-    # Model config - REDUCED to match BitMar (suitable for tiny devices!)
-    embed_dim: int = 128  # Was 256 → 128 (match BitMar)
-    num_layers: int = 4  # Was 6 → 4 (match BitMar)
-    num_heads: int = 4  # Was 8 → 4 (match BitMar)
+    # Model config - ULTRA TINY to match BitMar <50M params
+    embed_dim: int = 128  # Match BitMar exactly
+    num_layers: int = 3  # Reduced from 4 → 3 (save params)
+    num_heads: int = 4  # Match BitMar
     head_dim: int = 32
-    ffn_dim: int = 256  # Was 512 → 256 (match BitMar)
-    vocab_size: int = 50257  # Was 8192 → 50257 (GPT-2 vocabulary for compatibility)
+    ffn_dim: int = 256  # Match BitMar
+    vocab_size: int = 50257  # GPT-2 vocabulary
 
-    # Memory config (Larimar GPM) - REDUCED for tiny model
-    memory_size: int = 32  # Was 1000 → 32 (match BitMar)
+    # Memory config (Larimar GPM) - Optimized for accuracy
+    memory_size: int = 32  # Match BitMar
     memory_dim: int = 128  # Match embed_dim
     direct_writing: bool = True
+    memory_alpha: float = 0.2  # Larimar adaptation rate (from BitMar)
+    ordering: bool = False  # Disable LSTM ordering to save params
+    pseudoinverse_approx_step: int = 3  # Larimar approximation steps
 
-    # Vision config
-    vision_embed_dim: int = 128  # Match embed_dim for consistency
-    fusion_layers: int = 2
+    # Vision config - CRITICAL: Use lightweight vision encoder
+    vision_embed_dim: int = 128  # Match embed_dim
+    fusion_layers: int = 1  # Reduced from 2 → 1 (save params)
+    use_lightweight_vision: bool = True  # Use tiny CNN instead of DINOv2
 
     # Training config (BitMar-style - KISS!)
     batch_size: int = 128  # Per GPU batch size (default for single GPU)

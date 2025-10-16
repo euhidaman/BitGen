@@ -22,19 +22,40 @@ class FIBERCrossModalFusion(nn.Module):
         self.embed_dim = config.embed_dim
         self.vision_embed_dim = config.vision_embed_dim
         
-        # DINOv2 Vision Encoder (MANDATORY)
-        from transformers import Dinov2Model
-        print("Loading facebook/dinov2-base for FIBER fusion...")
-        self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
-        self.dinov2_model.train()  # Trainable
+        # Vision Encoder: Lightweight CNN (BitMar-style) or DINOv2
+        self.use_lightweight = getattr(config, 'use_lightweight_vision', False)
         
-        # Unfreeze DINOv2 for end-to-end training
-        for param in self.dinov2_model.parameters():
-            param.requires_grad = True
-        
-        # DINOv2 projection
-        self.dinov2_dim = 768
-        self.dinov2_to_vision = nn.Linear(self.dinov2_dim, config.vision_embed_dim)
+        if self.use_lightweight:
+            # Tiny CNN vision encoder (<5M params) - BitMar style
+            print("Using lightweight CNN vision encoder (<5M params)...")
+            self.vision_encoder = nn.Sequential(
+                # Conv block 1: 3→32
+                nn.Conv2d(3, 32, kernel_size=7, stride=2, padding=3),
+                nn.BatchNorm2d(32),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+                # Conv block 2: 32→64
+                nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                # Conv block 3: 64→128
+                nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d((7, 7))  # Output: 7x7 spatial grid
+            )
+            self.dinov2_dim = 128  # Output channels
+            self.vision_to_embed = nn.Linear(128, config.vision_embed_dim)
+        else:
+            # DINOv2 Vision Encoder (300M params)
+            from transformers import Dinov2Model
+            print("Loading facebook/dinov2-base for FIBER fusion (300M params)...")
+            self.dinov2_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
+            self.dinov2_model.train()
+            for param in self.dinov2_model.parameters():
+                param.requires_grad = True
+            self.dinov2_dim = 768
+            self.vision_to_embed = nn.Linear(self.dinov2_dim, config.vision_embed_dim)
         
         # FIBER-style cross-modal transforms (for fusion)
         self.cross_modal_text_transform = nn.Linear(config.embed_dim, config.embed_dim)
@@ -120,7 +141,7 @@ class FIBERCrossModalFusion(nn.Module):
     
     def encode_vision_dinov2(self, images: torch.Tensor) -> torch.Tensor:
         """
-        Encode images using DINOv2
+        Encode images using lightweight CNN or DINOv2
         
         Args:
             images: [batch_size, 3, H, W]
@@ -130,23 +151,41 @@ class FIBERCrossModalFusion(nn.Module):
         """
         batch_size, channels, height, width = images.shape
         
-        # Resize to 224x224 for DINOv2
-        if height != 224 or width != 224:
-            images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
-        
-        # ImageNet normalization
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
-        images_normalized = (images - mean) / std
-        
-        # DINOv2 forward pass (trainable)
-        outputs = self.dinov2_model(pixel_values=images_normalized)
-        
-        # Get patch embeddings (exclude CLS token)
-        patch_features = outputs.last_hidden_state[:, 1:, :]  # [B, num_patches, 768]
-        
-        # Project to vision embedding dimension
-        vision_features = self.dinov2_to_vision(patch_features)  # [B, num_patches, vision_embed_dim]
+        if self.use_lightweight:
+            # Lightweight CNN encoder
+            # Resize to 224x224
+            if height != 224 or width != 224:
+                images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+            
+            # ImageNet normalization
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
+            images_normalized = (images - mean) / std
+            
+            # CNN forward: [B, 3, 224, 224] → [B, 128, 7, 7]
+            features = self.vision_encoder(images_normalized)
+            
+            # Reshape to patches: [B, 128, 7, 7] → [B, 49, 128]
+            features = features.flatten(2).transpose(1, 2)  # [B, 49, 128]
+            
+            # Project to vision_embed_dim
+            vision_features = self.vision_to_embed(features)  # [B, 49, vision_embed_dim]
+        else:
+            # DINOv2 encoder (original)
+            if height != 224 or width != 224:
+                images = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+            
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
+            images_normalized = (images - mean) / std
+            
+            outputs = self.dinov2_model(pixel_values=images_normalized)
+            
+            # Get patch embeddings (exclude CLS token)
+            patch_features = outputs.last_hidden_state[:, 1:, :]  # [B, num_patches, 768]
+            
+            # Project to vision embedding dimension
+            vision_features = self.vision_to_embed(patch_features)  # [B, num_patches, vision_embed_dim]
         
         return vision_features
     

@@ -24,10 +24,14 @@ class BitGenConfig:
     ffn_dim: int = 256
     vocab_size: int = 8192  # Reduced vocabulary for embedded
 
-    # Episodic Memory (Larimar)
-    memory_size: int = 64
+    # Episodic Memory (Larimar GPM - Enhanced)
+    memory_size: int = 32  # Reduced to match BitMar
     memory_dim: int = 128
     direct_writing: bool = True
+    memory_alpha: float = 0.2  # Adaptation rate from Larimar
+    ordering: bool = False  # Disable LSTM ordering (saves params)
+    pseudoinverse_approx_step: int = 3  # Larimar approximation
+    observation_noise_std: float = 0.0  # Larimar noise parameter
 
     # BitNet Quantization (Inference Only - Training uses full precision)
     quantization_bits: float = 1.58
