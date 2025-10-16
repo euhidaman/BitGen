@@ -60,11 +60,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 @dataclass
 class Stage1Config:
     """
-    Configuration for Stage 1 training - FIBER-style two-phase approach
-    Phase 1: Coarse-Grained (image-text pairs) → ITC, ITM losses
-    Phase 2: Fine-Grained (region-level) → Phrase grounding, spatial reasoning
+    Configuration for Stage 1 training - FIBER Stage 1: Coarse-Grained
     
-    Core: Tiny model with Larimar episodic memory + BitNet quantization
+    FIBER's Coarse-Grained Stage:
+    - Image-text pairs (COCO, VG, SBU, GCC)
+    - Image-level vision-language alignment
+    - Tasks: ITC (contrastive), ITM (matching)
+    - Standard resolution (224x224)
+    
+    BitGen Enhancements:
+    - DINOv2 + LoRA (trainable vision adaptation)
+    - Larimar GPM (episodic memory)
+    - BitNet quantization (inference only)
+    - ~32M trainable params (under 50M goal)
+    
+    Note: FIBER's Stage 2 (Fine-Grained) with region-level grounding
+    could be added later as an optional enhancement.
     """
     # Model config - ULTRA TINY to match BitMar <50M params
     embed_dim: int = 128  # Match BitMar exactly
@@ -95,8 +106,8 @@ class Stage1Config:
     num_epochs: int = 50  # Max epochs, but early stopping will kick in
     warmup_steps: int = 1000  # Match BitMar exactly
     
-    # LoRA training config (Two-phase approach)
-    lora_warmup_epochs: int = 5  # Freeze LoRA for first N epochs (warmup phase)
+    # LoRA training config (Gradual unfreezing for stability)
+    lora_warmup_epochs: int = 5  # Freeze LoRA for first N epochs (stabilize alignment first)
     lora_rank: int = 16  # LoRA rank (higher = more capacity but more params)
     lora_alpha: int = 32  # LoRA scaling factor
     lora_dropout: float = 0.1  # LoRA dropout
@@ -121,11 +132,12 @@ class Stage1Config:
     temperature: float = 0.5  # Start high (0.07→0.1→0.2→0.5) to prevent early gradient explosion
     use_text_reconstruction: bool = False  # Enable only for fine-tuning tasks
 
-    # FIBER-style two-phase training
-    enable_two_phase_training: bool = True  # True = coarse → fine, False = coarse only
-    coarse_epochs: int = 25  # Epochs for coarse-grained phase
-    fine_epochs: int = 25  # Epochs for fine-grained phase
-    grounding_weight: float = 0.5  # Weight for phrase grounding loss (fine-grained)
+    # FIBER Stage 1: Coarse-Grained (this is what we're implementing)
+    # Note: FIBER's Stage 2 (Fine-Grained with region-level grounding) is NOT implemented yet
+    # It would require: RefCOCO/+/g datasets, bounding box annotations, phrase grounding loss
+    enable_fine_grained_stage: bool = False  # Set to True when Stage 2 is implemented
+    fine_grained_epochs: int = 0  # Reserved for future Stage 2 implementation
+    grounding_weight: float = 0.5  # Reserved for phrase grounding loss (Stage 2)
     
     # Multi-dataset config
     use_multi_datasets: bool = True  # Use FIBER-style multiple datasets
@@ -755,17 +767,21 @@ class Stage1Trainer:
         self.patience_counter = 0
         self.best_epoch = 0
         
-        # LoRA training phase control
+        # LoRA training control (gradual unfreezing for stability)
         self.lora_unfrozen = False
         if self.rank == 0:
-            print(f"\n🔧 LoRA Training Strategy:")
-            print(f"   Phase 1 (Warmup, {config.lora_warmup_epochs} epochs): LoRA FROZEN")
-            print(f"   ➜ Train: Compression + FIBER + Language Model")
-            print(f"   Phase 2 (Main, {config.num_epochs - config.lora_warmup_epochs} epochs): LoRA TRAINABLE")
-            print(f"   ➜ Train: LoRA + Compression + FIBER + Language Model")
-            print(f"   Total trainable params with LoRA: ~32M (under 50M goal!)")
+            print(f"\n🔧 LoRA Training Strategy (FIBER Stage 1: Coarse-Grained):")
+            print(f"   Warmup ({config.lora_warmup_epochs} epochs): LoRA FROZEN")
+            print(f"   ➜ Stabilize: Compression + FIBER + Language Model")
+            print(f"   Main Training ({config.num_epochs - config.lora_warmup_epochs} epochs): LoRA TRAINABLE")
+            print(f"   ➜ Adapt Vision: LoRA + Compression + FIBER + Language Model")
+            print(f"   Total trainable params: ~32M (under 50M goal!)")
+            print(f"\n   This implements FIBER's Stage 1 (Coarse-Grained):")
+            print(f"   - Image-level vision-language alignment")
+            print(f"   - ITC + ITM losses")
+            print(f"   - Standard resolution (224x224)")
         
-        # Start with LoRA frozen (Phase 1: Warmup)
+        # Start with LoRA frozen (warmup for stability)
         self._freeze_lora()
 
         # CodeCarbon tracking (only rank 0)
@@ -847,7 +863,7 @@ class Stage1Trainer:
             print(f"✓ LoRA adapters FROZEN | Trainable params: {trainable:,}")
     
     def _unfreeze_lora(self):
-        """Unfreeze LoRA adapters (Phase 2: Main Training)"""
+        """Unfreeze LoRA adapters (Main Training: Vision Adaptation)"""
         model = self.model.module if hasattr(self.model, 'module') else self.model
         if hasattr(model.cross_modal_fusion, 'dinov2_model'):
             for name, param in model.cross_modal_fusion.dinov2_model.named_parameters():
@@ -857,9 +873,10 @@ class Stage1Trainer:
         self.lora_unfrozen = True
         if self.rank == 0:
             trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            print(f"\n🔓 LoRA adapters UNFROZEN (Phase 2 started!)")
+            print(f"\n🔓 LoRA adapters UNFROZEN (Main Training started!)")
             print(f"   Trainable params: {trainable:,}")
-            print(f"   Vision can now adapt to your data!")
+            print(f"   Vision encoder now adapting to your data!")
+            print(f"   DINOv2 will learn dataset-specific visual features via LoRA")
     
     def _check_and_unfreeze_lora(self):
         """Check if it's time to unfreeze LoRA (after warmup phase)"""
